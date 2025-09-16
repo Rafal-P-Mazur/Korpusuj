@@ -21,6 +21,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 3. Uruchom `Korpusuj.exe` klikając dwukrotnie.
 
 ⚠️ Plik nie jest podpisany certyfikatem Windows – system może wyświetlić ostrzeżenie bezpieczeństwa. Jest to normalne.
+
 ℹ️ Plik `.exe` zawiera wersję biblioteki **Torch** skonfigurowaną do pracy **tylko na CPU**.  
 
 ---
