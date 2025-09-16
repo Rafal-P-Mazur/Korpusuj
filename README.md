@@ -35,7 +35,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
    ```bash
    pip install -r requirements.txt
 
-   ⚠️ Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać wersję Torch zgodną z kartą graficzną)
+   ⚠️ Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać zgodną z kartą graficzną wersję Torch
 
 4. Uruchom aplikajcę:
    ```bash
