@@ -1,0 +1,431 @@
+<style>
+/* --- Light Mode (default) --- */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    background-color: #f9f9f9;
+    color: #333;
+    padding: 20px;
+    transition: background-color 0.3s, color 0.3s;
+}
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    border-radius: 8px;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+/* Pasek nawigacyjny / toolbar w kontenerze */
+.container .toolbar {
+  display: flex;
+  justify-content: flex-end; /* przycisk po prawej stronie */
+  margin-bottom: 20px;
+}
+
+/* Sam przycisk */
+#theme-toggle {
+  background: #2c3e50;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+#theme-toggle:hover {
+  background: #34495e;
+}
+
+/* --- Dark Mode --- */
+body.dark-mode {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+body.dark-mode .token.bracket,
+body.dark-mode .token.punctuation {
+  color: #61afef;
+}
+body.dark-mode .container {
+    background-color: #1e1e1e;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+body.dark-mode h1, 
+body.dark-mode h2, 
+body.dark-mode h3 {
+    color: #f5f5f5;
+}
+
+/* Adjust special blocks */
+body.dark-mode .example {
+    background-color: #1b3320;
+    border-left: 4px solid #4caf50;
+}
+
+
+body.dark-mode .example2 {
+    background-color: #0f2d3a;
+    border-left: 4px solid #4fc3f7;
+}
+
+body.dark-mode .example,
+body.dark-mode .example2,
+body.dark-mode .note {
+    padding: 10px;
+    margin: 10px 0;
+}
+body.dark-mode .note {
+    background-color: #3a2f0f;
+    border-left: 4px solid #ffca28;
+}
+
+/* Tables */
+body.dark-mode th {
+    background-color: #333;
+    color: #eee;
+}
+body.dark-mode table, 
+body.dark-mode th, 
+body.dark-mode td {
+	color: #e0e0e0;
+    border: 1px solid #555;
+}
+
+body.dark-mode pre[class*="language-"],
+body.dark-mode code[class*="language-"] {
+    background: #1e1e1e;
+    color: #f8f8f2;
+    padding: 4px 6px;       /* dodaj padding jak w light mode */
+    border-radius: 4px;     /* dodaj zaokrąglenie */
+}
+
+/* --- Dark Mode Links --- */
+body.dark-mode a {
+    color: #4aa3ff;       /* light blue links */
+    text-decoration: underline;
+}
+body.dark-mode a:hover {
+    color: #82c7ff;       /* brighter on hover */
+}
+
+/* Prism.js overrides for dark mode */
+body.dark-mode pre[class*="language-"],
+body.dark-mode code[class*="language-"] {
+    background: #1e1e1e;
+    color: #f8f8f2;
+}
+body.dark-mode .token.string  { color: #98c379; }
+body.dark-mode .token.number  { color: #d19a66; }
+body.dark-mode .token.operator { color: #56b6c2; }
+body.dark-mode .token.keyword  { color: #c678dd; }
+body.dark-mode .token.attribute { color: #e5c07b; }
+
+
+
+/* Prism.js overrides for Light Mode */
+pre[class*="language-"],
+code[class*="language-"] {
+    background: #f5f5f5;
+    color: #333;
+}
+
+.token.string  { color: #50a14f; }
+.token.number  { color: #ac35aa; }
+.token.operator { color: #8e44ad; }
+.token.keyword  { color: #0074d9; }
+.token.attribute { color: #b58900; }
+.token.bracket,
+.token.punctuation { color: #555; }
+
+/* --- Force explicit Light Mode styles (put this AFTER your other CSS) --- */
+body:not(.dark-mode) .example {
+  background-color: #dff0d8;
+  border-left: 4px solid #3c763d;
+  padding: 10px;
+  margin: 10px 0;
+  color: #16321a; /* kontrastowy tekst */
+}
+
+body:not(.dark-mode) .example2 {
+  background-color: #d9edf7;
+  border-left: 4px solid #31708f;
+  padding: 10px;
+  margin: 10px 0;
+  color: #07323b;
+}
+
+body:not(.dark-mode) .note {
+  background-color: #fcf8e3;
+  border-left: 4px solid #8a6d3b;
+  padding: 10px;
+  margin: 10px 0;
+  color: #5a4518;
+}
+
+/* Tabela — pewny kontrast w light mode */
+body:not(.dark-mode) table,
+body:not(.dark-mode) th,
+body:not(.dark-mode) td {
+  color: #333;               /* widoczny tekst */
+  border: 1px solid #ccc;    /* ramka zgodna z light mode */
+}
+body:not(.dark-mode) th {
+  background-color: #ecf0f1;
+  color: #2c3e50;
+}
+
+/* Linki w light mode */
+body:not(.dark-mode) a {
+  color: #0b66c3;
+  text-decoration: underline;
+}
+body:not(.dark-mode) a:hover {
+  color: #084f9a;
+}
+
+/* Prism — jasne tło i tokeny (specyficzne dla light mode) */
+body:not(.dark-mode) pre[class*="language-"],
+body:not(.dark-mode) code[class*="language-"] {
+  background: #f5f5f5;
+  color: #333;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+/* Przywrócenie kolorów tokenów (wyższa specyficzność żeby nadpisać globalne reset-y) */
+body:not(.dark-mode) .token.string      { color: #50a14f !important; }
+body:not(.dark-mode) .token.number      { color: #ac35aa !important; }
+body:not(.dark-mode) .token.operator    { color: #8e44ad !important; }
+body:not(.dark-mode) .token.keyword     { color: #0074d9 !important; }
+body:not(.dark-mode) .token.attribute   { color: #b58900 !important; }
+body:not(.dark-mode) .token.function    { color: #6c71c4 !important; }
+body:not(.dark-mode) .token.punctuation { color: #555 !important; }
+
+
+.header {
+  display: flex;
+  justify-content: space-between; /* h1 po lewej, przycisk po prawej */
+  align-items: center;            /* wyrównanie w pionie */
+  margin-bottom: 20px;            /* odstęp od reszty treści */
+}
+</style>
+</head>
+<body>
+
+
+
+  <div class="container">
+  <script>
+document.addEventListener("DOMContentLoaded", function() {
+  document.getElementById("theme-toggle").addEventListener("click", function() {
+    document.body.classList.toggle("dark-mode");
+    this.textContent = document.body.classList.contains("dark-mode") ? "☀️" : "🌙";
+  });
+});
+</script>
+ 
+
+<!-- Prism.js core "https://cdn.jsdelivr.net/npm/prismjs/prism.js-->
+<script src="prism.js"></script>
+<!-- Definicja własnego języka -->
+<script>
+Prism.languages.korpusuj = {
+  'bracket': { pattern: /[\[\]\(\)\{\}]/, alias: 'punctuation' },
+  'operator': { pattern: /[&|!=]/, alias: 'operator' },
+  'attribute': { 
+    pattern: /(?:orth|base|pos|upos|parent|children|deprel|ner|case|number|person|aspect|atrybut|frequency_orth|frequency_base|top|max|min|metadane|autor|tytuł|data)/u, 
+    alias: 'keyword' 
+  },
+  'value': { pattern: /"[^"]*"/, alias: 'string', greedy: true  },
+  'number': { pattern: /\b\d+\b/, alias: 'number' }
+};
+</script>
+
+
+
+<div class="header">
+  <h1>Przewodnik po języku zapytań wyszukiwarki Korpusuj</h1>
+  <button id="theme-toggle">🌙</button>
+</div>
+
+<p>Język zapytań wyszukiwarki <strong>Korpusuj</strong> umożliwia wyszukiwanie tokenów lub sekwencji tokenów w uprzednio anotowanym korpusie tekstów z wykorzystaniem warstw tagowania: morfosyntaktycznego, składniowego i jednostek nazwanych (NER). 
+
+<h2>Podstawowa składnia języka zapytań</h2>
+
+<p>Zapytanie dotyczące pojedynczego tokenu opisujemy w nawiasach kwadratowych <code class="language-korpusuj">[ ]</code>, natomiast każdy warunek zawieramy w cudzysłowie <code class="language-korpusuj">" "</code>:</p>
+
+<div class="example2"><p>
+<code class="language-korpusuj">[atrybut="warunek"]</code> 
+<br>Szuka wszystkich tokenów, które spełniają dany warunek.<p>
+<strong>LUB</strong><p>
+<code class="language-korpusuj">[atrybut!="warunek"]</code> 
+<br>Szuka wszystkich tokenów, które nie spełniają danego warunku.
+</div>
+
+<p>Warunki dotyczące jednego tokenu można łączyć za pomocą operatora <code class="language-korpusuj">&</code>, np.:</p>
+
+<div class="example2"><p>
+<code class="language-korpusuj">[orth="mam" & pos="subst"]</code> <br>
+Szuka wszystkich tokenów o postaci ortograficznej <em>mam</em>, które są rzeczownikami.<p>
+</div>
+
+<p>Sekwencje tokenów mogą być grupowane za pomocą nawiasów okrągłych <code class="language-korpusuj">( )</code> i rozdzielane operatorem <code class="language-korpusuj">||</code>, np.:</p>
+
+<div class="example2"><p>
+<code class="language-korpusuj">([orth="władza"][orth="mediów"]) || ([base="władza"][base="partii"])</code> <br>Zwraca sekwencje, w których token władza znajduje się bezpośrednio przed tokenem <em>mediów</em> lub token <em>władza</em> znajduje się bezpośrednio przed tokenem <em>partii</em>.<p>
+</div>
+
+
+<h3>Wyrażenia regularne</h3>
+<p>W zapytaniach można używać standardowych wyrażeń regularnych, np.:</p>
+
+<ul>
+<li><code class="language-korpusuj"><strong>?</strong></code> – oznacza zero lub jedno wystąpienie poprzedniego znaku</li>
+<li><code class="language-korpusuj"><strong>.</strong></code> – oznacza dowolny pojedynczy znak</li>
+<li><code class="language-korpusuj"><strong>[a-z]</strong></code> – oznacza dowolną małą literę</li>
+<li><code class="language-korpusuj"><strong>[A-Z]</strong></code> – oznacza dowolną wielką literę</li>
+<li><code class="language-korpusuj"><strong>[A-z]</strong></code> – oznacza dowolną wielką lub małą literę</li>
+<li><code class="language-korpusuj"><strong>\d</strong></code> – oznacza dowolną cyfrę (0–9)</li>
+<li><code class="language-korpusuj"><strong>\w</strong></code> – oznacza dowolny znak alfanumeryczny (litera, cyfra, podkreślenie)</li>
+<li><code class="language-korpusuj"><strong>\s</strong></code> – oznacza dowolny biały znak (spacja, tabulator)</li>
+<li><code class="language-korpusuj"><strong>*</strong></code> – oznacza zero lub więcej wystąpień poprzedniego znaku</li>
+<li><code class="language-korpusuj"><strong>+</strong></code> – oznacza jedno lub więcej wystąpień poprzedniego znaku</li>
+<li><code class="language-korpusuj"><strong>|</strong></code> – oznacza alternatywę (LUB)</li>
+<li><code class="language-korpusuj"><strong>( )</strong></code> – służy do definiowania podgrup wyrażeń</li>
+<li><code class="language-korpusuj"><strong>\</strong></code> – pozwala potraktować kolejny znak jako zwykły znak</li>
+<li><code class="language-korpusuj"><strong>~</strong></code> – pozwala dopasować token zawierający daną sekwencję znaków</li>
+
+</ul>
+
+<div class="example">
+    <p><strong>Przykłady:</strong> <p>
+	<code class="language-korpusuj">[orth="koty?"]</code> <br>Zwraca tokeny <em>kot</em> lub <em>koty</em>.<p>
+	<code class="language-korpusuj">[orth="..."]</code> <br>  Zwraca tokeny zawierające dokładnie trzy znaki np. <em>dom</em>, <em>kot</em>, <em>las</em>.<p>
+	<code class="language-korpusuj">[orth="[A-z]agoda"]</code> <br> Zwraca np. tokeny <em>Jagoda</em> i <em>jagoda</em>.<p>
+	<code class="language-korpusuj">[orth="woj.*"]</code> <br> Zwraca np. tokeny <em>wojna</em>, <em>wojskowy</em>, <em>województwo</em>.<p>
+	<code class="language-korpusuj">[orth=".*a"]</code> <br> Zwraca np. tokeny <em>Ania</em>, <em>kawa</em>, <em>drzewa</em>.<p>
+	<code class="language-korpusuj">[orth="dom.+"]</code> <br> Zwraca np. tokeny <em>domu</em>, <em>domem</em>, <em>domy</em>, <em>domów</em>, ale nie <em>dom</em>.<p>
+	<code class="language-korpusuj">[orth="kot&#124;pies"]</code> <br> Zwraca tokeny <em>kot</em> lub <em>pies</em>.<p>
+	<code class="language-korpusuj">[orth="kwesti(a&#124;ę)"]</code> <br> Zwraca tokeny <em>kwestia</em> lub <em>kwestię</em>.<p>
+	<code class="language-korpusuj">[orth="~zys"]</code> <br> Zwraca tokeny zawierające sekwencję znaków <em>zys</em> np. <em>kryzys</em>, <em>kryzysowy</em>, <em>zysk</em>.<p>
+	<code class="language-korpusuj">[orth="\."]</code> <br> Zwraca token <em>. </em>(kropka).<p>
+	
+</div>
+
+<h3>Operator zakresu</h3>
+W zapytaniach można określać dowolną liczbę tokenów pomiędzy dwoma elementami sekwencji, korzystając z operatora zakresu w postaci <code class="language-korpusuj">[*]</code> (dowolny token lub tokeny) <code class="language-korpusuj">[n,m]</code> (dokładnie od n do m tokenów pomiędzy elementami sekwencji):
+<div class="example2"><p>
+<code class="language-korpusuj">[base="Ania"][*][1,3][base="Tomek"]</code>
+<br>Szuka sekwencji, w której leksem <em>Ania</em> występuje przed leksemem <em>Tomek</em>, a pomiędzy nimi znajduje się od 1 do 3 innych dowolnych tokenów, np. <em>Ania i Tomek poszli do kina</em> lub <em>Ania z dużym zainteresowaniem patrzyła na Tomka</em>.<p>
+</div>
+<h2>Podstawowe atrybuty</h2>
+<div class="table-wrapper">
+<table>
+<tr><th>Atrybut</th><th>Opis</th><th>Przykład</th></tr>
+<tr><td>orth</td><td>Postać ortograficzna tokenu</td><td>[orth="Anię"]</td></tr>
+<tr><td>base</td><td>Forma podstawowa tokenu</td><td>[base="Ania"]</td></tr>
+<tr><td>pos</td><td>Klasa gramatyczna (XPOS)</td><td>[pos="subst"]</td></tr>
+<tr><td>upos</td><td>Uniwersalna klasa gramatyczna (UPOS)</td><td>[upos="NOUN"]</td></tr>
+<tr><td>parent</td><td>Tokeny będące rodzicami danego tokenu</td><td>[parent="piękny" & pos="subst"]</td></tr>
+<tr><td>children</td><td>Tokeny będące dziećmi danego tokenu</td><td>[children="dom" & pos="adj"]</td></tr>
+<tr><td>deprel</td><td>Typ relacji składniowej między tokenem a jego rodzicem</td><td>[deprel="nsubj"]</td></tr>
+<tr><td>ner</td><td>Jednostki nazwane (Named Entity Recognition)</td><td>[ner="S-persName"]</td></tr>
+</table>
+</div>
+<p>
+<div class="example">
+    <p><strong>Przykłady:</strong> <p>
+	<code class="language-korpusuj">[orth="Anię"] </code> <br> Szuka tokenów o dokładnej postaci ortograficznej <em>Anię</em>.<p>
+	<code class="language-korpusuj">[base="Ania"] </code> <br> Szuka wszystkich form danego leksemu, np. <em>Ania</em>, <em>Anię</em>, <em>Anii</em> itp.<p>
+	<code class="language-korpusuj">[pos="subst"] </code> <br> Szuka wszystkich rzeczowników <a href="https://nlp.ipipan.waw.pl/~adamp/Papers/2009-mondilex/article.pdf">(por. Przepiórkowski 2020)</a>.<p>
+	<code class="language-korpusuj">[upos="VERB"] </code> <br> Szuka wszystkich czasowników <a href="https://universaldependencies.org/u/pos/">(por. Universal POS tags)</a>.<p>
+	<code class="language-korpusuj">[children="dom" & pos="adj"]</code> <br> Szuka wszystkich przymiotników będących dziećmi (wyrazami określającymi) leksemu <em>dom</em>. <p>
+	<code class="language-korpusuj">[parent="piękny" & pos="subst"]</code> <br> Szuka wszystkich tokenów, które są rodzicami (wyrazami określanymi) leksemu <em>piękny</em> i należą do klasy rzeczowników. Zapytanie może zatem zwrócić np. <em>miasto</em> w zdaniu: <em>Warszawa to piękne historyczne <strong>miasto</strong></em> lub <em>historia</em> w zdaniu: <em>To bardzo piękna <strong>historia</strong></em>.<p>
+	<code class="language-korpusuj">[deprel="nsubj" & pos="subst"]</code> <br> Szuka wszystkich tokenów będących rzeczownikami pełniących funkcję podmiotu <a href="https://universaldependencies.org/pl/index.html">(por. UD for Polish)</a>.<p>
+	<code class="language-korpusuj">[ner="S-persName"]</code> <br> Szuka tokenów będących nazwami osób.
+	Moduł biblioteki Stanza, służący do rozpoznawania jednostek nazwanych (NER), używa na potrzeby języka polskiego zestawu sześciu tagów: <em>date</em>, <em>geogName</em>, <em>orgName</em>, <em>persName</em>, <em>placeName</em>, <em>time</em> (por. <a href="https://stanfordnlp.github.io/stanza/ner_models.html">Stanza NER Models</a>). Mogą one zostać poprzedzone prefiksami: B- (ang. <em>begin</em> - początek jednostki nazwanej), I- (ang. <em>inside</em> - kolejny token jednostki nazwanej), S- (ang. <em>single</em> - jednotokenowa jednoska nazwana). Token, który nie zostanie rozpoznany jako jednostka nazwana otrzymuje tag O (ang. <em>outside</em>).
+
+	
+</div>
+<h2>Atrybuty cech morfosyntaktycznych</h2>
+Język zapytań pozwala także tworzyć zapytania dotyczące cech morfosyktaktycznych szukanego tokenu, takich jak np. liczba, rodzaj, przypadek zgodnie z tagsetem wykorzystywanym w ramach NKJP <a href="https://nlp.ipipan.waw.pl/~adamp/Papers/2009-mondilex/article.pdf">(por. Przepiórkowski 2020)</a>.
+
+<div class="example">
+    <p><strong>Przykłady:</strong> <p>
+	<code class="language-korpusuj">[base="bohater" & case="gen" number="pl"] </code> <br> Szuka wszystkich wystąpień leksemu <em>bohater</em> w dopełniaczu liczby mnogiej.<p>
+	<code class="language-korpusuj">[upos="VERB" & person="pri" & number="sg" & aspect="imperf"] </code> <br> Szuka czasowników niedokonanych w pierwszej osobie liczby pojedynczej.<p>
+</div>
+
+<h2>Zagnieżdżanie warunków</h2>
+
+<p>W języku zapytań Korpusuj można stosować zagnieżdżone warunki <code class="language-korpusuj">{…}</code> dla dowolnego atrybutu, aby precyzyjnie określić relacje między tokenami w obrębie zdania, np.:
+<div class="example2"><p>
+<code class="language-korpusuj">[deprel="root" & pos="subst" & number="sg" & parent={deprel="cop" & base="być" & parent!= "nie"} & parent={orth="Polska"}]</code><br>
+Szuka tokenu, który jest rdzeniem zdania (root) i rzeczownikiem w liczbie pojedynczej. Ten token musi być jednocześnie rodzicem niezaprzeczonej kopuli (cop) <em>być</em> i jest rodzicem tokenu <em>Polska</em>.<br>
+
+np. <em>Polska jest niezawodnym <strong>dostawcą</strong> sprzętu wojskowego na Ukrainę.</em><p>
+
+</div>
+Język zapytań umożliwia <strong>wielopoziomowe</strong> zagnieżdżanie warunków, np.:
+<div class="example2"><p>
+<code class="language-korpusuj">[ner=".-persName" & parent={orth="prezes" & parent={ner=".-orgName"}}][ner=".-persName"]</code><br>
+Szuka sekwencji tokenów tworzących dwuczłonową nazwę osoby (persName). 
+Pierwszy z tych tokenów jest rodzicem tokenu <em>prezes</em>, który z kolei jest rodzicem nazwy organizacji (orgName).<br>
+np. <em>To efekt intensywnych działań na rzecz dywersyfikacji dostaw prowadzonych po 2015 roku — przekazał <strong>Daniel Obajtek</strong> prezes PKN Orlen.</em><p>
+
+</div>
+
+<h2>Filtrowanie po treści zdań</h2>
+Za pomocą operatora <code class="language-korpusuj">&lt;s&gt;</code> można ograniczyć wyszukiwanie do obrębu pojedynczego zdania, np.:
+<div class="example2"><p>
+<code class="language-korpusuj">[base="wygrać"][*][1,3][base="wojna"]&lt;s&gt;</code><br>
+Szuka wchodzącej w skład jednego zdania sekwencji tokenów <em>wygrać </em>i <em>wojna</em>, które są rozdzielone przez od jednego do 3 innych tokenów.<p>
+</div>
+
+Operator <code class="language-korpusuj">&lt;s&gt;</code> może przyjmować dodatkowe atrybuty, np.
+<div class="example2"><p>
+<code class="language-korpusuj">[base="wygrać"] &lt;s [base="wojna"]&gt;</code><br>
+Szuka tokenu <em>wygrać</em> w zdaniu, które zawiera token <em>wojna </em>(ich kolejność jest dowolna).<p>
+</div>
+
+
+<h2>Filtrowanie po frekwencji</h2>
+Za pomocą operatorów <code class="language-korpusuj">&lt;frequency_base&gt;</code> i <code class="language-korpusuj">&lt;frequency_orth&gt;</code> można filtrować wyniki w po frekwencji form podstawowych lub form ortograficznych. Oba operatory przyjmują dodatkowe atrybuty top, min, max.
+<p> Atrybut <strong>top</strong> wybiera N najczęściej występujących form w korpusie, np.
+<div class="example2"><p>
+<code class="language-korpusuj">[base="pies"] &lt;frequency_orth top="3"&gt;</code><br>
+Zwraca wyniki zawierające jedną z trzech najczęściej występujących form leksemu <em>pies </em>w całym korpusie.<p>
+
+<code class="language-korpusuj">[base="pies"] &lt;frequency_base top="10"&gt;</code><br>
+Zwraca wyniki zawierające jeden z dziesięciu najczęściej występujących rzeczowników w całym korpusie.
+</div>
+
+
+<p> Atrybuty <strong>min</strong> i <strong>max</strong> ograniczają liczbę wystąpień danej formy w korpusie, np.: 
+<div class="example2"><p>
+<code class="language-korpusuj">[upos="VERB"] &lt;frequency_base top="100" min="2" max="10"&gt;</code><br>
+Zwraca wyniki zawierające jedną z trzech najczęściej występujących form leksemu <em>pies </em>w całym korpusie.<p>
+</div>
+
+<h2>Filtrowanie po metadanych</h2>
+
+Język zapytań pozwala na filtrowanie wyników z wykorzystaniem metadanych. Domyślnie dostępne są operatory: <code class="language-korpusuj">&lt;data&gt;</code>, <code class="language-korpusuj">&lt;autor&gt;</code>, <code class="language-korpusuj">&lt;tytuł&gt;</code>.
+
+<div class="example2"><p>
+   
+	<code class="language-korpusuj">[base="Tadeusz"]&ltautor="Mickiewicz"&gt </code> <br> Szuka tokenu <em>Tadeusz </em>w tekstach Mickiewicza<p>
+	<code class="language-korpusuj">[base="dzień"]&lttytuł="~sen"&gt</code> <br> Szuka tokenu <em>dzień </em>w tekstach, które zawierają w tytule <em>sen</em>.<p>
+	<code class="language-korpusuj">[base="pies"]&ltdata="2024-04-.*.*"&gt </code> <br> Szuka tokenu <em>pies </em>w tekstach opublikowanych w kwietniu 2024 r.<p>
+	<code class="language-korpusuj">[base="kot"]&ltdata&gt="2024-01-20"&gt&ltdata&lt="2025-02-25"&gt</code> <br> Szuka tokenu <em>kot </em>w tekstach opublikowanych od 20.01.2024 r. do 25.02.2025 r. (włącznie).<p>
+	
+</div>
+Użytkownik podczas tworzenia korpusu może zdefiniować własne typy metadanych. Aby filtrować wyniki wyszukiwania za pomocą tych metadanych, należy skorzystać z operatora <code class="language-korpusuj">&lt;metadane:&gt;</code>, np.
+<div class="example2"><p>
+<code class="language-korpusuj">[base="Duda"]&ltmetadane:portal="Wyborcza"&gt</code><br>
+Szuka tokenu <em>Duda</em> w tekstach, które przez użytkownika zostały otagowane w kolumnie <em>portal</em> znacznikiem <em>Wyborcza</em>.<p>
+</div>
+</div>
+</body>
+</html>
