@@ -37,7 +37,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 
    ⚠️ Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać zgodną z kartą graficzną wersję Torch
 
-4. Uruchom aplikajcę:
+4. Uruchom aplikację:
    ```bash
    python Korpusuj_beta.py
 
