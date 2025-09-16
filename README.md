@@ -30,7 +30,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 1. Zainstaluj Python 3.10.
 2. Sklonuj repozytorium:
    ```bash
-   git clone [https://github.com/Rafal-P-Mazur/REPO.git](https://github.com/Rafal-P-Mazur/Korpusuj.git)
+   git clone https://github.com/Rafal-P-Mazur/Korpusuj.git
 3. Zainstaluj wymagane biblioteki:
    ```bash
    pip install -r requirements.txt
