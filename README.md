@@ -30,7 +30,13 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 2. Sklonuj repozytorium:
    ```bash
    git clone [https://github.com/Rafal-P-Mazur/REPO.git](https://github.com/Rafal-P-Mazur/Korpusuj.git)
-3. Zainstaluj wymagania:
-  pip install -r requirements.txt
-  ⚠️Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać wersję Torch zgodną z kartą graficzną)
-4. Uruchom aplikajcę python Korpusuj_beta.py
+3. Zainstaluj wymagane biblioteki:
+   ```bash
+   pip install -r requirements.txt
+
+   ⚠️ Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać wersję Torch zgodną z kartą graficzną)
+
+4. Uruchom aplikajcę:
+   ```bash
+   python Korpusuj_beta.py
+
