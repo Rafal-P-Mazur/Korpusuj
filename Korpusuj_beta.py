@@ -173,26 +173,55 @@ def build_dependency_maps(sentence_ids, word_ids, head_ids):
     return parent_idx, children_lookup
 
 
-def prepare_match_functions(tokens, lemmas, postags, upostags, deprels, ners, full_postags, parent_idx):
-    # Returns a cached version of match_conditions to avoid recomputation.
+from functools import lru_cache
+import re
+
+def prepare_cached_match(tokens, lemmas, postags, upostags, deprels, ners,
+                         full_postags, parent_idx, word_ids, children_lookup):
+    """
+    Returns a cached match_conditions function for a given sentence/document.
+    """
+
+    # normalize conditions recursively to tuples (hashable)
+    def _normalize_conditions(conds):
+        out = []
+        for cond in conds:
+            if not cond:
+                out.append(())
+                continue
+            if len(cond) >= 5:
+                key, values, operator, is_nested, match_type = cond
+            else:
+                key, values, operator, is_nested = cond
+                match_type = "exact"
+            if is_nested:
+                norm_values = _normalize_conditions(values)
+            else:
+                norm_values = tuple(values)
+            out.append((key, norm_values, operator, is_nested, match_type))
+        return tuple(out)
 
     @lru_cache(maxsize=None)
-    def match_conditions(token_idx, cond_tuple):
+    def _cached(token_idx, norm_cond_tuple):
+        cond_list = [list(c) for c in norm_cond_tuple]  # back to list-of-lists
+        return _match_conditions(token_idx, cond_list)
 
-        # Evaluate conditions for a single token.
-        # cond_tuple must be hashable (e.g. tuple of tuples instead of list of lists).
+    def wrapper(token_idx, conditions):
+        norm = _normalize_conditions(conditions)
+        return _cached(token_idx, norm)
 
-        for cond in cond_tuple:
+    # --- original working match_conditions code ---
+    def _match_conditions(token_idx, conds):
+        for cond in conds:
             if not cond:
                 continue
-
             if len(cond) >= 5:
                 key, values, operator, is_nested, match_type = cond
             else:
                 key, values, operator, is_nested = cond
                 match_type = "exact"
 
-            # --- direct token attributes ---
+            # --- token attributes ---
             if key == "orth":
                 attr = tokens[token_idx]
             elif key == "base":
@@ -205,46 +234,68 @@ def prepare_match_functions(tokens, lemmas, postags, upostags, deprels, ners, fu
                 attr = deprels[token_idx]
             elif key == "ner":
                 attr = ners[token_idx]
-            elif key in ("children", "children.group"):
-                p_idx = parent_idx[token_idx]
-                if p_idx == -1:
+
+            # --- parent / children logic ---
+            elif key in ("head", "head.group"):
+                parent = parent_idx[token_idx]
+                if parent is None or parent < 0:
                     return False
                 if is_nested:
-                    if not match_conditions(p_idx, tuple(values)):
+                    if not wrapper(parent, tuple(values)):
                         return False
                 else:
-                    if lemmas[p_idx] not in values:
-                        return False
-                continue
+                    parent_attr = lemmas[parent]
+                    if operator == "=":
+                        if match_type == "exact" and parent_attr not in values:
+                            return False
+                        elif match_type == "regex":
+                            if not any(re.fullmatch(v, parent_attr) for v in values):
+                                return False
+                        elif match_type == "regex_search":
+                            if not any(re.search(v, parent_attr) for v in values):
+                                return False
+                    elif operator == "!=":
+                        if match_type == "exact" and parent_attr in values:
+                            return False
+                        elif match_type == "regex":
+                            if any(re.fullmatch(v, parent_attr) for v in values):
+                                return False
+                        elif match_type == "regex_search":
+                            if any(re.search(v, parent_attr) for v in values):
+                                return False
+
+
             else:
-                # morphological feature lookup (using full_postags)
+                # fallback: full_postags / features
                 full_tag = full_postags[token_idx]
                 tag_parts = full_tag.split(":")
                 pos = tag_parts[0] if tag_parts else ""
                 feats = tag_parts[1:] if len(tag_parts) > 1 else []
                 feat_index = FEAT_MAPPING.get(pos, {}).get(key, -1)
-                token_feat = feats[feat_index] if feat_index >= 0 and feat_index < len(feats) else ""
+                token_feat = feats[feat_index] if 0 <= feat_index < len(feats) else ""
                 attr = token_feat
 
             # --- comparison ---
-            if operator == "=":
-                if match_type == "exact" and attr not in values:
-                    return False
-                if match_type == "regex" and not any(re.fullmatch(v, attr) for v in values):
-                    return False
-                if match_type == "regex_search" and not any(re.search(v, attr) for v in values):
-                    return False
-            elif operator == "!=":
-                if match_type == "exact" and attr in values:
-                    return False
-                if match_type == "regex" and any(re.fullmatch(v, attr) for v in values):
-                    return False
-                if match_type == "regex_search" and any(re.search(v, attr) for v in values):
-                    return False
+            if key not in ("head", "head.group"):
+                if operator == "=":
+                    if match_type == "exact" and attr not in values:
+                        return False
+                    elif match_type == "regex" and not any(re.fullmatch(v, attr) for v in values):
+                        return False
+                    elif match_type == "regex_search" and not any(re.search(v, attr) for v in values):
+                        return False
+                elif operator == "!=":
+                    if match_type == "exact" and attr in values:
+                        return False
+                    elif match_type == "regex" and any(re.fullmatch(v, attr) for v in values):
+                        return False
+                    elif match_type == "regex_search" and any(re.search(v, attr) for v in values):
+                        return False
 
         return True
 
-    return match_conditions
+    return wrapper
+
 
 def resource_path(relative_path):
     # Get absolute path to resource, works for dev and PyInstaller
@@ -835,8 +886,11 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                     key, values, operator, is_nested = subcond
                     match_type = "exact"
                 # Skip prefiltering for children/parent keys and regex conditions.
-                if key in ("children", "parent") or match_type == "regex":
+                if key in ("head", "head.group", "dependent") \
+                        or key.startswith("head(") or key.startswith("dependent(") or key.startswith("head.group(") \
+                        or match_type == "regex":
                     continue
+
                 query_to_df = {"orth": "token", "base": "lemma", "pos": "postag", "upos": "upostag", "deprel": "deprel",
                                "ner": "ner"}
                 if key in query_to_df:
@@ -993,9 +1047,9 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                 sentence_ids, word_ids, head_ids
             )
 
-            match_conditions = prepare_match_functions(
-                tokens, lemmas, postags, upostags, deprels, ners, full_postags, parent_idx
-            )
+            match_conditions = prepare_cached_match(tokens, lemmas, postags, upostags,
+                                                    deprels, ners, full_postags,
+                                                    parent_idx, word_ids, children_lookup)
 
             def match_conditions(token_idx, conditions):
                 if not conditions:
@@ -1040,27 +1094,72 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                                 return False
                             elif match_type == "regex_search" and any(re.search(v, attr) for v in values):
                                 return False
-                    elif key in ("children", "children.group"):
+                    elif key.startswith("head") or key.startswith("head.group"):
+                        # 'children' in your existing code checks the *parent* of token_idx, keep that behaviour.
                         parent = parent_idx[token_idx]
-                        if parent < 0:  # <- fix from None
-                            return False
-                        if is_nested:
-                            if not match_conditions(parent, tuple(values)):
-                                return False
-                        else:
-                            parent_attr = lemmas[parent]
+
+                        # If there's no parent: "=" must fail, "!=" should pass (nothing to forbid)
+                        if parent is None or parent < 0:
                             if operator == "=":
-                                if match_type == "exact" and parent_attr not in values:
+                                return False
+                            else:  # operator == "!="
+                                continue
+
+                        # Parse children(...) syntax: children(N), children(<N), children(>N)
+                        m = re.match(r'head(?:\.group)?(?:\((<|>|=)?(-?\d+)\))?$', key)
+                        dist_op = m.group(1) if m and m.group(1) else None
+                        dist_val = int(m.group(2)) if m and m.group(2) else None
+
+                        # Helper: check distance filter; returns True if parent/child distance passes the dist filter
+                        def _distance_matches_child(dist_val, dist_op):
+                            if dist_val is None:
+                                return True
+                            distance =  word_ids[parent]  - word_ids[token_idx]# <-- same formula as children_dist
+                            if dist_op in (None, "="):
+                                return distance == dist_val
+                            elif dist_op == "<":
+                                return distance < dist_val
+                            elif dist_op == ">":
+                                return distance > dist_val
+                            return False
+
+                        if operator == "=":
+                            # require that parent (optionally constrained by distance) matches values/nested
+                            if not _distance_matches_child(dist_val, dist_op):
+                                return False
+
+                            if is_nested:
+                                # nested: parent must satisfy nested conditions
+                                if not match_conditions(parent, tuple(values)):
                                     return False
+                            else:
+                                parent_attr = lemmas[parent]
+                                if match_type == "exact":
+                                    if parent_attr not in values:
+                                        return False
                                 elif match_type == "regex":
                                     if not any(re.fullmatch(v, parent_attr) for v in values):
                                         return False
                                 elif match_type == "regex_search":
                                     if not any(re.search(v, parent_attr) for v in values):
                                         return False
-                            elif operator == "!=":
-                                if match_type == "exact" and parent_attr in values:
+
+                        elif operator == "!=":
+                            # require that parent (within optional distance constraint) does NOT match values/nested
+                            # If distance constraint is present but doesn't match, the negation is vacuously satisfied:
+                            if dist_val is not None and not _distance_matches_child(dist_val, dist_op):
+                                # no parent at that specified distance → nothing to forbid
+                                continue
+
+                            if is_nested:
+                                # if parent satisfies nested => fail the whole condition
+                                if match_conditions(parent, tuple(values)):
                                     return False
+                            else:
+                                parent_attr = lemmas[parent]
+                                if match_type == "exact":
+                                    if parent_attr in values:
+                                        return False
                                 elif match_type == "regex":
                                     if any(re.fullmatch(v, parent_attr) for v in values):
                                         return False
@@ -1068,43 +1167,96 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                                     if any(re.search(v, parent_attr) for v in values):
                                         return False
 
+                        else:
+                            # unknown operator (safe-fail)
+                            return False
 
-                    elif key == "parent":
+
+                    elif key.startswith("dependent"):
+                        # Combined parent + parent_dist logic with correct nested semantics.
+                        # children_lookup[token_idx] are the token_idx's children (original code's semantics).
+                        children = children_lookup[token_idx]
+                        if not children:
+                            # If looking for existence and there are no children -> fail.
+                            # If it's a negation (operator !=), absence of children satisfies the condition.
+                            if operator == "=":
+                                return False
+                            else:  # operator == "!="
+                                continue  # no children -> nothing to forbid
+                        # parse optional distance filter: parent(3), parent(-2), parent(<3), parent(>1)
+                        m = re.match(r'dependent(?:\((<|>|=)?(-?\d+)\))?$', key)
+                        dist_op = m.group(1) if m and m.group(1) else None
+                        dist_val = int(m.group(2)) if m and m.group(2) else None
                         if operator == "=":
+                            # We require that at least one child (optionally satisfying distance) matches values/nested.
                             found = False
-                            for child in children_lookup[token_idx]:
+                            for child in children:
+                                # apply distance filter (if present). distance = child - parent (linear)
+                                if dist_val is not None:
+                                    distance = word_ids[child] - word_ids[token_idx]
+                                    if dist_op in (None, "=") and distance != dist_val:
+                                        continue
+                                    elif dist_op == "<" and not (distance < dist_val):
+                                        continue
+                                    elif dist_op == ">" and not (distance > dist_val):
+                                        continue
+
+                                # nested conditions: evaluate recursively on the child
                                 if is_nested:
                                     if match_conditions(child, tuple(values)):
                                         found = True
                                         break
                                 else:
+                                    # simple attribute match on the child (original behavior)
                                     child_attr = lemmas[child]
-                                    if match_type == "exact" and child_attr in values:
-                                        found = True
-                                        break
-                                    elif match_type == "regex" and any(re.fullmatch(v, child_attr) for v in values):
-                                        found = True
-                                        break
-                                    elif match_type == "regex_search" and any(re.search(v, child_attr) for v in values):
-                                        found = True
-                                        break
+                                    if match_type == "exact":
+                                        if child_attr in values:
+                                            found = True
+                                            break
+
+                                    elif match_type == "regex":
+                                        if any(re.fullmatch(v, child_attr) for v in values):
+                                            found = True
+                                            break
+
+                                    elif match_type == "regex_search":
+                                        if any(re.search(v, child_attr) for v in values):
+                                            found = True
+                                            break
 
                             if not found:
                                 return False
-
                         elif operator == "!=":
-                            for child in children_lookup[token_idx]:
+                            # We require that NO child (that passes optional distance filter) matches values/nested.
+                            for child in children:
+                                # distance filter (if present)
+                                if dist_val is not None:
+                                    distance = word_ids[child] - word_ids[token_idx]
+                                    if dist_op in (None, "=") and distance != dist_val:
+                                        continue
+                                    elif dist_op == "<" and not (distance < dist_val):
+                                        continue
+                                    elif dist_op == ">" and not (distance > dist_val):
+                                        continue
                                 if is_nested:
+                                    # if any child satisfies the nested condition -> the entire parent!= fails
                                     if match_conditions(child, tuple(values)):
                                         return False
                                 else:
                                     child_attr = lemmas[child]
-                                    if match_type == "exact" and child_attr in values:
-                                        return False
-                                    elif match_type == "regex" and any(re.fullmatch(v, child_attr) for v in values):
-                                        return False
-                                    elif match_type == "rege_search" and any(re.search(v, child_attr) for v in values):
-                                        return False
+                                    if match_type == "exact":
+                                        if child_attr in values:
+                                            return False
+                                    elif match_type == "regex":
+                                        if any(re.fullmatch(v, child_attr) for v in values):
+                                            return False
+                                    elif match_type == "regex_search":
+                                        if any(re.search(v, child_attr) for v in values):
+                                            return False
+                            # no forbidden child found => OK (do nothing)
+                        else:
+                            # if some other operator appears (shouldn't), fail safe
+                            return False
 
 
                     else:
@@ -1257,7 +1409,7 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                 children_cond = None
                 extra_conditions = []
                 for cond in group:
-                    if cond and cond[0] == "children.group":
+                    if cond and cond[0] == "head.group":
                         children_cond = cond
                     else:
                         extra_conditions.append(cond)
@@ -2431,7 +2583,7 @@ def highlight_entry(event=None):
 
     # --- Highlight keywords first ---
     keywords = ["orth=", "orth!=", "base=", "base!=", "pos=", "pos!=", "ner=", "ner!=", "head=", "head!=",
-                "children=", "children!=", "parent=", "parent!=", "deprel=", "deprel!=", "number=", "number!=",
+                "head=", "head!=", "dependent=", "dependent!=", "deprel=", "deprel!=", "number=", "number!=",
                 "gender=", "gender!=", "degree=", "degree!=", "case=", "case!=", "person=", "person!=",
                 "accentability=", "accentability!=", "post-prepositionality=", "post-prepositionality!=",
                 "accommodability=", "accommodability!=", "aspect=", "aspect!=", "vocalicity=", "vocalicity!=",
@@ -2448,6 +2600,56 @@ def highlight_entry(event=None):
             end_idx = f"{start_idx} + {len(term)}c"
             entry_query.tag_add(term, start_idx, end_idx)
             start_idx = end_idx
+        entry_query.tag_config(term, foreground=keywords_color)
+
+    # Highlight dynamic keys like children(...) and parent(...) with operators
+    new_dynamic_keys = ["head(", "dependent("]
+
+    for term in new_dynamic_keys:
+        start_idx = "1.0"
+        while True:
+            start_idx = entry_query.search(term, start_idx, ctk.END)
+            if not start_idx:
+                break
+
+            # Find the closing parenthesis
+            close_idx = entry_query.search(")", start_idx, ctk.END)
+            if not close_idx:
+                close_idx = f"{start_idx} + {len(term)}c"  # fallback
+            else:
+                close_idx = f"{close_idx} + 1c"
+
+            # Include operator = or != immediately after the closing parenthesis
+            operator_match = entry_query.search("!=|=", close_idx, ctk.END, regexp=True)
+            if operator_match:
+                # Extend close_idx to include operator
+                op_end = f"{operator_match} + {2 if entry_query.get(operator_match, f'{operator_match} + 2c') == '!=' else 1}c"
+                close_idx = op_end
+
+            entry_query.tag_add(term, start_idx, close_idx)
+            start_idx = close_idx
+
+        entry_query.tag_config(term, foreground=keywords_color)
+
+    # Highlight dynamic keys like children(...) and parent(...)
+    for term in new_dynamic_keys:
+        start_idx = "1.0"
+        while True:
+            start_idx = entry_query.search(term, start_idx, ctk.END)
+            if not start_idx:
+                break
+
+            # Find the closing bracket or next operator
+            # Look for ')' after start_idx
+            close_idx = entry_query.search(")", start_idx, ctk.END)
+            if not close_idx:
+                close_idx = f"{start_idx} + {len(term)}c"  # fallback
+            else:
+                close_idx = f"{close_idx} + 1c"
+
+            entry_query.tag_add(term, start_idx, close_idx)
+            start_idx = close_idx
+
         entry_query.tag_config(term, foreground=keywords_color)
 
     # --- Highlight single-character punctuation ---
@@ -2846,7 +3048,7 @@ def open_webview_window():
         return webview_thread
 
     def worker_przewodnik():
-        file_path = os.path.join(BASE_DIR, "Przewodnik po języku zapytań.html")
+        file_path = os.path.join(BASE_DIR, "temp/Przewodnik po języku zapytań.html")
         window = webview.create_window(
             "Przewodnik Korpusuj",
             url=f"file://{file_path}",
@@ -3294,9 +3496,9 @@ x = (screen_width - width) // 2
 y = (screen_height - height) // 2
 
 splash.geometry(f"{width}x{height}+{x}+{y}")
-
+logo_path= os.path.join(BASE_DIR, "temp/logo.png")
 logo_image = ctk.CTkImage(
-    Image.open("temp/logo.png"),  # path to your image
+    Image.open(logo_path),  # path to your image
     size=(400, 400)          # resize to fit splash screen
 )
 
@@ -3309,8 +3511,9 @@ menu = Menu(app)
 
 file_menu = menu.menu_bar(text="Plik", tearoff=0)
 file_menu.add_command(label="Nowy projekt", command=load_corpora)
-file_menu.add_command(label="Utwórz korpus", command=lambda: creator.main())
 file_menu.add_command(label="Eksportuj wyniki", command=export_data)
+file_menu.add_separator()
+file_menu.add_command(label="Utwórz korpus", command=lambda: creator.main())
 file_menu.add_separator()
 file_menu.add_command(label="Zamknij", command=lambda: exit())
 file_menu = menu.menu_bar(text="Edytuj", tearoff=0)
@@ -3388,8 +3591,9 @@ entry_query.bind("<FocusIn>", on_entry_click)
 entry_query.bind("<FocusOut>", on_focus_out)
 entry_query.bind("<KeyRelease>", highlight_entry)
 
+search_path=settings_path= os.path.join(BASE_DIR, "temp/s.png")
 # Search button
-s_img = ctk.CTkImage(dark_image=Image.open("temp/s.png"), size=(50, 50))
+s_img = ctk.CTkImage(dark_image=Image.open(search_path), size=(50, 50))
 button_search = ctk.CTkButton(
     top_frame_container, text="", image=s_img,
     fg_color="#4B6CB7", hover_color="#5B7CD9", width=50, height=50, command=search
@@ -3428,9 +3632,9 @@ option_sort = ctk.CTkOptionMenu(
     corner_radius=8
 )
 option_sort.grid(row=2, column=6, padx=1, pady=1, sticky="w")
-
+settings_path= os.path.join(BASE_DIR, "temp/u.png")
 # Settings button
-settings_icon = ctk.CTkImage(dark_image=Image.open("temp/u.png"), size=(50, 50))
+settings_icon = ctk.CTkImage(dark_image=Image.open(settings_path), size=(50, 50))
 settings_button = ctk.CTkButton(top_frame_container, image=settings_icon, text="", fg_color="#4B6CB7", hover_color="#5B7CD9", width=50, height=50, command=settings_window)
 settings_button.grid(row=1, rowspan=2, column=7, pady=1, sticky="w")
 

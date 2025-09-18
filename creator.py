@@ -94,11 +94,10 @@ def process_single_text(text, filename, status_label, progress_bar, app):
         update_status(status_label, f"Nie znaleziono tekstu w pliku {filename}!", app)
         return None
 
-    update_status(status_label, f"Dzielę tekst na zdania: {filename}", app)
-    print(f"Dzielę tekst na zdania: {filename}")
 
     doc = nlp_stanza(text)
     total_sentences = len(doc.sentences)
+
 
     if total_sentences == 0:
         update_status(status_label, f"Nie znaleziono zdań w pliku {filename}!", app)
@@ -111,6 +110,12 @@ def process_single_text(text, filename, status_label, progress_bar, app):
 
     char_pos = 0
     for sent_id, sentence in enumerate(doc.sentences, start=1):
+        # Update status and progress
+        update_status(status_label, f"Przetwarzam zdania: {filename} ({sent_id}/{total_sentences})", app)
+
+        progress_bar.set(sent_id / total_sentences)
+        app.update_idletasks()
+
         word_to_ner = {word.id: token.ner for token in sentence.tokens for word in token.words}
         for word in sentence.words:
             start_idx = text.find(word.text, char_pos)
