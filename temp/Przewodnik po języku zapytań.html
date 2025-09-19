@@ -235,7 +235,7 @@ Prism.languages.korpusuj = {
   'bracket': { pattern: /[\[\]\(\)\{\}]/, alias: 'punctuation' },
   'operator': { pattern: /[&|!=]/, alias: 'operator' },
   'attribute': { 
-    pattern: /(?:orth|base|pos|upos|parent|children|deprel|ner|case|number|person|aspect|atrybut|frequency_orth|frequency_base|top|max|min|metadane|autor|tytuł|data)/u, 
+    pattern: /(?:orth|base|pos|upos|dependent|head|deprel|ner|case|number|person|aspect|atrybut|frequency_orth|frequency_base|top|max|min|metadane|autor|tytuł|data)/u, 
     alias: 'keyword' 
   },
   'value': { pattern: /"[^"]*"/, alias: 'string', greedy: true  },
@@ -328,8 +328,8 @@ W zapytaniach można określać dowolną liczbę tokenów pomiędzy dwoma elemen
 <tr><td>base</td><td>Forma podstawowa tokenu</td><td>[base="Ania"]</td></tr>
 <tr><td>pos</td><td>Klasa gramatyczna (XPOS)</td><td>[pos="subst"]</td></tr>
 <tr><td>upos</td><td>Uniwersalna klasa gramatyczna (UPOS)</td><td>[upos="NOUN"]</td></tr>
-<tr><td>parent</td><td>Tokeny będące rodzicami danego tokenu</td><td>[parent="piękny" & pos="subst"]</td></tr>
-<tr><td>children</td><td>Tokeny będące dziećmi danego tokenu</td><td>[children="dom" & pos="adj"]</td></tr>
+<tr><td>dependent</td><td>Tokeny będące rodzicami danego tokenu</td><td>[dependent="piękny" & pos="subst"]</td></tr>
+<tr><td>head</td><td>Tokeny będące dziećmi danego tokenu</td><td>[head="dom" & pos="adj"]</td></tr>
 <tr><td>deprel</td><td>Typ relacji składniowej między tokenem a jego rodzicem</td><td>[deprel="nsubj"]</td></tr>
 <tr><td>ner</td><td>Jednostki nazwane (Named Entity Recognition)</td><td>[ner="S-persName"]</td></tr>
 </table>
@@ -341,8 +341,8 @@ W zapytaniach można określać dowolną liczbę tokenów pomiędzy dwoma elemen
 	<code class="language-korpusuj">[base="Ania"] </code> <br> Szuka wszystkich form danego leksemu, np. <em>Ania</em>, <em>Anię</em>, <em>Anii</em> itp.<p>
 	<code class="language-korpusuj">[pos="subst"] </code> <br> Szuka wszystkich rzeczowników <a href="https://nlp.ipipan.waw.pl/~adamp/Papers/2009-mondilex/article.pdf">(por. Przepiórkowski 2020)</a>.<p>
 	<code class="language-korpusuj">[upos="VERB"] </code> <br> Szuka wszystkich czasowników <a href="https://universaldependencies.org/u/pos/">(por. Universal POS tags)</a>.<p>
-	<code class="language-korpusuj">[children="dom" & pos="adj"]</code> <br> Szuka wszystkich przymiotników będących dziećmi (wyrazami określającymi) leksemu <em>dom</em>. <p>
-	<code class="language-korpusuj">[parent="piękny" & pos="subst"]</code> <br> Szuka wszystkich tokenów, które są rodzicami (wyrazami określanymi) leksemu <em>piękny</em> i należą do klasy rzeczowników. Zapytanie może zatem zwrócić np. <em>miasto</em> w zdaniu: <em>Warszawa to piękne historyczne <strong>miasto</strong></em> lub <em>historia</em> w zdaniu: <em>To bardzo piękna <strong>historia</strong></em>.<p>
+	<code class="language-korpusuj">[head="dom" & pos="adj"]</code> <br> Szuka wszystkich przymiotników, których bezpośrednim nadrzędnikiem jest token o formie podstawowej <em>dom</em>. <p>
+	<code class="language-korpusuj">[dependent="piękny" & pos="subst"]</code> <br> Szuka wszystkich rzeczowników, które wśród bezpośrednich podrzędników posiadają leksem o formie podstawowej <em>piękny</em> i należą do klasy rzeczowników. Zapytanie może zatem zwrócić np. <em>miasto</em> w zdaniu: <em>Warszawa to piękne historyczne <strong>miasto</strong></em> lub <em>historia</em> w zdaniu: <em>To bardzo piękna <strong>historia</strong></em>.<p>
 	<code class="language-korpusuj">[deprel="nsubj" & pos="subst"]</code> <br> Szuka wszystkich tokenów będących rzeczownikami pełniących funkcję podmiotu <a href="https://universaldependencies.org/pl/index.html">(por. UD for Polish)</a>.<p>
 	<code class="language-korpusuj">[ner="S-persName"]</code> <br> Szuka tokenów będących nazwami osób.
 	Moduł biblioteki Stanza, służący do rozpoznawania jednostek nazwanych (NER), używa na potrzeby języka polskiego zestawu sześciu tagów: <em>date</em>, <em>geogName</em>, <em>orgName</em>, <em>persName</em>, <em>placeName</em>, <em>time</em> (por. <a href="https://stanfordnlp.github.io/stanza/ner_models.html">Stanza NER Models</a>). Mogą one zostać poprzedzone prefiksami: B- (ang. <em>begin</em> - początek jednostki nazwanej), I- (ang. <em>inside</em> - kolejny token jednostki nazwanej), S- (ang. <em>single</em> - jednotokenowa jednoska nazwana). Token, który nie zostanie rozpoznany jako jednostka nazwana otrzymuje tag O (ang. <em>outside</em>).<p>
@@ -372,19 +372,20 @@ Odległość wyrażona liczbą dodatnią oznacza pozycję po prawej stronie wzgl
 <h2>Zagnieżdżanie warunków</h2>
 
 <p>W języku zapytań Korpusuj można stosować zagnieżdżone warunki <code class="language-korpusuj">{…}</code> dla dowolnego atrybutu, aby precyzyjnie określić relacje między tokenami w obrębie zdania, np.:
-<div class="example2"><p>
-<code class="language-korpusuj">[deprel="root" & pos="subst" & number="sg" & parent={deprel="cop" & base="być" & parent!= "nie"} & parent={orth="Polska"}]</code><br>
-Szuka tokenu, który jest rdzeniem zdania (root) i rzeczownikiem w liczbie pojedynczej. Ten token musi być jednocześnie rodzicem niezaprzeczonej kopuli (cop) <em>być</em> i jest rodzicem tokenu <em>Polska</em>.<br>
+<div class="example2">
+<code class="language-korpusuj">[pos="subst" & dependent={deprel="cop" & base="być" & dependent!= "nie"} & dependent={orth="Putin"}]
+</code><br>
+Szuka tokenu, który jest rzeczownikiem w liczbie pojedynczej. Jednym z bezpośrednich podrzędników tego tokenu jest niezaprzeczona kopuli (cop) <em>być</em>, a drugim token o formie podstawowej <em>Polska</em>.<br>
 
-np. <em>Polska jest niezawodnym <strong>dostawcą</strong> sprzętu wojskowego na Ukrainę.</em><p>
+np. <em>Polska jest niezawodnym <strong>dostawcą</strong> sprzętu wojskowego na Ukrainę.</em>
 
 </div>
 Język zapytań umożliwia <strong>wielopoziomowe</strong> zagnieżdżanie warunków, np.:
-<div class="example2"><p>
-<code class="language-korpusuj">[ner=".-persName" & parent={orth="prezes" & parent={ner=".-orgName"}}][ner=".-persName"]</code><br>
+<div class="example2">
+<code class="language-korpusuj">[ner=".-persName" & dependent={orth="prezes" & dependent={ner=".-orgName"}}][ner=".-persName"]</code><br>
 Szuka sekwencji tokenów tworzących dwuczłonową nazwę osoby (persName). 
 Pierwszy z tych tokenów jest rodzicem tokenu <em>prezes</em>, który z kolei jest rodzicem nazwy organizacji (orgName).<br>
-np. <em>To efekt intensywnych działań na rzecz dywersyfikacji dostaw prowadzonych po 2015 roku — przekazał <strong>Daniel Obajtek</strong> prezes PKN Orlen.</em><p>
+np. <em>To efekt intensywnych działań na rzecz dywersyfikacji dostaw prowadzonych po 2015 roku — przekazał <strong>Daniel Obajtek</strong> prezes PKN Orlen.</em>
 
 </div>
 
