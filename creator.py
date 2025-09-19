@@ -15,10 +15,17 @@ import zipfile
 
 import tempfile
 
+import requests
+import shutil
+import spacy
+
 
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 nlp_stanza = None
+nlp_spacy = None
+
+
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -37,7 +44,7 @@ def initialize_stanza(status_label, app):
     if not os.path.exists(model_dir):
         # Model not downloaded
         try:
-            status_label.configure(text="Model Stanza nie znaleziony, próbuję pobrać...")
+            status_label.configure(text="Posze czekać - pobieram model Stanza")
             app.update_idletasks()
             stanza.download("pl")  # This will fail if no internet
         except Exception as e:
@@ -45,7 +52,7 @@ def initialize_stanza(status_label, app):
                 "Błąd modelu Stanza",
                 "Model języka polskiego dla Stanza nie jest zainstalowany i nie można go pobrać. "
                 "Proszę pobrać go na komputerze z dostępem do internetu i skopiować katalog:\n"
-                "~/.cache/stanza_resources/pl\n"
+                "~/stanza_resources/pl\n"
                 "lub ręcznie uruchomić:\nstanza.download('pl')"
             )
             status_label.configure(text="Brak modelu Stanza - przetwarzanie zatrzymane.")
@@ -57,6 +64,63 @@ def initialize_stanza(status_label, app):
     status_label.configure(text="Model Stanza załadowany")
     return True
 
+def initialize_spacy(status_label, app):
+    """
+    Download (if missing) and load the Polish SpaCy model (pl_core_news_lg).
+    Works with PyInstaller and runtime download.
+    """
+
+    global nlp_spacy
+    model_name = "pl_core_news_lg"
+    versioned_folder_name = "pl_core_news_lg-3.8.0"
+    wheel_url = f"https://github.com/explosion/spacy-models/releases/download/{versioned_folder_name}/{versioned_folder_name}-py3-none-any.whl"
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "spacy")
+    model_dir = os.path.join(os.path.expanduser("~"), ".cache", "spacy", model_name)
+
+    try:
+        status_label.configure(text="Sprawdzam model SpaCy...")
+        app.update_idletasks()
+
+        if not os.path.exists(cache_dir):
+            status_label.configure(text=f"Poszę czekać - pobieram model '{model_name}'...")
+            app.update_idletasks()
+
+            # Download wheel
+            wheel_path = os.path.join(tempfile.gettempdir(), f"{model_name}.whl")
+            with requests.get(wheel_url, stream=True) as r:
+                r.raise_for_status()
+                with open(wheel_path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f)
+
+            # Extract wheel to cache folder
+            os.makedirs(cache_dir, exist_ok=True)
+            with zipfile.ZipFile(wheel_path, "r") as zip_ref:
+                zip_ref.extractall(cache_dir)
+
+            # Delete temporary wheel
+            os.remove(wheel_path)
+
+        # Build path to the versioned folder
+        model_folder = os.path.join(model_dir, versioned_folder_name)
+
+        if not os.path.exists(model_folder):
+            messagebox.showerror("Błąd modelu SpaCy",
+                                 f"Nie znaleziono folderu modelu SpaCy:\n{model_folder}")
+            status_label.configure(text="Nie znaleziono folderu modelu SpaCy")
+            return None
+
+        # Load the model directly from the versioned folder
+        status_label.configure(text="Ładuję model SpaCy...")
+        app.update_idletasks()
+        nlp_spacy = spacy.load(model_folder)
+        status_label.configure(text=f"Model SpaCy '{model_name}' załadowany")
+        return nlp_spacy
+
+    except Exception as e:
+        messagebox.showerror("Błąd modelu SpaCy",
+                             f"Nie udało się pobrać/załadować modelu:\n{e}")
+        status_label.configure(text="Błąd ładowania modelu SpaCy")
+        return None
 
 def unpack_archive(file_path, status_label):
     """Unpack ZIP  into a temp dir and return list of extracted file paths."""
@@ -87,6 +151,51 @@ def update_status(label, text, app):
     app.after(0, lambda: label.configure(text=text))
     app.update_idletasks()
 
+
+def process_single_text_spacy(text, filename, status_label, progress_bar, app):
+    """Apply SpaCy sentence splitting and token tagging to a text."""
+    if not text.strip():
+        update_status(status_label, f"Nie znaleziono tekstu w pliku {filename}!", app)
+        return None
+
+    doc = nlp_spacy(text)
+    total_sentences = len(list(doc.sents))
+
+    if total_sentences == 0:
+        update_status(status_label, f"Nie znaleziono zdań w pliku {filename}!", app)
+        print(f"Nie znaleziono zdań w pliku {filename}!")
+        return None
+
+    processed_tokens = []
+    update_status(status_label, f"Rozpoczynam tagowanie tekstu: {filename}", app)
+    progress_bar.set(0)
+
+    char_pos = 0
+    for sent_id, sentence in enumerate(doc.sents, start=1):
+        # Update status and progress
+        update_status(status_label, f"Przetwarzam zdania: {filename} ({sent_id}/{total_sentences})", app)
+        progress_bar.set(sent_id / total_sentences)
+        app.update_idletasks()
+
+        for token in sentence:
+            start_idx = token.idx
+            end_idx = token.idx + len(token.text) - 1
+            processed_tokens.append({
+                "token": token.text,
+                "lemma": token.lemma_,
+                "sentenceID": sent_id,
+                "wordID": token.i + 1,  # SpaCy tokens are 0-indexed
+                "headID": token.head.i + 1 if token.head != token else 0,
+                "head": token.head.text if token.head != token else "root",
+                "deprel": token.dep_,
+                "postag": token.tag_,
+                "start": start_idx,
+                "end": end_idx,
+                "ner": token.ent_type_ if token.ent_type_ else "O",
+                "upos": token.pos_
+            })
+    
+    return processed_tokens
 
 def process_single_text(text, filename, status_label, progress_bar, app):
     """Apply Stanza sentence splitting and token tagging to a text."""
@@ -159,8 +268,12 @@ def process_file(file_path, status_label, progress_bar, app):
             else:  # PDF
                 text = process_pdf(file_path, status_label, app)
 
-            processed_tokens = process_single_text(text, os.path.basename(file_path),
-                                                   status_label, progress_bar, app)
+            if model.get() =="Stanza":
+                processed_tokens = process_single_text(text, os.path.basename(file_path),
+                                                       status_label, progress_bar, app)
+            else:
+                processed_tokens = process_single_text_spacy(text, os.path.basename(file_path),
+                                                       status_label, progress_bar, app)
             if processed_tokens:
                 item = {"filename": os.path.basename(file_path),
                         "Treść": text,
@@ -344,12 +457,12 @@ def select_files(frame, progress_bar, status_label, app):
             btn.pack(anchor="w", padx=20, pady=10)
             file_buttons.append(btn)
 
-    progress_bar.grid(row=3, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+    progress_bar.grid(row=4, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
     progress_bar.grid_remove()
     status_label.configure(text="Zaznacz pliki, które mają zostać przetworzone.")
 
 def main():
-
+    global model
 
     # Set up customtkinter appearance and theme
     app = ctk.CTk()
@@ -376,6 +489,24 @@ def main():
     main_frame.grid_rowconfigure(2, weight=1)
     main_frame.grid_rowconfigure(3, weight=1)
 
+    model = ctk.StringVar(value="Stanza")
+    option_model = ctk.CTkOptionMenu(
+        main_frame,
+        values=["Stanza", "spaCy"],
+        variable=model,
+        font=("Verdana", 12, 'bold'),
+        fg_color="#4B6CB7",
+        dropdown_fg_color="#4B6CB7",
+        dropdown_hover_color="#5B7CD9",
+        text_color="white",
+        dropdown_font=("Verdana", 12, 'bold'),
+        width=120,
+        height=35,
+        corner_radius=8
+    )
+
+    option_model.grid(row=0, column=0, columnspan=2, pady=10)
+
     # Create buttons
     select_button = ctk.CTkButton(
         main_frame,
@@ -384,30 +515,34 @@ def main():
         font=("Verdana", 12, 'bold'),
         corner_radius=8,
         height=35,
+        fg_color='#4B6CB7',
+        hover_color="#5B7CD9",
 
     )
-    select_button.grid(row=0, column=0, columnspan=2, pady=10)
+    select_button.grid(row=1, column=0, columnspan=2, pady=10)
 
     process_button = ctk.CTkButton(main_frame, text="Przetwórz pliki", command=lambda: start_processing(),
                                    font=("Verdana", 12, 'bold'),
                                    corner_radius=8,
                                    height=35,
+                                   fg_color='#4B6CB7',
+                                   hover_color="#5B7CD9",
                                    )
-    process_button.grid(row=1, column=0, columnspan=2, pady=10)
+    process_button.grid(row=2, column=0, columnspan=2, pady=10)
 
     # **Progress Bar (Row Reserved, Initially Hidden)**
     progress_bar = ctk.CTkProgressBar(main_frame)
     progress_bar.set(0)
-    progress_bar.grid(row=3, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+    progress_bar.grid(row=4, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
     progress_bar.grid_remove()  # Hides the progress bar but keeps the row reserved
 
     # **Status Label**
     status_label = ctk.CTkLabel(main_frame, text="Wybierz pliki do przetworzenia", font=("Verdana", 12, 'bold'))
-    status_label.grid(row=2, column=0, columnspan=2, padx=10, pady=10)
+    status_label.grid(row=3, column=0, columnspan=2, padx=10, pady=10)
 
     # **Frame for Checkboxes**
     checkbox_frame = ctk.CTkScrollableFrame(app)
-    checkbox_frame.pack(pady=5, fill="both", expand=True, side="right")
+    checkbox_frame.pack(pady=6, fill="both", expand=True, side="right")
 
     switch_var = ctk.StringVar(value="on")
 
@@ -429,9 +564,12 @@ def main():
                     text = process_pdf(file_path, status_label, app)
 
                 # Tokenize and tag once
-                processed_tokens = process_single_text(
-                    text, os.path.basename(file_path), status_label, progress_bar, app
-                )
+                if model.get() =="Stanza":
+                    processed_tokens = process_single_text(text, os.path.basename(file_path),
+                                                           status_label, progress_bar, app)
+                else:
+                    processed_tokens = process_single_text_spacy(text, os.path.basename(file_path),
+                                                                 status_label, progress_bar, app)
                 if processed_tokens:
                     item = {
                         "filename": os.path.basename(file_path),
@@ -473,7 +611,7 @@ def main():
         return all_data
 
     def process_files(status_label, progress_bar, app):
-        global selected_files, nlp_stanza
+        global selected_files, nlp_stanza, nlp_spacy
 
         selected_paths = [path for path, var in selected_files.items() if var.get() == 1]
 
@@ -518,9 +656,12 @@ def main():
         else:
             status_label.configure(text="Tworzę korpus bez metadanych")
 
-        initialize_stanza(status_label, app)
+        if model.get() == "Stanza":
+            initialize_stanza(status_label, app)
+        else:
+            initialize_spacy(status_label, app)
 
-        progress_bar.grid(row=3, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
+        progress_bar.grid(row=4, column=0, columnspan=2, padx=20, pady=10, sticky="ew")
         progress_bar.set(0)
         app.update_idletasks()
 

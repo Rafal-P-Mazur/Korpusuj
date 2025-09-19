@@ -12,5 +12,5 @@ openpyxl==3.1.5
 stanza==1.10.1
 PyMuPDF==1.25.3
 easyocr==1.7.2
-torch torchvision
-torch @ https://download.pytorch.org/whl/cpu
+spacy
+torch==2.6.0
