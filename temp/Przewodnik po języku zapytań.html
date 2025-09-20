@@ -342,11 +342,11 @@ W zapytaniach można określać dowolną liczbę tokenów pomiędzy dwoma elemen
 	<code class="language-korpusuj">[pos="subst"] </code> <br> Szuka wszystkich rzeczowników <a href="https://nlp.ipipan.waw.pl/~adamp/Papers/2009-mondilex/article.pdf">(por. Przepiórkowski 2020)</a>.<p>
 	<code class="language-korpusuj">[upos="VERB"] </code> <br> Szuka wszystkich czasowników <a href="https://universaldependencies.org/u/pos/">(por. Universal POS tags)</a>.<p>
 	<code class="language-korpusuj">[head="dom" & pos="adj"]</code> <br> Szuka wszystkich przymiotników, których bezpośrednim nadrzędnikiem jest token o formie podstawowej <em>dom</em>. <p>
-	<code class="language-korpusuj">[dependent="piękny" & pos="subst"]</code> <br> Szuka wszystkich rzeczowników, które wśród bezpośrednich podrzędników posiadają leksem o formie podstawowej <em>piękny</em> i należą do klasy rzeczowników. Zapytanie może zatem zwrócić np. <em>miasto</em> w zdaniu: <em>Warszawa to piękne historyczne <strong>miasto</strong></em> lub <em>historia</em> w zdaniu: <em>To bardzo piękna <strong>historia</strong></em>.<p>
+	<code class="language-korpusuj">[dependent="piękny" & pos="subst"]</code> <br> Szuka wszystkich rzeczowników, które wśród bezpośrednich podrzędników posiadają leksem o formie podstawowej <em>piękny</em>. Zapytanie może zatem zwrócić np. <em>miasto</em> w zdaniu: <em>Warszawa to piękne historyczne <strong>miasto</strong></em> lub <em>historia</em> w zdaniu: <em>To bardzo piękna <strong>historia</strong></em>.<p>
 	<code class="language-korpusuj">[deprel="nsubj" & pos="subst"]</code> <br> Szuka wszystkich tokenów będących rzeczownikami pełniących funkcję podmiotu <a href="https://universaldependencies.org/pl/index.html">(por. UD for Polish)</a>.<p>
 	<code class="language-korpusuj">[ner="S-persName"]</code> <br> Szuka tokenów będących nazwami osób.
 	Moduł biblioteki Stanza, służący do rozpoznawania jednostek nazwanych (NER), używa na potrzeby języka polskiego zestawu sześciu tagów: <em>date</em>, <em>geogName</em>, <em>orgName</em>, <em>persName</em>, <em>placeName</em>, <em>time</em> (por. <a href="https://stanfordnlp.github.io/stanza/ner_models.html">Stanza NER Models</a>). Mogą one zostać poprzedzone prefiksami: B- (ang. <em>begin</em> - początek jednostki nazwanej), I- (ang. <em>inside</em> - kolejny token jednostki nazwanej), S- (ang. <em>single</em> - jednotokenowa jednoska nazwana). Token, który nie zostanie rozpoznany jako jednostka nazwana otrzymuje tag O (ang. <em>outside</em>).<p>
-	SpaCy generuje ten sam zestaw tagów, ale traktuje każdy wyraz jako całkowicie odrębną jednostkę (tagi nie są poprzedzane prefiksami (por. <a href="https://spacy.io/models/pl">(por. SpaCy Polish Model)</a>.
+	SpaCy generuje ten sam zestaw tagów, ale traktuje każdy wyraz jako całkowicie odrębną jednostkę (tagi nie są poprzedzane prefiksami <a href="https://spacy.io/models/pl">(por. SpaCy Polish Model)</a>.
 
 	
 </div>
@@ -373,9 +373,9 @@ Odległość wyrażona liczbą dodatnią oznacza pozycję po prawej stronie wzgl
 
 <p>W języku zapytań Korpusuj można stosować zagnieżdżone warunki <code class="language-korpusuj">{…}</code> dla dowolnego atrybutu, aby precyzyjnie określić relacje między tokenami w obrębie zdania, np.:
 <div class="example2">
-<code class="language-korpusuj">[pos="subst" & dependent={deprel="cop" & base="być" & dependent!= "nie"} & dependent={orth="Putin"}]
+<code class="language-korpusuj">[pos="subst" & number="sg" & dependent={deprel="cop" & base="być" & dependent!= "nie"} & dependent={orth="Putin"}]
 </code><br>
-Szuka tokenu, który jest rzeczownikiem w liczbie pojedynczej. Jednym z bezpośrednich podrzędników tego tokenu jest niezaprzeczona kopuli (cop) <em>być</em>, a drugim token o formie podstawowej <em>Polska</em>.<br>
+Szuka tokenu, który jest rzeczownikiem w liczbie pojedynczej. Jednym z bezpośrednich podrzędników tego tokenu jest niezaprzeczona kopula (cop) <em>być</em>, a drugim token o formie podstawowej <em>Polska</em>.<br>
 
 np. <em>Polska jest niezawodnym <strong>dostawcą</strong> sprzętu wojskowego na Ukrainę.</em>
 
@@ -384,7 +384,7 @@ Język zapytań umożliwia <strong>wielopoziomowe</strong> zagnieżdżanie warun
 <div class="example2">
 <code class="language-korpusuj">[ner=".-persName" & dependent={orth="prezes" & dependent={ner=".-orgName"}}][ner=".-persName"]</code><br>
 Szuka sekwencji tokenów tworzących dwuczłonową nazwę osoby (persName). 
-Pierwszy z tych tokenów jest rodzicem tokenu <em>prezes</em>, który z kolei jest rodzicem nazwy organizacji (orgName).<br>
+Pierwszy z tych tokenów ma wyraz podrzędny <em>prezes</em>, który z kolei ma podrzędnik, którym jest nazwa organizacji (orgName).<br>
 np. <em>To efekt intensywnych działań na rzecz dywersyfikacji dostaw prowadzonych po 2015 roku — przekazał <strong>Daniel Obajtek</strong> prezes PKN Orlen.</em>
 
 </div>
