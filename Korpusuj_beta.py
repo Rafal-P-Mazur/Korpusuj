@@ -173,130 +173,6 @@ def build_dependency_maps(sentence_ids, word_ids, head_ids):
     return parent_idx, children_lookup
 
 
-from functools import lru_cache
-import re
-
-def prepare_cached_match(tokens, lemmas, postags, upostags, deprels, ners,
-                         full_postags, parent_idx, word_ids, children_lookup):
-    """
-    Returns a cached match_conditions function for a given sentence/document.
-    """
-
-    # normalize conditions recursively to tuples (hashable)
-    def _normalize_conditions(conds):
-        out = []
-        for cond in conds:
-            if not cond:
-                out.append(())
-                continue
-            if len(cond) >= 5:
-                key, values, operator, is_nested, match_type = cond
-            else:
-                key, values, operator, is_nested = cond
-                match_type = "exact"
-            if is_nested:
-                norm_values = _normalize_conditions(values)
-            else:
-                norm_values = tuple(values)
-            out.append((key, norm_values, operator, is_nested, match_type))
-        return tuple(out)
-
-    @lru_cache(maxsize=None)
-    def _cached(token_idx, norm_cond_tuple):
-        cond_list = [list(c) for c in norm_cond_tuple]  # back to list-of-lists
-        return _match_conditions(token_idx, cond_list)
-
-    def wrapper(token_idx, conditions):
-        norm = _normalize_conditions(conditions)
-        return _cached(token_idx, norm)
-
-    # --- original working match_conditions code ---
-    def _match_conditions(token_idx, conds):
-        for cond in conds:
-            if not cond:
-                continue
-            if len(cond) >= 5:
-                key, values, operator, is_nested, match_type = cond
-            else:
-                key, values, operator, is_nested = cond
-                match_type = "exact"
-
-            # --- token attributes ---
-            if key == "orth":
-                attr = tokens[token_idx]
-            elif key == "base":
-                attr = lemmas[token_idx]
-            elif key == "pos":
-                attr = postags[token_idx]
-            elif key == "upos":
-                attr = upostags[token_idx] if upostags else ""
-            elif key == "deprel":
-                attr = deprels[token_idx]
-            elif key == "ner":
-                attr = ners[token_idx]
-
-            # --- parent / children logic ---
-            elif key in ("head", "head.group"):
-                parent = parent_idx[token_idx]
-                if parent is None or parent < 0:
-                    return False
-                if is_nested:
-                    if not wrapper(parent, tuple(values)):
-                        return False
-                else:
-                    parent_attr = lemmas[parent]
-                    if operator == "=":
-                        if match_type == "exact" and parent_attr not in values:
-                            return False
-                        elif match_type == "regex":
-                            if not any(re.fullmatch(v, parent_attr) for v in values):
-                                return False
-                        elif match_type == "regex_search":
-                            if not any(re.search(v, parent_attr) for v in values):
-                                return False
-                    elif operator == "!=":
-                        if match_type == "exact" and parent_attr in values:
-                            return False
-                        elif match_type == "regex":
-                            if any(re.fullmatch(v, parent_attr) for v in values):
-                                return False
-                        elif match_type == "regex_search":
-                            if any(re.search(v, parent_attr) for v in values):
-                                return False
-
-
-            else:
-                # fallback: full_postags / features
-                full_tag = full_postags[token_idx]
-                tag_parts = full_tag.split(":")
-                pos = tag_parts[0] if tag_parts else ""
-                feats = tag_parts[1:] if len(tag_parts) > 1 else []
-                feat_index = FEAT_MAPPING.get(pos, {}).get(key, -1)
-                token_feat = feats[feat_index] if 0 <= feat_index < len(feats) else ""
-                attr = token_feat
-
-            # --- comparison ---
-            if key not in ("head", "head.group"):
-                if operator == "=":
-                    if match_type == "exact" and attr not in values:
-                        return False
-                    elif match_type == "regex" and not any(re.fullmatch(v, attr) for v in values):
-                        return False
-                    elif match_type == "regex_search" and not any(re.search(v, attr) for v in values):
-                        return False
-                elif operator == "!=":
-                    if match_type == "exact" and attr in values:
-                        return False
-                    elif match_type == "regex" and any(re.fullmatch(v, attr) for v in values):
-                        return False
-                    elif match_type == "regex_search" and any(re.search(v, attr) for v in values):
-                        return False
-
-        return True
-
-    return wrapper
-
-
 def resource_path(relative_path):
     # Get absolute path to resource, works for dev and PyInstaller
     if hasattr(sys, '_MEIPASS'):
@@ -874,41 +750,13 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
     # --- Vectorized pre-filtering using token-level conditions only ---
     # For regex conditions we skip pre-filtering (they are handled row-by-row)
     for token_query_conditions, s_ordered, sentence_query_conditions in parsed_query_groups:
-        masks = []
-        for cond in token_query_conditions:
-            compound_mask = pd.Series(True, index=df.index)
-            for subcond in (cond if isinstance(cond, list) else [cond]):
-                if not subcond:
-                    continue
-                if len(subcond) >= 5:
-                    key, values, operator, is_nested, match_type = subcond
-                else:
-                    key, values, operator, is_nested = subcond
-                    match_type = "exact"
-                # Skip prefiltering for children/parent keys and regex conditions.
-                if key in ("head", "head.group", "dependent") \
-                        or key.startswith("head(") or key.startswith("dependent(") or key.startswith("head.group(") \
-                        or match_type == "regex":
-                    continue
-
-                query_to_df = {"orth": "token", "base": "lemma", "pos": "postag", "upos": "upostag", "deprel": "deprel",
-                               "ner": "ner"}
-                if key in query_to_df:
-                    col = query_to_df[key]
-                    if match_type == "exact":
-                        regex = f"{col}:(?:{'|'.join(re.escape(v) for v in values)})\\b"
-
-            masks.append(compound_mask)
-        if masks:
-            combined_mask = masks[0] if masks else pd.Series(True, index=df.index)
-            for mask in masks[1:]:
-                combined_mask &= mask
-            filtered_df = df[combined_mask]
-        else:
-            filtered_df = df
-
-        # ✅ Build a single mask for all filters
+        # Start with all rows selected
+        filtered_df = df
         mask = pd.Series(True, index=filtered_df.index)
+
+        # Apply author/title/date/metadata filters using `mask` here
+        ...
+        filtered_df = filtered_df[mask]
 
         # --- Author filters ---
         if author_filters:
@@ -1047,9 +895,6 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                 sentence_ids, word_ids, head_ids
             )
 
-            match_conditions = prepare_cached_match(tokens, lemmas, postags, upostags,
-                                                    deprels, ners, full_postags,
-                                                    parent_idx, word_ids, children_lookup)
 
             def match_conditions(token_idx, conditions):
                 if not conditions:
@@ -1475,7 +1320,7 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                     end_idx = match_pattern(i, token_query_conditions)
 
                 if end_idx is not None:
-                    # [ ... build contexts same as before, using start_ids / end_ids ... ]
+
                     left_context = row.Treść[
                                    max(0, start_ids[max(0, i - left_context_size)]): start_ids[i]
                                    ] if i > 0 else ""
@@ -1488,7 +1333,7 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                                     ]
 
                     matched_lemmas = " ".join(lemmas[i:end_idx])
-                    # context = f"{left_context} |* {matched_text} *|{right_context}"
+
                     context = [left_context, matched_text, right_context]
 
                     full_left_context = row.Treść[
@@ -1502,7 +1347,6 @@ def find_lemma_context(query, df, left_context_size=10, right_context_size=10):
                     full_right_context = full_right_context[
                                          len(right_context):] if right_context else full_right_context
 
-                    # full_text_with_markers = f"{full_left_context} |*{matched_text} *|{full_right_context}"
                     full_text_with_markers = [full_left_context, matched_text, full_right_context]
 
                     token_counter[matched_text] += 1
@@ -2120,8 +1964,6 @@ def search():
                                     font=("Verdana", 12)
                                 )
                                 listbox.pack(fill="both", expand=True)
-
-
 
                                 # ---- Functions ----
                                 def show_page(page_idx):
