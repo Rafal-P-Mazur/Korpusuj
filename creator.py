@@ -19,13 +19,10 @@ import requests
 import shutil
 import spacy
 
-
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 nlp_stanza = None
 nlp_spacy = None
-
-
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -34,6 +31,7 @@ else:
 
 # Safe initial directory for file dialog
 initial_dir = BASE_DIR
+
 
 # Download and load the Polish Stanza model (only needs to be done once)
 def initialize_stanza(status_label, app):
@@ -63,6 +61,7 @@ def initialize_stanza(status_label, app):
     nlp_stanza = stanza.Pipeline("pl", processors="tokenize,pos,lemma,ner,depparse", use_gpu=True, n_process=5)
     status_label.configure(text="Model Stanza załadowany")
     return True
+
 
 def initialize_spacy(status_label, app):
     """
@@ -122,6 +121,7 @@ def initialize_spacy(status_label, app):
         status_label.configure(text="Błąd ładowania modelu SpaCy")
         return None
 
+
 def unpack_archive(file_path, status_label):
     """Unpack ZIP  into a temp dir and return list of extracted file paths."""
     temp_dir = tempfile.mkdtemp(prefix="archive_extract_")
@@ -140,12 +140,15 @@ def unpack_archive(file_path, status_label):
         status_label.configure(text=f"Błąd rozpakowywania: {e}")
         return []
 
+
 def update_status(label, text, app):
     app.after(0, lambda: label.configure(text=text))
+
 
 # Global variables
 selected_files = {}  # Dictionary to store file paths and their check status
 file_buttons = []  # List to store radio buttons
+
 
 def update_status(label, text, app):
     app.after(0, lambda: label.configure(text=text))
@@ -194,8 +197,9 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
                 "ner": token.ent_type_ if token.ent_type_ else "O",
                 "upos": token.pos_
             })
-    
+
     return processed_tokens
+
 
 def process_single_text(text, filename, status_label, progress_bar, app):
     """Apply Stanza sentence splitting and token tagging to a text."""
@@ -203,10 +207,8 @@ def process_single_text(text, filename, status_label, progress_bar, app):
         update_status(status_label, f"Nie znaleziono tekstu w pliku {filename}!", app)
         return None
 
-
     doc = nlp_stanza(text)
     total_sentences = len(doc.sentences)
-
 
     if total_sentences == 0:
         update_status(status_label, f"Nie znaleziono zdań w pliku {filename}!", app)
@@ -268,12 +270,12 @@ def process_file(file_path, status_label, progress_bar, app):
             else:  # PDF
                 text = process_pdf(file_path, status_label, app)
 
-            if model.get() =="Stanza":
+            if model.get() == "Stanza":
                 processed_tokens = process_single_text(text, os.path.basename(file_path),
                                                        status_label, progress_bar, app)
             else:
                 processed_tokens = process_single_text_spacy(text, os.path.basename(file_path),
-                                                       status_label, progress_bar, app)
+                                                             status_label, progress_bar, app)
             if processed_tokens:
                 item = {"filename": os.path.basename(file_path),
                         "Treść": text,
@@ -309,13 +311,13 @@ def process_file(file_path, status_label, progress_bar, app):
 
     return all_data
 
+
 def process_xlsx(file_path):
     """
     Reads data from an XLSX file, extracting 'Tytuł', 'Treść', 'Data publikacji', and 'Autor'.
     """
     try:
         df = pd.read_excel(file_path)
-
 
         columns = df.columns
 
@@ -335,21 +337,22 @@ def process_xlsx(file_path):
 
             if "Tytuł" in df.columns:
                 title = str(row.get("Tytuł", "")).strip()
-                content = f"{title}\n\n{content}".strip() if title else content # Prepend title if it exists
+                content = f"{title}\n\n{content}".strip() if title else content  # Prepend title if it exists
 
             data.append({
                 "Tytuł": title,
                 "Treść": content,
                 "Data publikacji": date,
                 "Autor": author,
-                "rok":rok,
-                "miesiąc":miesiąc,
-                "dzień":dzień
+                "rok": rok,
+                "miesiąc": miesiąc,
+                "dzień": dzień
             })
         return data
     except Exception as e:
         print(f"Błąd podczas przetwarzania pliku XLSX: {e}")
         return []
+
 
 def fix_hyphenation(text):
     # Remove hyphen at the end of a line (along with the newline and any surrounding whitespace)
@@ -361,7 +364,6 @@ def fix_hyphenation(text):
 def process_pdf(file_path, status_label, app):
     import fitz
     import easyocr
-
 
     """
     Extract text from a PDF. If it's an image-based PDF, OCR is applied using easyocr.
@@ -461,22 +463,25 @@ def select_files(frame, progress_bar, status_label, app):
     progress_bar.grid_remove()
     status_label.configure(text="Zaznacz pliki, które mają zostać przetworzone.")
 
+
 def main():
     global model
 
     # Set up customtkinter appearance and theme
     app = ctk.CTk()
     app.attributes("-topmost", True)
+
     def center_window(app, width=800, height=400):
         screen_width = app.winfo_screenwidth()
         screen_height = app.winfo_screenheight()
         x = int((screen_width / 2) - (width / 2))
         y = int((screen_height / 2) - (height / 2))
         app.geometry(f"{width}x{height}+{x}+{y}")
+
     center_window(app, 800, 400)
     app.title("Kreator korpusów")
-    #icon_path = os.path.join(BASE_DIR, "favicon.ico")
-    #app.iconbitmap(icon_path)
+    # icon_path = os.path.join(BASE_DIR, "favicon.ico")
+    # app.iconbitmap(icon_path)
 
     main_frame = ctk.CTkFrame(app)
     main_frame.pack(pady=5, fill="both", side="left")
@@ -564,7 +569,7 @@ def main():
                     text = process_pdf(file_path, status_label, app)
 
                 # Tokenize and tag once
-                if model.get() =="Stanza":
+                if model.get() == "Stanza":
                     processed_tokens = process_single_text(text, os.path.basename(file_path),
                                                            status_label, progress_bar, app)
                 else:
@@ -634,20 +639,55 @@ def main():
                 parent=app
             )
 
+            import pandas as pd
+            from datetime import datetime
+
             if metadata_path:
                 try:
                     df_meta = pd.read_excel(metadata_path)
                     if "Nazwa pliku" in df_meta.columns:
                         for _, row in df_meta.iterrows():
                             filename = str(row["Nazwa pliku"]).strip()
-                            metadata_dict[filename] = {
-                                col: (
-                                    str(row[col]).strip() if pd.notna(row[col]) and str(row[col]).strip()
-                                    else "0000-00-00" if col == "Data publikacji"
-                                    else "#"
-                                )
-                                for col in df_meta.columns if col != "Nazwa pliku"
-                            }
+                            metadata_dict[filename] = {}
+                            for col in df_meta.columns:
+                                if col == "Nazwa pliku":
+                                    continue
+
+                                value = row[col]
+
+                                # Special handling for 'Data publikacji' column
+                                if col == "Data publikacji":
+                                    if pd.notna(value):
+                                        # Check if the value is a date/timestamp object
+                                        if isinstance(value, (pd.Timestamp, datetime)):
+                                            # Format date to string
+                                            formatted_date = ""
+                                            try:
+                                                # Attempt full format YYYY-MM-DD
+                                                formatted_date = value.strftime('%Y-%m-%d')
+                                            except ValueError:
+                                                # Fallback to YYYY-MM if day is not precise
+                                                try:
+                                                    formatted_date = value.strftime('%Y-%m')
+                                                except ValueError:
+                                                    # Fallback to YYYY
+                                                    formatted_date = value.strftime('%Y')
+                                            metadata_dict[filename][col] = formatted_date
+                                        else:
+                                            # Assume it's already a string in a known format
+                                            metadata_dict[filename][col] = str(value).strip()
+                                    else:
+                                        # Handle missing date
+                                        metadata_dict[filename][col] = "0000-00-00"
+                                else:
+                                    # For all other columns, use existing logic
+                                    if pd.notna(value) and str(value).strip():
+                                        metadata_dict[filename][col] = str(value).strip()
+                                    else:
+                                        metadata_dict[filename][col] = "#"
+
+                except Exception as e:
+                    print(f"Error loading metadata: {e}")
                 except Exception as e:
                     print(f"Błąd wczytywania metadanych: {e}")
             else:
@@ -751,10 +791,10 @@ def main():
 
     def toggle_all():
         """Toggle check/uncheck all checkboxes."""
-        if switch_var.get()=="on":
+        if switch_var.get() == "on":
             for var in selected_files.values():
                 var.set(1)
-        elif switch_var.get()=="off":
+        elif switch_var.get() == "off":
             for var in selected_files.values():
                 var.set(0)
 
@@ -773,9 +813,11 @@ def main():
             process_button.configure(state="normal")
 
     # Create a "Check/Uncheck All" button and place it in the UI
-    toggle_button = ctk.CTkSwitch(checkbox_frame, text="Odznacz/Zaznacz wszystkie pliki", font=("Verdana", 12, 'bold'), state=True, command=toggle_all, variable=switch_var, onvalue="on", offvalue="off")
+    toggle_button = ctk.CTkSwitch(checkbox_frame, text="Odznacz/Zaznacz wszystkie pliki", font=("Verdana", 12, 'bold'),
+                                  state=True, command=toggle_all, variable=switch_var, onvalue="on", offvalue="off")
     toggle_button.pack(padx=20, pady=20)  # Use pack for the toggle button
     app.mainloop()
+
 
 # Make sure nothing runs on import
 if __name__ == "__main__":
