@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset
+      xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.sitemaps.org/schemas/sitemap/0.9
+            http://www.sitemaps.org/schemas/sitemap/0.9/sitemap.xsd">
+<!-- created with Free Online Sitemap Generator www.xml-sitemaps.com -->
+
+
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>1.00</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/LICENSE</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/activity</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/issues</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/pulls</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/actions</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/security</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Korpusuj_beta.py</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/README.md</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/creator.py</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/fiszki_tkinter.py</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/google1279d21c132a4977.html</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/requirements.txt</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/table.py</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/releases</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/releases/tag/v1.0.0-beta</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/search?q=repo%3ARafal-P-Mazur%2FKorpusuj++language%3APython</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/search?q=repo%3ARafal-P-Mazur%2FKorpusuj++language%3AHTML</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.80</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/labels</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.64</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/milestones</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.64</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/commit/6ec89cd2a58f491c5ca2e32db012a0763023be16</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.64</priority>
+</url>
+<url>
+  <loc>https://github.com/Rafal-P-Mazur/Korpusuj/milestones?state=closed</loc>
+  <lastmod>2025-10-13T05:36:32+00:00</lastmod>
+  <priority>0.51</priority>
+</url>
+
+
+</urlset>
