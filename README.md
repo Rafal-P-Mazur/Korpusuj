@@ -6,6 +6,8 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 ---
 
 ![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/1.png?raw=true)
+![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/2.png?raw=true)
+![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/3.png?raw=true)
 
 ## Funkcje
 - Tworzenie automatycznie anotowanych korpusów tekstów (z wykorzystaniem biblioteki Stanza).
