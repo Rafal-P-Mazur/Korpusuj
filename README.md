@@ -5,6 +5,8 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 ![Tag](https://img.shields.io/github/v/tag/Rafal-P-Mazur/Korpusuj)
 ---
 
+![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/1.png?raw=true)
+
 ## Funkcje
 - Tworzenie automatycznie anotowanych korpusów tekstów (z wykorzystaniem biblioteki Stanza).
 - Przeszukiwanie i filtrowanie danych tekstowych.
