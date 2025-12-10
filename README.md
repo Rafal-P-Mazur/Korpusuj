@@ -1,6 +1,7 @@
 # Korpusuj
 
-Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów tekstów.
+Aplikacja do przetwarzania języka naturalnego (NLP). Umożliwia tworzenie automatycznie anotowanych korpusów na podstawie dokumentów TXT, DOCX, XLSX i PDF, przeszukiwanie utworzonego korpusu z wykorzystaniem autorskiego języka CQL (Corpus Query Language) oraz wizualizację danych frekwencyjnych.
+
 
 ![Tag](https://img.shields.io/github/v/tag/Rafal-P-Mazur/Korpusuj)
 ---
@@ -9,12 +10,12 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 ![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/2.png?raw=true)
 ![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/3.png?raw=true)
 
-## Funkcje
-- Tworzenie automatycznie anotowanych korpusów tekstów (z wykorzystaniem biblioteki Stanza).
-- Przeszukiwanie i filtrowanie danych tekstowych.
-- Generowanie i wizualizacja danych frekwencyjnych.
-- Gotowy plik wykonywalny (.exe) dla Windows – nie wymaga instalacji Pythona.
-
+## Główne funkcje
+- **Budowa korpusów:** Konwersja surowych plików tekstowych do formatu `.parquet` zawierającego pełną anotację morfosyntaktyczną.
+- **Wyszukiwanie:** Zaawansowany silnik zapytań obsługujący warunki zagnieżdżone, relacje zależnościowe (dependency parsing) i wyrażenia regularne.
+- **Analiza:** Generowanie tabel frekwencyjnych dla lematów i form ortograficznych.
+- **Wizualizacja:** Interaktywne wykresy trendów czasowych (diachroniczne).
+- **Dostępność:** Gotowy plik `.exe` dla systemu Windows (nie wymaga instalacji Pythona).
 ---
 
 ## Instalacja
