@@ -2,6 +2,14 @@
 
 Aplikacja do przetwarzania języka naturalnego (NLP). Umożliwia tworzenie automatycznie anotowanych korpusów na podstawie dokumentów TXT, DOCX, XLSX i PDF, przeszukiwanie utworzonego korpusu z wykorzystaniem autorskiego języka CQL (Corpus Query Language) oraz wizualizację danych frekwencyjnych.
 
+## ⚠️ Status projektu i wydajność
+Projekt ten jest *autorskim narzędziem badawczym* stworzonym przez językoznawcę przy wsparciu AI. Nie jest to profesjonalny produkt komercyjny.
+
+* **Faza Beta:** Aplikacja działa stabilnie w środowisku testowym autora. Jako że konfiguracje sprzętowe użytkowników mogą się różnić, mogą wystąpić nieprzewidziane błędy. Zachęcam do zgłaszania ich w zakładce [Issues](https://github.com/Rafal-P-Mazur/Korpusuj/issues).
+* **Kod źródłowy:** Kod źródłowy odzwierciedla proces uczenia się i eksperymentowania z AI, stąd może nie spełniać wszystkich standardów inżynierii oprogramowania. Kod jest otwarty i dostępny dla każdego, kto chciałby go poprawiać lub rozwijać
+* **Wydajność (CPU vs GPU):**
+    * **Wersja .exe:** Ze względu na rozmiar pliku, gotowa aplikacja korzysta z biblioteki Torch w wersji **CPU-only**. Przetwarzanie dużych korpusów może zająć sporo czasu.
+    * **Wersja Python:** Użytkownicy uruchamiający kod ze źródeł mogą zainstalować wersję Torch z obsługą **CUDA (GPU)**. Stanza wykorzysta wtedy kartę graficzną, co wielokrotnie przyspieszy proces anotacji (tworzenia korpusu).
 
 ![Tag](https://img.shields.io/github/v/tag/Rafal-P-Mazur/Korpusuj)
 ---
