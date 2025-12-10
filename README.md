@@ -61,6 +61,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 4.  **Metadane (Opcjonalne):**
     * Istnieje możliwość załączenia pliku `metadane.xlsx` w celu automatycznego przypisania informacji bibliograficznych.
     * **Wymagane kolumny:** Arkusz musi zawierać kolumnę **"Nazwa pliku"** (odpowiadającą nazwie pliku źródłowego, np. `tekst1.txt`) oraz kolumny podstawowe: **"Tytuł"**, **"Data publikacji"**, **"Autor"**.
+    * **Format daty:** Zaleca się, aby kolumna "Data publikacji" miała w Excelu ustawiony format **Data**. Aplikacja automatycznie rozpozna i sformatuje tak wprowadzone daty, co zapewni poprawne działanie wykresów trendów.
     * **Własne pola:** Użytkownik może dodać dowolne inne kolumny (np. "Gatunek", "Źródło", "Portal"), które zostaną zaimportowane i umożliwią później filtrowanie wyników w wyszukiwarce.
 5.  **Przetwarzanie plików:**
     * Proces uruchamia się przyciskiem **Przetwórz pliki**.
