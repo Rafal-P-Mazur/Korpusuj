@@ -17,7 +17,7 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
 
 ---
 
-## Instalacja i użytkowanie
+## Instalacja
 
 ### Windows (.exe)
 1. Pobierz najnowszą wersję z [Releases](https://github.com/Rafal-P-Mazur/Korpusuj/releases).
@@ -45,3 +45,82 @@ Aplikacja do tworzenia i przeszukiwania automatycznie anotowanych korpusów teks
    ```bash
    python Korpusuj_beta.py
 
+---
+
+## Instrukcja użytkowania
+
+### Krok 1: Tworzenie korpusu
+1.  W menu głównym należy wybrać: **Plik -> Utwórz korpus**.
+2.  **Wybór plików:**
+    * **Pliki tekstowe:** Obsługiwane formaty to `.txt`, `.docx` oraz `.xlsx` (w przypadku plików Excel wymagane są kolumny: *Tytuł, Treść, Data publikacji*).
+    * **PDF:** Aplikacja posiada wbudowany moduł **OCR**. W przypadku plików PDF będących skanami, tekst zostanie rozpoznany automatycznie (może to wpłynąć na czas przetwarzania).
+    * **Archiwum ZIP:** Możliwe jest wczytywanie plików tekstowych spakowanych w archiwa `.zip`. Aplikacja automatycznie rozpakuje archiwum i przetworzy zawarte w nim pliki.
+3.  **Wybór modelu językowego:**
+    * **Stanza:** Zapewnia wyższą precyzję analizy składniowej (zalecane).
+    * **spaCy:** Oferuje szybsze przetwarzanie danych.
+4.  **Metadane (Opcjonalne):**
+    * Istnieje możliwość załączenia pliku `metadane.xlsx` w celu automatycznego przypisania informacji bibliograficznych.
+    * **Wymagane kolumny:** Arkusz musi zawierać kolumnę **"Nazwa pliku"** (odpowiadającą nazwie pliku źródłowego, np. `tekst1.txt`) oraz kolumny podstawowe: **"Tytuł"**, **"Data publikacji"**, **"Autor"**.
+    * **Własne pola:** Użytkownik może dodać dowolne inne kolumny (np. "Gatunek", "Źródło", "Portal"), które zostaną zaimportowane i umożliwią później filtrowanie wyników w wyszukiwarce.
+5.  **Przetwarzanie plików:**
+    * Proces uruchamia się przyciskiem **Przetwórz pliki**.
+    * > **Ważne:** Przy **pierwszym użyciu** kreatora aplikacja automatycznie pobierze niezbędne modele językowe (Stanza lub SpaCy) dla języka polskiego. Czas operacji zależy od szybkości łącza internetowego. Kolejne uruchomienia nie wymagają ponownego pobierania.
+6.  Wynikowy plik `.parquet` należy zapisać na dysku.
+
+### Krok 2: Wczytanie projektu
+1.  Należy powrócić do głównego okna aplikacji.
+2.  Wybrać opcję **Plik -> Nowy projekt**.
+3.  Wskazać utworzony wcześniej plik `.parquet`.
+4.  Aktywny korpus wybiera się z listy rozwijanej w lewym górnym rogu ("Wybierz korpus").
+
+### Krok 3: Wyszukiwanie
+Zapytania wprowadza się w głównym polu tekstowym. Aplikacja obsługuje autorski język zapytań **CQL** z obsługą wyrażeń regularnych.
+
+* **Przykłady zapytań:**
+    * `[base="dom"]` – wyszukiwanie wszystkich form fleksyjnych słowa "dom".
+    * `[pos="adj"][base="chmura"]` – wyszukiwanie przymiotnika stojącego bezpośrednio przed słowem "chmura".
+    * `[pos="subst" & dependent={base="piękny"}]` – wyszukiwanie rzeczownika określanego przez przymiotnik "piękny" (niezależnie od szyku w zdaniu).
+* **Pomoc:** Pełna dokumentacja składni dostępna jest w menu **Pomoc -> Przewodnik po języku zapytań**.
+
+### Krok 4: Analiza wyników
+Wyniki prezentowane są w trzech zakładkach:
+
+#### 1. Wyniki wyszukiwania (Konkordancje)
+* W lewym panelu znajduje się tabela, w której wyświetlane są wyniki wyszukiwania wraz z lewym i prawym kontekstem.
+* Kliknięcie w wiersz powoduje wyświetlenie **pełnego tekstu** artykułu w pprawym panelu.
+* Znalezione frazy są podświetlone kolorami w celu łatwiejszej identyfikacji.
+
+#### 2. Statystyki
+Zakładka zawiera tabele frekwencyjne generowane automatycznie dla wyników wyszukiwania. Dostępne są następujące widoki:
+* **Formy podstawowe:** Ranking lematów (form podstawowych).
+* **Formy ortograficzne:** Ranking dokładnych form tekstowych.
+* **Częstość w czasie:** Liczba wystąpień w poszczególnych miesiącach.
+
+#### 3. Trendy (Wykresy)
+Wizualizacja zmienności użycia słów w czasie.
+* **Tryby:** Miesięczny/Roczny oraz Surowy/Znormalizowany (liczba wystąpień na milion słów).
+* **Legenda:** Elementy dodaje się do wykresu poprzez zaznaczenie ich na liście po lewej stronie.
+* **Edycja:** Pole edycji zapewnia możliwość łączenia synonimów w jedną linię na wykresie (np. sumowanie słów "auto" i "samochód").
+
+### Krok 5: Narzędzia dodatkowe
+
+* **Fiszki:** Aby zapisać fragment tekstu, należy zaznaczyć go w podglądzie pełnego tekstu, wpisać nazwę w polu "Nazwa fiszki" i kliknąć **Zapisz fiszkę**. Fragment zostanie zapisany w pliku tekstowym w folderze `/fiszki`.
+* **Eksport:** Opcja **Plik -> Eksportuj wyniki** umożliwia zapisanie wszystkich tabel i konkordancji do jednego pliku Excel (`.xlsx`).
+
+---
+
+## ⚙️ Konfiguracja
+W menu **Ustawienia -> Preferencje** możliwa jest modyfikacja następujących parametrów:
+* **Motyw:** Ciemny / Jasny.
+* **Czcionka:** Rozmiar i krój czcionki.
+* **Kontekst:** Domyślna liczba słów wyświetlana w wynikach wyszukiwania.
+
+## 📂 Struktura plików
+* `Korpusuj.exe` – Główny plik aplikacji.
+* `temp/` – Pliki tymczasowe (wykresy, podglądy).
+* `fonts/` – Czcionki interfejsu.
+* `fiszki/` – Folder z notatkami użytkownika.
+* `stanza_resources/` (w katalogu użytkownika) – Pobrane modele językowe.
+
+## 📜 Licencja
+Projekt udostępniony na licencji MIT.
