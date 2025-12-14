@@ -945,7 +945,7 @@ def main():
         app.geometry(f"{width}x{height}+{x}+{y}")
 
     center_window(app, 800, 600)
-    app.title("Kreator korpusów v2 (Double Progress)")
+    app.title("Kreator korpusów")
 
     main_frame = ctk.CTkFrame(app)
     main_frame.pack(pady=5, fill="both", side="left")
