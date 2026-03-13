@@ -3,8 +3,9 @@ import tkinter as tk
 
 
 class CustomTable(ctk.CTkFrame):
-    def __init__(self, master, headers, data, min_column_widths, justify_list, rows_per_page, fulltext_data,  **kwargs):
+    def __init__(self, master, headers, data, min_column_widths, justify_list, rows_per_page, fulltext_data, search_callback=None, search_column_index=1, sort_callback=None, sortable=True, **kwargs):
         super().__init__(master, **kwargs)
+        self.sortable = sortable
         self._initializing = True
         self._suppress_resize = False
 
@@ -22,6 +23,11 @@ class CustomTable(ctk.CTkFrame):
         self.additional_event = None
         self.resize_delay = None
 
+        # --- Zmienne do sortowania ---
+        self.sort_callback = sort_callback
+        self.sort_col = None
+        self.sort_asc = True
+
         self.header_bg_color = "#4B6CB7"
         self.header_text_color = "white"
         self.even_row_color = "#2b2b2b"
@@ -30,15 +36,25 @@ class CustomTable(ctk.CTkFrame):
         self.font = ("Arial", 14)
         self.header_font = ("Arial", 15)
 
+        # Ustawiamy siatkę dla głównego kontenera tabeli
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
 
         self.canvas = ctk.CTkCanvas(self, background='#1d1e1e', highlightthickness=0)
-        self.canvas.pack(fill="both", expand=True, side="left")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
 
+        # Pasek pionowy
         self.scrollbar = ctk.CTkScrollbar(self, orientation="vertical", command=self.canvas.yview)
-        self.scrollbar.pack(fill="y", side="right")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.scrollbar.grid(row=0, column=1, sticky="ns")
+
+        # Pasek poziomy
+        self.h_scrollbar = ctk.CTkScrollbar(self, orientation="horizontal", command=self.canvas.xview)
+        self.h_scrollbar.grid(row=1, column=0, sticky="ew")
+
+        self.canvas.configure(yscrollcommand=self.scrollbar.set, xscrollcommand=self.h_scrollbar.set)
 
         self.table_frame = ctk.CTkFrame(self.canvas)
+
         self.table_window = self.canvas.create_window((0, 0), window=self.table_frame, anchor="nw",
                                                       width=self.canvas.winfo_width())
 
@@ -47,8 +63,14 @@ class CustomTable(ctk.CTkFrame):
 
         self.table_frame.bind("<Enter>", self.on_mouse_enter)
         self.table_frame.bind("<Leave>", self.on_mouse_leave)
+
         self.table_frame.bind("<MouseWheel>", self.on_mouse_wheel)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+
+        # Przewijanie poziome (Shift + Scroll)
+        self.table_frame.bind("<Shift-MouseWheel>", self.on_shift_mouse_wheel)
+        self.canvas.bind("<Shift-MouseWheel>", self.on_shift_mouse_wheel)
+
         self.canvas.bind("<Enter>", self.on_canvas_enter)
         self.canvas.bind("<Leave>", self.on_canvas_leave)
 
@@ -65,7 +87,11 @@ class CustomTable(ctk.CTkFrame):
         self.context_menu = tk.Menu(self, tearoff=0)
         self.context_menu.add_command(label="Kopiuj", command=self.copy_selected_row)
 
-
+        # Opcja wyszukiwania
+        self.search_callback = search_callback
+        self.search_column_index = search_column_index
+        if self.search_callback:
+            self.context_menu.add_command(label="Wyszukaj kolokację", command=self.search_selected_row)
 
     def set_additional_event(self, event_func):
         self.additional_event = event_func
@@ -77,8 +103,9 @@ class CustomTable(ctk.CTkFrame):
 
     def set_header_font(self, font):
         self.header_font = font
-        for header_label in self.header_labels:
-            header_label.configure(font=self.header_font)
+        if hasattr(self, "header_labels"):
+            for header_label in self.header_labels:
+                header_label.configure(font=self.header_font)
 
     def set_row_colors(self, even_color, odd_color):
         self.even_row_color = even_color
@@ -116,14 +143,10 @@ class CustomTable(ctk.CTkFrame):
         """Set background for canvas, inner table frame, and style scrollbar."""
         self.canvas_bg_color = color
         self.canvas.configure(background=color)
-        self.table_frame.configure(fg_color=color)  # match scrollable area
-
-        # Style scrollbar to match the theme
-        self.scrollbar.configure(
-            fg_color=color,  # trough background
-            #button_color="#7289DA",  # thumb color
-
-        )
+        self.table_frame.configure(fg_color=color)
+        self.scrollbar.configure(fg_color=color)
+        if hasattr(self, 'h_scrollbar'):
+            self.h_scrollbar.configure(fg_color=color)
 
     def on_row_click(self, row_index):
         if self.selected_row is not None:
@@ -147,7 +170,6 @@ class CustomTable(ctk.CTkFrame):
 
     def show_context_menu(self, event, row_index):
         """Show right-click menu on a row."""
-        # Ensure row gets selected before showing menu
         self.on_row_click(row_index)
         try:
             self.context_menu.tk_popup(event.x_root, event.y_root)
@@ -163,125 +185,208 @@ class CustomTable(ctk.CTkFrame):
             self.clipboard_append(text_to_copy)
             self.update()  # ensures clipboard gets updated
 
+    def search_selected_row(self):
+        """Pobiera słowo z wybranej kolumny i przekazuje do callbacka wyszukiwania."""
+        if self.selected_row is not None and 1 <= self.selected_row <= len(self.data):
+            row_data = self.data[self.selected_row - 1]
+            if len(row_data) > self.search_column_index:
+                selected_word = str(row_data[self.search_column_index])
+                self.search_callback(selected_word)
 
+    # --- NOWE FUNKCJE OBSŁUGI SORTOWANIA ---
+    def update_header_text(self):
+        if hasattr(self, "header_labels"):
+            for c, label in enumerate(self.header_labels):
+                display_text = self.headers[c]
+                if self.sort_col == c:
+                    display_text += " ▲" if self.sort_asc else " ▼"
+                label.configure(text=display_text)
+
+    def on_header_click(self, col_index):
+        if self.sort_col == col_index:
+            self.sort_asc = not self.sort_asc
+        else:
+            self.sort_col = col_index
+            self.sort_asc = True
+
+        self.update_header_text()
+
+        # Użycie zewnętrznego callbacka (np. do paginacji)
+        if self.sort_callback:
+            self.sort_callback(col_index, self.sort_asc)
+        else:
+            # Lokalny fallback - sortuje tylko to, co tabela ma aktualnie w self.data
+            def sort_key(row):
+                val = row[col_index] if col_index < len(row) else ""
+                return val if val is not None else ""
+
+            try:
+                # Opcjonalne utrzymanie synchronizacji fulltext_data
+                if self.fulltext_data and len(self.fulltext_data) == len(self.data):
+                    combined = list(zip(self.data, self.fulltext_data))
+                    combined.sort(key=lambda x: sort_key(x[0]), reverse=not self.sort_asc)
+                    self.data, self.fulltext_data = zip(*combined)
+                    self.data = list(self.data)
+                    self.fulltext_data = list(self.fulltext_data)
+                else:
+                    self.data.sort(key=sort_key, reverse=not self.sort_asc)
+            except TypeError:
+                # W przypadku mieszanych typów danych (np. liczby i tekst), sortuj po zamianie na string
+                if self.fulltext_data and len(self.fulltext_data) == len(self.data):
+                    combined = list(zip(self.data, self.fulltext_data))
+                    combined.sort(key=lambda x: str(sort_key(x[0])), reverse=not self.sort_asc)
+                    self.data, self.fulltext_data = zip(*combined)
+                    self.data = list(self.data)
+                    self.fulltext_data = list(self.fulltext_data)
+                else:
+                    self.data.sort(key=lambda row: str(sort_key(row)), reverse=not self.sort_asc)
+
+            self.populate_table()
 
     def populate_table(self):
         self._suppress_resize = True
 
-
-
-        # Clear only first time (headers), not every time
+        # --- 1. INITIAL WIDGET CREATION (Runs only once or on rows_per_page change) ---
         if not hasattr(self, "header_created"):
             for widget in self.table_frame.winfo_children():
                 widget.destroy()
 
-            # Headers
-            for c, text in enumerate(self.headers):
-                header_label = ctk.CTkLabel(
-                    self.table_frame, text=text, fg_color=self.header_bg_color,
-                    text_color=self.header_text_color, font=self.header_font, padx=5
-                )
-                header_label.grid(row=0, column=c, sticky="nsew")
-                header_label.bind("<MouseWheel>", self.on_mouse_wheel)
-
-            # Pre-create row widgets pool (empty text at first)
-            self.label_refs = {}
-            self.row_labels = []  # keep reference to row label sets
-            for r in range(1, self.rows_per_page + 1):  # rows start at 1
-                row_widgets = []
-                row_color = self.even_row_color if r % 2 == 0 else self.odd_row_color
-                for c in range(len(self.headers)):
-                    label = ctk.CTkLabel(
-                        self.table_frame, text="", wraplength=self.min_column_widths[c],
-                        anchor=self.text_anchors[c], justify=self.justify_list[c],
-                        fg_color=row_color, text_color=self.text_colors[c],
-                        font=self.font, pady=10, padx=5
-                    )
-                    label.grid(row=r, column=c, sticky="nsew")
-                    label.bind("<Button-1>", lambda event, row_index=r: self.on_row_click(row_index))
-                    label.bind("<Button-3>", lambda event, row_index=r: self.show_context_menu(event, row_index))
-                    label.bind("<MouseWheel>", self.on_mouse_wheel)
-                    self.label_refs[(r, c)] = label
-                    row_widgets.append(label)
-
-                self.row_labels.append(row_widgets)
-
+            # Create Headers ze wskaźnikami sortowania
             self.header_labels = []
             for c, text in enumerate(self.headers):
+                display_text = text
+                if getattr(self, "sort_col", None) == c:
+                    display_text += " ▲" if self.sort_asc else " ▼"
+
                 header_label = ctk.CTkLabel(
-                    self.table_frame, text=text,
+                    self.table_frame, text=display_text,
                     fg_color=self.header_bg_color,
                     text_color=self.header_text_color,
                     font=self.header_font, padx=5
                 )
                 header_label.grid(row=0, column=c, sticky="nsew")
                 header_label.bind("<MouseWheel>", self.on_mouse_wheel)
+                header_label.bind("<Shift-MouseWheel>", self.on_shift_mouse_wheel)
+
+                # --- TUTAJ ZMIANA ---
+                if self.sortable:
+                    header_label.configure(cursor="hand2")
+                    header_label.bind("<Button-1>", lambda event, col=c: self.on_header_click(col))
+                # --------------------
+
                 self.header_labels.append(header_label)
 
-            # Configure columns
+            # Configure column weights proportionally based on min_column_widths
+            total_min_width = sum(self.min_column_widths)
             for c in range(len(self.headers)):
-                self.table_frame.grid_columnconfigure(c, weight=1)
+                col_weight = max(1, int((self.min_column_widths[c] / total_min_width) * 10))
+                self.table_frame.grid_columnconfigure(c, weight=col_weight, minsize=self.min_column_widths[c])
+
+            # Pre-create row widgets pool
+            self.label_refs = {}
+            for r in range(1, self.rows_per_page + 1):  # rows start at 1
+                row_color = self.even_row_color if r % 2 == 0 else self.odd_row_color
+                for c in range(len(self.headers)):
+                    label = ctk.CTkLabel(
+                        self.table_frame, text="", wraplength=self.min_column_widths[c],
+                        anchor=self.text_anchors[c], justify=self.justify_list[c],
+                        fg_color=row_color, text_color=self.text_colors[c],
+                        font=self.font, pady=10, padx=5, cursor="hand2"  # <--- KURSOR ŁAPKI
+                    )
+                    label.grid(row=r, column=c, sticky="nsew")
+
+                    # Bindings
+                    label.bind("<Button-1>", lambda event, row_index=r: self.on_row_click(row_index))
+                    label.bind("<Button-3>", lambda event, row_index=r: self.show_context_menu(event, row_index))
+                    label.bind("<MouseWheel>", self.on_mouse_wheel)
+                    label.bind("<Shift-MouseWheel>", self.on_shift_mouse_wheel)
+
+                    self.label_refs[(r, c)] = label
 
             self.header_created = True
 
+        # --- 2. SINGLE-PASS DATA UPDATE (Lightning fast for pagination) ---
+        data_len = len(self.data)
 
+        for r in range(1, self.rows_per_page + 1):
+            row_color = self.even_row_color if r % 2 == 0 else self.odd_row_color
 
-        # --- Update the row pool with new data (cap at rows_per_page) ---
-        for r, row in enumerate(self.data[:self.rows_per_page], start=1):
-            for c, text in enumerate(row):
-                if (r, c) in self.label_refs:  # safety check
-                    self.label_refs[(r, c)].configure(text=text)
+            # Check if this row has data for this page
+            if r <= data_len:
+                row_data = self.data[r - 1]
+                for c in range(len(self.headers)):
+                    text_val = row_data[c] if c < len(row_data) else ""
+                    self.label_refs[(r, c)].configure(
+                        text=text_val,
+                        fg_color=row_color,
+                        text_color=self.text_colors[c],
+                        font=self.font
+                    )
+            else:
+                # Clear empty rows
+                for c in range(len(self.headers)):
+                    self.label_refs[(r, c)].configure(
+                        text="",
+                        fg_color=row_color,
+                        text_color=self.text_colors[c],
+                        font=self.font
+                    )
 
-        # Clear any extra rows (if less than rows_per_page)
-        for r in range(len(self.data) + 1, self.rows_per_page + 1):
-            for c in range(len(self.headers)):
-                if (r, c) in self.label_refs:
-                    self.label_refs[(r, c)].configure(text="")
-
+        # Force UI update and scrollbar recalculation
         self.table_frame.update_idletasks()
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.update_scrollbar_visibility()
         self.update_wraplength()
         self._suppress_resize = False
-
-        # --- Update row colors and text colors for all visible rows ---
-        for r in range(1, self.rows_per_page + 1):
-            row_color = self.even_row_color if r % 2 == 0 else self.odd_row_color
-            for c in range(len(self.headers)):
-                if (r, c) in self.label_refs:
-                    self.label_refs[(r, c)].configure(
-                        fg_color=row_color,
-                        text_color=self.text_colors[c],
-                        font=self.font
-                    )
         self.after_idle(lambda: self.canvas.yview_moveto(0))
-
-
 
     def update_scrollbar_visibility(self):
         self.canvas.update_idletasks()
 
-        if not self.data:  # ← skip scrollbar entirely if no rows
-            self.scrollbar.pack_forget()
-            self.canvas.configure(yscrollcommand="")
+        if not self.data:
+            self.scrollbar.grid_remove()
+            self.h_scrollbar.grid_remove()
+            self.canvas.configure(yscrollcommand="", xscrollcommand="")
             return
 
         bbox = self.canvas.bbox("all")
         canvas_height = self.canvas.winfo_height()
+        canvas_width = self.canvas.winfo_width()
 
+        # Zarządzanie pionowym paskiem (tylko grid!)
         if bbox and bbox[3] > canvas_height:
-            self.scrollbar.pack(fill="y", side="right")
+            self.scrollbar.grid()
             self.canvas.configure(yscrollcommand=self.scrollbar.set)
         else:
-            self.scrollbar.pack_forget()
+            self.scrollbar.grid_remove()
             self.canvas.configure(yscrollcommand="")
+
+        # Zarządzanie poziomym paskiem (tylko grid!)
+        if bbox and bbox[2] > canvas_width:
+            self.h_scrollbar.grid()
+            self.canvas.configure(xscrollcommand=self.h_scrollbar.set)
+        else:
+            self.h_scrollbar.grid_remove()
+            self.canvas.configure(xscrollcommand="")
+
+    # Upewnij się, że pod spodem zaraz masz add_row, a nie stare pozostałości
+    def add_row(self, *new_row):
+        self.data.append(new_row)
+        self.populate_table()
 
     def add_row(self, *new_row):
         self.data.append(new_row)
         self.populate_table()
 
     def update_table_size(self, event=None):
-        self.canvas.itemconfig(self.table_window, width=self.canvas.winfo_width())
+        import customtkinter as ctk
+        scaling = ctk.ScalingTracker.get_widget_scaling(self)
+
+        # Prawidłowo przeskalowana minimalna szerokość całej tabeli
+        min_w = sum(int(w * scaling) for w in self.min_column_widths)
+
+        new_width = max(min_w, self.canvas.winfo_width())
+        self.canvas.itemconfig(self.table_window, width=new_width)
 
     def on_canvas_resize(self, event):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -298,8 +403,26 @@ class CustomTable(ctk.CTkFrame):
         if bbox:
             canvas_height = self.canvas.winfo_height()
             if bbox[3] > canvas_height:
-                direction = -1 if event.delta > 0 else 1
+                if event.num == 4 or event.delta > 0:
+                    direction = -1
+                elif event.num == 5 or event.delta < 0:
+                    direction = 1
+                else:
+                    return
                 self.canvas.yview_scroll(direction, "units")
+
+    def on_shift_mouse_wheel(self, event):
+        bbox = self.canvas.bbox("all")
+        if bbox:
+            canvas_width = self.canvas.winfo_width()
+            if bbox[2] > canvas_width:
+                if event.num == 4 or event.delta > 0:
+                    direction = -1
+                elif event.num == 5 or event.delta < 0:
+                    direction = 1
+                else:
+                    return
+                self.canvas.xview_scroll(direction, "units")
 
     def on_canvas_enter(self, event):
         self.canvas.focus_set()
@@ -312,19 +435,34 @@ class CustomTable(ctk.CTkFrame):
         if n_cols == 0:
             return
 
-        total_width = max(1, self.table_frame.winfo_width())
-        col_width = total_width // n_cols
+        import customtkinter as ctk
+        scaling = ctk.ScalingTracker.get_widget_scaling(self)
 
-        # compute padding once based on stored scaling
-        padding = max(0, int((self.tk_scaling - self.base_scaling) * self.scaling_padding_factor))
+        # Skalujemy minimalne szerokości, żeby odpowiadały fizycznym pikselom na High DPI
+        scaled_min_widths = [int(w * scaling) for w in self.min_column_widths]
+        total_min_width = sum(scaled_min_widths)
+
+        # Bierzemy pod uwagę Canvas, ale nie pozwalamy mu spaść poniżej sumy minimalnych szerokości
+        total_width = max(total_min_width, self.canvas.winfo_width())
+
+        # Fizyczny margines dla tekstu (np. 25 pikseli po bokach)
+        padding = int(25 * scaling)
+
+        active_rows = min(len(self.data), self.rows_per_page)
 
         for c in range(n_cols):
-            self.table_frame.grid_columnconfigure(c, weight=1)
-            for r in range(1, self.rows_per_page + 1):
+            proportion = scaled_min_widths[c] / total_min_width
+            col_width = max(scaled_min_widths[c], int(total_width * proportion))
+
+            # KLUCZOWE: Omijamy błąd podwójnego skalowania w CustomTkinter!
+            # CTkLabel automatycznie mnoży wartość 'wraplength' przez współczynnik 'scaling'.
+            # My mamy już gotową szerokość w pikselach (col_width), więc musimy ją PODZIELIĆ
+            # przez scaling przed przekazaniem do widgetu.
+            new_wrap = max(20, int((col_width - padding) / scaling))
+
+            for r in range(1, active_rows + 1):
                 if (r, c) in self.label_refs:
-                    self.label_refs[(r, c)].configure(
-                        wraplength=max(1, col_width - padding)
-                    )
+                    self.label_refs[(r, c)].configure(wraplength=new_wrap)
 
     def on_frame_resize(self, event):
         if self._initializing or self._suppress_resize:
@@ -332,7 +470,7 @@ class CustomTable(ctk.CTkFrame):
 
         if self.resize_delay:
             self.table_frame.after_cancel(self.resize_delay)
-        self.resize_delay = self.table_frame.after(10, self.update_wraplength)
 
+        self.resize_delay = self.table_frame.after(150, self.update_wraplength)
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         self.update_scrollbar_visibility()

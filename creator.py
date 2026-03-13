@@ -1,13 +1,20 @@
 import os
+import sys
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
+if sys.stdout is not None:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr is not None:
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import re
 import json
 import pandas as pd
+from collections import Counter
 import customtkinter as ctk
 import tkinter.filedialog as fd
 import threading
 from docx import Document
-from PIL import Image
-import openpyxl
 import time
 from tkinter import messagebox
 import sys
@@ -37,7 +44,19 @@ try:
 except ImportError:
     easyocr = None
 
-sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+try:
+    import typing
+    import torch.utils.data.dataset
+
+    if not hasattr(torch.utils.data.dataset, 'T_co'):
+        torch.utils.data.dataset.T_co = typing.TypeVar('T_co', covariant=True)
+    import herference
+    print("SUKCES: Herference zaimportowane pomyślnie na górze pliku!")
+except Exception as e:
+    herference = None
+    messagebox.showerror("Błąd importu Herference", f"Nie udało się zaimportować biblioteki herference:\n\n{e}")
+
+#sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 nlp_stanza = None
 nlp_spacy = None
@@ -56,7 +75,6 @@ def format_size(size_bytes):
     if size_bytes == 0:
         return "0 B"
     size_name = ("B", "KB", "MB", "GB", "TB")
-    i = int(os.path.abspath(os.path.curdir).find('some_impossible_str'))  # dummy
     i = 0
     p = 1024
     s = size_bytes
@@ -182,33 +200,58 @@ class ColumnMapper(ctk.CTkToplevel):
         self.destroy()
 
 
-
-
-
 # --- FUNKCJE POMOCNICZE ---
-def chunk_text_safe(text, chunk_size=50000):
+def chunk_text_safe(text, chunk_size=3000, max_dotless_chars=400):
     chunks = []
     paragraphs = text.split('\n')
     current_chunk = []
     current_length = 0
+    current_dotless = 0
 
     for paragraph in paragraphs:
         paragraph_full = paragraph + '\n'
         para_len = len(paragraph_full)
 
+        # Znajdź pozycję ostatniej kropki/znaku końca zdania w tym akapicie
+        last_dot = max(paragraph_full.rfind('.'), paragraph_full.rfind('!'), paragraph_full.rfind('?'))
+
+        # Ile znaków bez kropki przybędzie, jeśli dodamy ten akapit?
+        if last_dot == -1:
+            added_dotless = current_dotless + para_len
+            new_dotless = current_dotless + para_len
+        else:
+            added_dotless = current_dotless + last_dot
+            new_dotless = para_len - 1 - last_dot
+
+        # INTELIGENTNY BEZPIECZNIK: Jeśli dodanie akapitu stworzy tasiemca > max_dotless_chars (np. 400 znaków bez kropki)
+        # a w buforze już coś mamy, zamykamy obecny bufor, żeby ratować pamięć RAM.
+        if added_dotless > max_dotless_chars and current_length > 0:
+            chunks.append("".join(current_chunk))
+            current_chunk = []
+            current_length = 0
+            current_dotless = 0
+
+            if last_dot == -1:
+                new_dotless = para_len
+            else:
+                new_dotless = para_len - 1 - last_dot
+
+        # Normalna logika dodawania do paczki
         if current_length + para_len <= chunk_size:
             current_chunk.append(paragraph_full)
             current_length += para_len
+            current_dotless = new_dotless
         elif para_len <= chunk_size:
             if current_chunk:
                 chunks.append("".join(current_chunk))
             current_chunk = [paragraph_full]
             current_length = para_len
+            current_dotless = new_dotless
         else:
+            # Sytuacja skrajna: Jeden, gigantyczny akapit większy niż 3000 znaków
             if current_chunk:
                 chunks.append("".join(current_chunk))
                 current_chunk = []
-                current_length = 0
 
             start = 0
             text_len = len(paragraph_full)
@@ -237,8 +280,13 @@ def chunk_text_safe(text, chunk_size=50000):
                 chunks.append(paragraph_full[start:real_end])
                 start = real_end
 
+            # Zerujemy po przetworzeniu wielkiego akapitu
+            current_length = 0
+            current_dotless = 0
+
     if current_chunk:
         chunks.append("".join(current_chunk))
+
     return chunks
 
 
@@ -366,20 +414,32 @@ def initialize_stanza(status_label, app):
     if stanza is None:
         messagebox.showerror("Błąd", "Biblioteka Stanza nie jest zainstalowana.")
         return False
-    model_dir = os.path.expanduser("~/stanza_resources/pl")
-    if not os.path.exists(model_dir):
+
+    # Tworzymy ścieżkę: obok pliku exe -> folder "models" -> folder "stanza"
+    stanza_dir = os.path.join(BASE_DIR, "models", "stanza")
+    os.makedirs(stanza_dir, exist_ok=True)
+
+    # Stanza tworzy wewnątrz folder z kodem języka, np. "pl"
+    model_path = os.path.join(stanza_dir, "pl")
+
+    if not os.path.exists(model_path):
         try:
-            status_label.configure(text="Proszę czekać - pobieram model Stanza")
+            status_label.configure(text="Proszę czekać - pobieram model Stanza (ok. 500 MB)...")
             app.update_idletasks()
-            stanza.download("pl")
+            # Wymuszamy pobranie do naszego lokalnego folderu (zmiana na model_dir)
+            stanza.download("pl", model_dir=stanza_dir)
         except Exception as e:
             messagebox.showerror("Błąd modelu Stanza", f"Nie udało się pobrać modelu: {e}")
             return False
-    status_label.configure(text="Ładuję model Stanza - proszę czekać.")
+
+    status_label.configure(text="Ładuję model Stanza z folderu 'models' - proszę czekać.")
     app.update_idletasks()
+
     try:
-        nlp_stanza = stanza.Pipeline("pl", processors="tokenize,pos,lemma,ner,depparse", use_gpu=True, n_process=1)
-        status_label.configure(text="Model Stanza załadowany")
+        # Wymuszamy wczytanie z naszego lokalnego folderu (zmiana na model_dir)
+        nlp_stanza = stanza.Pipeline("pl", model_dir=stanza_dir, processors="tokenize,pos,lemma,ner,depparse,coref",
+                                     use_gpu=True, n_process=1)
+        status_label.configure(text="Model Stanza załadowany pomyślnie")
         return True
     except Exception as e:
         messagebox.showerror("Błąd", f"Nie udało się załadować Stanza: {e}")
@@ -388,32 +448,76 @@ def initialize_stanza(status_label, app):
 
 def initialize_spacy(status_label, app):
     global nlp_spacy
+
     model_name = "pl_core_news_lg"
+    model_version = "3.8.0"
+
+    # Zmieniona ścieżka główna
+    spacy_dir = os.path.join(BASE_DIR, "models", "spacy")
+
     try:
-        status_label.configure(text="Sprawdzam model SpaCy...")
+        status_label.configure(text="Sprawdzam model SpaCy w folderze 'models'...")
         app.update_idletasks()
-        if not spacy.util.is_package(model_name):
-            status_label.configure(text=f"Pobieram model '{model_name}' (może to potrwać)...")
+
+        # TRIK: Dodajemy nasz folder do ścieżek systemowych Pythona, żeby widział go jak paczkę zainstalowaną przez PIP!
+        if spacy_dir not in sys.path:
+            sys.path.insert(0, spacy_dir)
+
+        # Sprawdzamy czy istnieje plik __init__.py wewnątrz rozpakowanego folderu
+        if not os.path.exists(os.path.join(spacy_dir, model_name, "__init__.py")):
+            status_label.configure(text=f"Pobieram model SpaCy ({model_name}). To może potrwać (ok. 500MB)...")
             app.update_idletasks()
-            try:
-                spacy.cli.download(model_name)
-            except Exception as e:
-                messagebox.showerror("Błąd", f"Nie udało się automatycznie pobrać modelu SpaCy.\nSzczegóły: {e}")
-                return False
-        status_label.configure(text="Ładuję model SpaCy...")
+
+            url = f"https://github.com/explosion/spacy-models/releases/download/{model_name}-{model_version}/{model_name}-{model_version}-py3-none-any.whl"
+
+            os.makedirs(spacy_dir, exist_ok=True)
+            whl_path = os.path.join(spacy_dir, "temp_model.whl")
+
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+
+            with open(whl_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+
+            status_label.configure(text="Rozpakowuję i instaluję model SpaCy w folderze 'models'...")
+            app.update_idletasks()
+
+            # Zamiast wycinać pliki, wypakowujemy CAŁE archiwum zachowując strukturę paczki Pythona!
+            with zipfile.ZipFile(whl_path, 'r') as zip_ref:
+                zip_ref.extractall(spacy_dir)
+
+            os.remove(whl_path)
+            status_label.configure(text="Model SpaCy zainstalowany pomyślnie.")
+            app.update_idletasks()
+
+        status_label.configure(text="Ładuję model SpaCy (proszę czekać)...")
         app.update_idletasks()
+
+        # Teraz możemy bezpiecznie załadować po NAZWIE (a nie ścieżce), bo dodaliśmy folder do sys.path!
         nlp_spacy = spacy.load(model_name)
-        status_label.configure(text=f"Model SpaCy '{model_name}' załadowany")
+
+        if herference is not None:
+            try:
+                status_label.configure(text="Podpinam model herference (koreferencje)...")
+                app.update_idletasks()
+                nlp_spacy.add_pipe("herference")
+            except Exception as e:
+                messagebox.showerror("Błąd SpaCy",
+                                     f"SpaCy załadowano, ale podpinanie herference zakończyło się błędem:\n\n{e}")
+
+        status_label.configure(text="Model SpaCy załadowany pomyślnie z folderu lokalnego.")
         return nlp_spacy
+
     except Exception as e:
-        messagebox.showerror("Błąd modelu SpaCy", f"Nie udało się załadować modelu:\n{e}")
+        messagebox.showerror("Błąd modelu SpaCy", f"Wystąpił błąd podczas pobierania lub ładowania modelu:\n{e}")
         return None
 
 
 # --- NLP PROCESSING ---
 def process_single_text(text, filename, status_label, progress_bar, app):
     if not text.strip(): return None
-    chunks = chunk_text_safe(text, chunk_size=50000)
+    chunks = chunk_text_safe(text, chunk_size=3000)
     all_processed_tokens = []
     global_sent_id_offset = 0
     global_char_offset = 0
@@ -438,6 +542,67 @@ def process_single_text(text, filename, status_label, progress_bar, app):
             global_char_offset += len(chunk)
             continue
 
+
+
+        # --- BUDOWANIE MAPY KOTWIC (HYBRYDA: ROLA + ID) DLA STANZA ---
+        coref_anchors = {}
+        try:
+            word_to_chain = {}
+            chain_to_words = {}
+            chain_id_to_cluster_id = {}
+            cluster_id_counter = 1
+
+            # Krok 1: Przypisywanie ID łańcucha
+            for sent_idx, sentence in enumerate(doc.sentences):
+                for word in sentence.words:
+                    if hasattr(word, 'coref_chains') and word.coref_chains:
+                        chain_idx = word.coref_chains[0].chain.index
+                        word_to_chain[(sent_idx, word.id)] = chain_idx
+
+                        if chain_idx not in chain_id_to_cluster_id:
+                            chain_id_to_cluster_id[chain_idx] = str(cluster_id_counter)
+                            cluster_id_counter += 1
+
+                        if chain_idx not in chain_to_words:
+                            chain_to_words[chain_idx] = []
+                        chain_to_words[chain_idx].append((sent_idx, word))
+
+            # Krok 2: Kotwiczenie tagu i przypisanie ID
+            visited_coref_words = set()
+            for sent_idx, sentence in enumerate(doc.sentences):
+                for word_list_idx, word in enumerate(sentence.words):
+                    key = (sent_idx, word.id)
+                    if key in word_to_chain and key not in visited_coref_words:
+                        chain_idx = word_to_chain[key]
+                        c_id_str = chain_id_to_cluster_id[chain_idx]
+
+                        mention_words = []
+                        for w in sentence.words[word_list_idx:]:
+                            k = (sent_idx, w.id)
+                            if word_to_chain.get(k) == chain_idx:
+                                mention_words.append(w)
+                                visited_coref_words.add(k)
+                            else:
+                                break
+
+                        mention_ids = {w.id for w in mention_words}
+                        anchor = None
+                        for w in mention_words:
+                            if w.head not in mention_ids:
+                                anchor = w
+                                break
+
+                        if anchor is None: anchor = mention_words[-1]
+
+                        # Zapisujemy Rolę + ID w postaci listy
+                        for w in mention_words:
+                            role = "Head" if w.id == anchor.id else "Part"
+                            coref_anchors.setdefault((sent_idx, w.id), []).append(f"{role}-{c_id_str}")
+        except Exception as e:
+            print(f"Błąd mapowania koreferencji Stanza: {e}")
+        # -----------------------------------------------------------------
+
+
         chunk_char_pos = 0
         for sent_idx, sentence in enumerate(doc.sentences, start=1):
             real_sent_id = sent_idx + global_sent_id_offset
@@ -457,6 +622,10 @@ def process_single_text(text, filename, status_label, progress_bar, app):
                 start_idx_global = start_idx_local + global_char_offset
                 end_idx_global = end_idx_local + global_char_offset
 
+                # Szybki odczyt gotowej etykiety
+                sent_idx_stanza = sent_idx - 1
+                coref_val = coref_anchors.get((sent_idx_stanza, word.id), [])
+
                 all_processed_tokens.append({
                     "token": word.text,
                     "lemma": word.lemma,
@@ -468,7 +637,8 @@ def process_single_text(text, filename, status_label, progress_bar, app):
                     "start": start_idx_global,
                     "end": end_idx_global,
                     "ner": word_to_ner.get(word.id, "0"),
-                    "upos": word.upos
+                    "upos": word.upos,
+                    "coref": coref_val
                 })
         global_sent_id_offset += len(doc.sentences)
         global_char_offset += len(chunk)
@@ -476,10 +646,74 @@ def process_single_text(text, filename, status_label, progress_bar, app):
     return all_processed_tokens
 
 
+# --- HELPER DLA SPACY (ODTWARZANIE PEŁNYCH TAGÓW NKJP Z CECH MORFOLOGICZNYCH UD) ---
+def reconstruct_nkjp_tag(tag_str, morph_obj):
+    base = tag_str.lower()
+
+    def m(key, mapping):
+        vals = morph_obj.get(key)
+        val = vals[0] if vals else ""
+        # Jeśli brak cechy lub nie ma jej w mapowaniu, dajemy "_"
+        return mapping.get(val, "_")
+
+    num = m("Number", {"Sing": "sg", "Plur": "pl", "Ptan": "ptan"})
+    case = m("Case",
+             {"Nom": "nom", "Gen": "gen", "Dat": "dat", "Acc": "acc", "Ins": "inst", "Loc": "loc", "Voc": "voc"})
+
+    gen_vals = morph_obj.get("Gender")
+    gen_val = gen_vals[0] if gen_vals else ""
+    anim_vals = morph_obj.get("Animacy")
+    anim_val = anim_vals[0] if anim_vals else ""
+
+    if gen_val == "Masc":
+        if anim_val == "Hum":
+            gen = "m1"
+        elif anim_val == "Nhum":
+            gen = "m2"
+        elif anim_val == "Inan":
+            gen = "m3"
+        else:
+            gen = "m1"
+    elif gen_val == "Fem":
+        gen = "f"
+    elif gen_val == "Neut":
+        gen = "n"
+    else:
+        gen = ""
+
+    person = m("Person", {"1": "pri", "2": "sec", "3": "ter"})
+    aspect = m("Aspect", {"Imp": "imperf", "Perf": "perf"})
+    degree = m("Degree", {"Pos": "pos", "Cmp": "com", "Sup": "sup"})
+
+    # Składanie łańcucha z zachowaniem ścisłej, pozycyjnej kolejności NKJP
+    parts = [base]
+    if base in ("subst", "depr"):
+        parts.extend([num, case, gen])
+    elif base in ("adj", "adja", "adjp"):
+        parts.extend([num, case, gen, degree])
+    elif base in ("ppron12", "ppron3"):
+        parts.extend([num, case, gen, person, "", ""])
+    elif base == "num":
+        parts.extend([num, case, gen, ""])
+    elif base in ("fin", "bedzie", "impt"):
+        parts.extend([num, person, aspect])
+    elif base in ("praet", "winien"):
+        parts.extend([num, gen, aspect, ""])
+    elif base in ("inf", "pcon", "pant", "imps"):
+        parts.extend([aspect])
+    elif base in ("ger", "pact", "ppas"):
+        parts.extend([num, case, gen, aspect, ""])
+    elif base == "adv":
+        parts.extend([degree])
+
+    if len(parts) == 1:
+        return base
+    return ":".join(parts)
+
 def process_single_text_spacy(text, filename, status_label, progress_bar, app):
     if not text.strip(): return None
     nlp_spacy.max_length = 2000000
-    chunks = chunk_text_safe(text, chunk_size=100000)
+    chunks = chunk_text_safe(text, chunk_size=3000)
     all_processed_tokens = []
     global_sent_id_offset = 0
     global_char_offset = 0
@@ -502,6 +736,53 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
             global_char_offset += len(chunk)
             continue
 
+
+        # --- DODANE: MAPA KOTWIC (HERFERENCE HYBRYDA: ROLA + ID) ---
+        coref_anchors = {}
+        if hasattr(doc._, 'coref') and doc._.coref:
+            try:
+                cluster_id_counter = 1
+                for cluster in doc._.coref:
+                    if not cluster: continue
+
+                    c_id_str = str(cluster_id_counter)
+                    cluster_id_counter += 1
+
+                    mentions = []
+                    for m in cluster:
+                        if isinstance(m, int):
+                            mentions.append([doc[m]])
+                        elif hasattr(m, 'start') and hasattr(m, 'end'):
+                            mentions.append(doc[m.start:m.end])
+                        else:
+                            try:
+                                l = list(m)
+                                if len(l) > 0 and isinstance(l[0], int): mentions.append([doc[idx] for idx in l])
+                            except Exception:
+                                pass
+
+                    if not mentions: continue
+
+                    for span in mentions:
+                        if not span: continue
+                        mention_tokens = set(span)
+                        anchor = None
+                        for token in span:
+                            if token.head not in mention_tokens or token.head == token:
+                                anchor = token
+                                break
+
+                        if anchor is None: anchor = span[-1]
+
+                        # Zapisujemy Rolę + ID w postaci listy
+                        for token in span:
+                            role = "Head" if token.i == anchor.i else "Part"
+                            coref_anchors.setdefault(token.i, []).append(f"{role}-{c_id_str}")
+            except Exception as e:
+                print(f"Błąd mapowania koreferencji: {e}")
+
+        # ----------------------------------------
+
         for sent_idx, sentence in enumerate(sentences, start=1):
             real_sent_id = sent_idx + global_sent_id_offset
             current_progress = (i / total_chunks) + ((sent_idx / len(sentences)) / total_chunks)
@@ -512,6 +793,13 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
             for token in sentence:
                 start_idx_global = token.idx + global_char_offset
                 end_idx_global = start_idx_global + len(token.text) - 1
+
+                # Pobieranie kotwicy. Jeśli brak, wstawiamy "O"
+                coref_val = coref_anchors.get(token.i, [])
+
+                # --- ODTWARZAMY PEŁNY TAG NKJP ---
+                full_nkjp_tag = reconstruct_nkjp_tag(token.tag_, token.morph)
+
                 all_processed_tokens.append({
                     "token": token.text,
                     "lemma": token.lemma_,
@@ -519,11 +807,12 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
                     "wordID": token.i + 1,
                     "headID": token.head.i + 1 if token.head != token else 0,
                     "deprel": token.dep_,
-                    "postag": token.tag_,
+                    "postag": full_nkjp_tag,  # <--- TUTAJ UŻYWAMY NASZEGO HELPERA!
                     "start": start_idx_global,
                     "end": end_idx_global,
                     "ner": token.ent_type_ if token.ent_type_ else "O",
-                    "upos": token.pos_
+                    "upos": token.pos_,
+                    "coref": coref_val
                 })
         global_sent_id_offset += len(sentences)
         global_char_offset += len(chunk)
@@ -532,8 +821,10 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
     return all_processed_tokens
 
 
-def process_file_global(file_path, status_label, progress_bar, app, model_name, excel_mappings=None):
+def process_file_global(file_path, status_label, progress_bar, app, model_name, excel_mappings=None,
+                        processed_set=None):
     ext = os.path.splitext(file_path)[1].lower()
+    if processed_set is None: processed_set = set()
 
     try:
         current_file_size = os.path.getsize(file_path)
@@ -545,7 +836,8 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
         extracted_files = unpack_archive(file_path, status_label)
 
         for inner_file in extracted_files:
-            yield from process_file_global(inner_file, status_label, progress_bar, app, model_name, excel_mappings)
+            yield from process_file_global(inner_file, status_label, progress_bar, app, model_name, excel_mappings,
+                                           processed_set)
             try:
                 os.remove(inner_file)
             except:
@@ -559,15 +851,23 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
         # --- EXCEL ---
         if ext == ".xlsx":
             mapping = excel_mappings.get(file_path) if excel_mappings else None
-            # Tutaj dostajemy listę słowników z kluczem 'filename' wyciągniętym z kolumny
             rows = process_xlsx(file_path, mapping=mapping)
             total_rows = len(rows)
             bytes_per_row = current_file_size / total_rows if total_rows > 0 else 0
 
             for it in rows:
-                text = it["Treść"]
-                # Używamy filename z Excela (wirtualna nazwa pliku)
                 virt_fname = it.get("filename", os.path.basename(file_path))
+                title = it.get("Tytuł", "")
+
+                v_lower = str(virt_fname).strip().lower()
+                t_lower = str(title).strip().lower()
+
+                # WZNAWIANIE: Jeśli wirtualny plik z Excela jest już zrobiony (szukamy po Nazwie lub po Tytule z Excela)
+                if v_lower in processed_set or (t_lower and t_lower in processed_set):
+                    yield {"skipped": True, "bytes_consumed": bytes_per_row, "filename": virt_fname}
+                    continue
+
+                text = it["Treść"]
 
                 if model_name == "Stanza":
                     tokens = process_single_text(text, virt_fname, status_label, progress_bar, app)
@@ -583,9 +883,18 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
                         "bytes_consumed": bytes_per_row
                     }
 
+
         # --- PLIKI TEKSTOWE / PDF / DOCX ---
         else:
+            file_base = os.path.basename(file_path)
+
+            # WZNAWIANIE: Jeśli plik fizyczny jest już zrobiony
+            if str(file_base).strip().lower() in processed_set:
+                yield {"skipped": True, "bytes_consumed": current_file_size, "filename": file_base}
+                return
+
             text = ""
+
             if ext == ".txt":
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     text = f.read()
@@ -599,14 +908,13 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
 
             if text.strip():
                 if model_name == "Stanza":
-                    tokens = process_single_text(text, os.path.basename(file_path), status_label, progress_bar, app)
+                    tokens = process_single_text(text, file_base, status_label, progress_bar, app)
                 else:
-                    tokens = process_single_text_spacy(text, os.path.basename(file_path), status_label, progress_bar,
-                                                       app)
+                    tokens = process_single_text_spacy(text, file_base, status_label, progress_bar, app)
 
                 if tokens:
                     yield {
-                        "filename": os.path.basename(file_path),
+                        "filename": file_base,
                         "Treść": text,
                         "tokens_detail": tokens,
                         "bytes_consumed": current_file_size
@@ -614,10 +922,13 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
 
 
 # --- UPDATED WORKER FUNCTION ---
+import glob
+
+
 def process_files_thread_target(status_label, progress_bar_current, progress_bar_total, lbl_size_info, app,
                                 output_parquet_file,
                                 metadata_path, model_name,
-                                excel_mappings):
+                                excel_mappings, resume_mode=False):
     global selected_files, nlp_stanza, nlp_spacy
 
     selected_paths = [path for path, var in selected_files.items() if var.get() == 1]
@@ -652,19 +963,13 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
             app.update_idletasks()
             df_meta = pd.read_excel(metadata_path)
 
-            # --- APPLY MAPPING TO METADATA ---
-            # If the user mapped columns for this metadata file, rename them in the DF
             if excel_mappings and metadata_path in excel_mappings:
                 meta_map = excel_mappings[metadata_path]
-                # Invert map: We need { "Original Column Name": "Standard Name" }
-                # The mapper returns { "Standard Name": "Original Column Name" }
                 rename_dict = {}
                 for std_col, user_col in meta_map.items():
                     if user_col != "<Pomiń>":
                         rename_dict[user_col] = std_col
-
                 df_meta.rename(columns=rename_dict, inplace=True)
-            # ---------------------------------
 
             if "Nazwa pliku" in df_meta.columns:
                 extra_meta_columns = [col for col in df_meta.columns if col != "Nazwa pliku"]
@@ -722,20 +1027,108 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     progress_bar_current.set(0)
     app.update_idletasks()
 
-    # 3. Processing
-    BATCH_SIZE = 100
+    global_base_tf = Counter()
+    global_orth_tf = Counter()
+    global_total_tokens = 0
+    global_token_counts = {}
+
+    # 3. WZNAWIANIE Z CHECKPOINTÓW
+    # 3. WZNAWIANIE Z CHECKPOINTÓW
+    BATCH_SIZE = 20  # Zmniejszony bufor: częstsze zapisy, mniejsze ryzyko utraty po przerwaniu
     batch_data = []
     temp_files_created = []
-    global_token_counts = {}
     batch_counter = 0
+    processed_set = set()
+
+    if resume_mode:
+        # --- RATOWANIE GŁÓWNEGO PLIKU PARQUET ---
+        # Jeśli główny plik istnieje (bo np. wczorajsze scalanie przerwało w połowie),
+        # zmieniamy mu nazwę na plik tymczasowy. Dzięki temu program wczyta z niego
+        # to, co wczoraj zrobił i scali to wszystko na nowo na samym końcu.
+        if os.path.exists(output_parquet_file):
+            try:
+                recovered_name = f"{output_parquet_file}.part_000_recovered"
+                os.rename(output_parquet_file, recovered_name)
+                print(f"Odzyskano główny plik jako: {recovered_name}")
+            except Exception as e:
+                print(f"Nie udało się zmienić nazwy głównego pliku: {e}")
+        # ----------------------------------------
+
+        existing_parts = glob.glob(f"{output_parquet_file}.part_*")
+        existing_parts.sort(key=lambda x: int(x.split('_')[-1]) if x.split('_')[-1].isdigit() else 0)
+        if existing_parts:
+            status_label.configure(text="Odtwarzanie danych z poprzedniej sesji...")
+            app.update_idletasks()
+
+            for p_file in existing_parts:
+                try:
+                    df_part = pd.read_parquet(p_file)
+
+                    # Odtwarzamy nazwy plików - ujednolicone do małych liter bez spacji
+                    if "Oryginalna_nazwa_pliku" in df_part.columns:
+                        processed_set.update(
+                            [str(x).strip().lower() for x in df_part["Oryginalna_nazwa_pliku"].tolist()])
+                    elif "Tytuł" in df_part.columns:
+                        processed_set.update([str(x).strip().lower() for x in df_part["Tytuł"].tolist()])
+
+                    # Odtwarzamy statystyki liczników
+                    for _, row in df_part.iterrows():
+                        toks = row.get("tokens", [])
+                        lems = row.get("lemmas", [])
+                        if hasattr(toks, "tolist"): toks = toks.tolist()
+                        if hasattr(lems, "tolist"): lems = lems.tolist()
+
+                        global_orth_tf.update(toks)
+                        global_base_tf.update(lems)
+                        global_total_tokens += len(toks)
+
+                        p_date = str(row.get("Data publikacji", "0000-00-00")).strip()
+                        parts = p_date.split('-')
+                        y = parts[0] if len(parts) > 0 else "0000"
+                        m = parts[1] if len(parts) > 1 else "00"
+                        if y not in global_token_counts: global_token_counts[y] = {}
+                        if m not in global_token_counts[y]: global_token_counts[y][m] = 0
+                        global_token_counts[y][m] += len(toks)
+
+                    temp_files_created.append(p_file)
+                except Exception as e:
+                    print(f"Błąd odtwarzania punktu kontrolnego {p_file}: {e}")
+
+            # --- MOST DLA STARYCH CHECKPOINTÓW Z METADANYMI ---
+            for fname, meta in metadata_dict.items():
+                meta_title = str(meta.get("Tytuł", "")).strip().lower()
+                if meta_title and meta_title in processed_set:
+                    processed_set.add(str(fname).strip().lower())
+            # ------------------------------------------------
+
+            # BEZPIECZNY LICZNIK PLIKÓW (chroni przed nadpisaniem, gdy brakuje plików od 0)
+            max_num = -1
+            for p_file in temp_files_created:
+                try:
+                    num = int(p_file.split('_')[-1])
+                    if num > max_num:
+                        max_num = num
+                except:
+                    pass
+            batch_counter = max_num + 1
+
+            status_label.configure(text=f"Wznowiono: wczytano {len(processed_set)} gotowych tekstów.")
+            app.update_idletasks()
+
+
+
+    start_time = time.time()
+    actual_processing_bytes = 0
+
     total_files_count = len(selected_paths)
-    text_columns_to_force = ["Tytuł", "Treść", "Data publikacji", "Autor"] + extra_meta_columns
+
+    text_columns_to_force = ["Oryginalna_nazwa_pliku", "Tytuł", "Treść", "Data publikacji",
+                             "Autor"] + extra_meta_columns
 
     try:
         for idx, file_path in enumerate(selected_paths):
             filename = os.path.basename(file_path)
 
-            # Skip metadata file if it was selected in the main list
             if metadata_path and os.path.abspath(file_path) == os.path.abspath(metadata_path):
                 processed_size_bytes += os.path.getsize(file_path)
                 continue
@@ -746,12 +1139,16 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
             status_label.configure(text=f"Plik {idx + 1}/{total_files_count}: {filename}")
             app.update_idletasks()
 
+            # --- TUTAJ PRZEKAZUJEMY processed_set ---
             for item in process_file_global(file_path, status_label, progress_bar_current, app, model_name,
-                                            excel_mappings):
+                                            excel_mappings, processed_set):
 
-                # --- PROGRESS UPDATE ---
                 consumed = item.get("bytes_consumed", 0)
                 processed_size_bytes += consumed
+
+                # Liczymy bajty tylko dla faktycznie robionych plików (do ETA)
+                if not item.get("skipped"):
+                    actual_processing_bytes += consumed
 
                 if total_size_bytes > 0:
                     prog = processed_size_bytes / total_size_bytes
@@ -759,9 +1156,33 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                     progress_bar_total.set(prog)
 
                     curr_str = format_size(processed_size_bytes)
-                    lbl_size_info.configure(text=f"{curr_str} / {total_size_str}")
+
+                    # --- OBLICZANIE ETA ---
+                    elapsed = time.time() - start_time
+                    eta_str = "--:--"
+                    if elapsed > 5 and actual_processing_bytes > 0:
+                        speed = actual_processing_bytes / elapsed
+                        remaining_bytes = total_size_bytes - processed_size_bytes
+                        if remaining_bytes > 0 and speed > 0:
+                            eta_secs = remaining_bytes / speed
+                            m, s = divmod(int(eta_secs), 60)
+                            h, m = divmod(m, 60)
+                            if h > 0:
+                                eta_str = f"{h}h {m}m"
+                            else:
+                                eta_str = f"{m}m {s}s"
+                        else:
+                            eta_str = "0s"
+
+                    lbl_size_info.configure(text=f"{curr_str} / {total_size_str} | ETA: {eta_str}")
                     app.update_idletasks()
-                # -----------------------
+                    # ----------------------
+
+                if item.get("skipped"):
+                    skipped_name = item.get("filename", "nieznany plik")
+                    status_label.configure(text=f"Pomijam gotowy: {skipped_name}")
+                    app.update_idletasks()
+                    continue
 
                 processed_tokens = item.get("tokens_detail", [])
                 text = item.get("Treść", "")
@@ -769,17 +1190,16 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                 meta_override = item.get("meta_override", {})
 
                 entry = {
+                    "Oryginalna_nazwa_pliku": fname_processed,  # <--- TA KOLUMNA RATUJE WZNAWIANIE
                     "Tytuł": fname_processed,
                     "Treść": text,
                     "Data publikacji": "0000-00-00",
                     "Autor": "#"
                 }
 
-                # Dynamic meta fields
                 for col in extra_meta_columns:
                     entry[col] = ""
 
-                # Meta Matching
                 matched_meta = None
                 if fname_processed in metadata_dict:
                     matched_meta = metadata_dict[fname_processed]
@@ -796,8 +1216,16 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                     if meta_override.get("Data publikacji"): entry["Data publikacji"] = meta_override["Data publikacji"]
                     if meta_override.get("Autor"): entry["Autor"] = meta_override["Autor"]
 
-                entry["tokens"] = [t["token"] for t in processed_tokens]
-                entry["lemmas"] = [t["lemma"] for t in processed_tokens]
+
+                tokens_list = [t["token"] for t in processed_tokens]
+                lemmas_list = [t["lemma"] for t in processed_tokens]
+
+                global_orth_tf.update(tokens_list)
+                global_base_tf.update(lemmas_list)
+                global_total_tokens += len(tokens_list)
+
+                entry["tokens"] = tokens_list
+                entry["lemmas"] = lemmas_list
                 entry["postags"] = [t["postag"].split(":")[0] if t["postag"] else "" for t in processed_tokens]
                 entry["full_postags"] = [t["postag"] for t in processed_tokens]
                 entry["deprels"] = [t["deprel"] for t in processed_tokens]
@@ -808,6 +1236,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                 entry["end_ids"] = [t["end"] for t in processed_tokens]
                 entry["ners"] = [t["ner"] for t in processed_tokens]
                 entry["upostags"] = [t["upos"] for t in processed_tokens]
+                entry["corefs"] = [t.get("coref", []) for t in processed_tokens]
 
                 try:
                     p_date = str(entry.get("Data publikacji", "0000-00-00")).strip()
@@ -840,7 +1269,6 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                     gc.collect()
                     if torch.cuda.is_available(): torch.cuda.empty_cache()
 
-        # Flush remaining
         if batch_data:
             part_file = f"{output_parquet_file}.part_{batch_counter}"
             df_batch = pd.DataFrame(batch_data)
@@ -864,33 +1292,85 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     lbl_size_info.configure(text=f"{total_size_str} / {total_size_str}")
     app.update_idletasks()
 
-    token_counts_json = json.dumps(global_token_counts, ensure_ascii=False)
+    metadata_export = {
+        "base_tf": dict(global_base_tf),
+        "orth_tf": dict(global_orth_tf),
+        "total_tokens": global_total_tokens,
+        "monthly_token_counts": global_token_counts
+    }
+    meta_json_bytes = json.dumps(metadata_export, ensure_ascii=False).encode('utf-8')
+
     final_writer = None
+    reference_columns = None  # <--- NOWA ZMIENNA ZAPAMIĘTUJĄCA WZÓR
 
     try:
         total_parts = len(temp_files_created)
         for i, part_file in enumerate(temp_files_created):
             progress_bar_current.set((i + 1) / total_parts)
+
+            print(f"Scalam część {i + 1} z {total_parts}: {part_file}")
+
+            status_label.configure(text=f"Scalanie plików... (paczka {i + 1}/{total_parts})")
             app.update_idletasks()
 
             df_part = pd.read_parquet(part_file)
-            df_part["token_counts"] = token_counts_json
+
+            # --- NAPRAWA SCHEMATÓW I KOLEJNOŚCI ---
+            # Najpierw dodajemy brakujące podstawowe kolumny tekstowe (dla pewności)
+            for col in text_columns_to_force:
+                if col not in df_part.columns:
+                    df_part[col] = ""
+
+            # Jeśli to pierwsza paczka, zapamiętujemy jej układ kolumn jako WZÓR
+            if reference_columns is None:
+                reference_columns = df_part.columns.tolist()
+            else:
+                # Dla każdej kolejnej paczki upewniamy się, że ma wszystkie kolumny ze wzoru...
+                for col in reference_columns:
+                    if col not in df_part.columns:
+                        df_part[col] = ""
+
+
+                df_part = df_part[reference_columns]
+            # --------------------------------------------------
 
             table = pa.Table.from_pandas(df_part)
 
             if final_writer is None:
-                final_writer = pq.ParquetWriter(output_parquet_file, table.schema, compression='snappy')
-            final_writer.write_table(table)
+                existing_meta = table.schema.metadata or {}
+                merged_meta = {**existing_meta, b"korpus_meta": meta_json_bytes}
+                table = table.replace_schema_metadata(merged_meta)
 
+                final_writer = pq.ParquetWriter(output_parquet_file, table.schema, compression='snappy')
+            else:
+                table = table.cast(final_writer.schema)
+
+            final_writer.write_table(table)
             del df_part
             del table
             gc.collect()
+
+            # Próbujemy usunąć plik po udanym scaleniu
             try:
                 os.remove(part_file)
             except:
                 pass
+
+        status_label.configure(text=f"Gotowe! Plik: {os.path.basename(output_parquet_file)}")
+        progress_bar_current.set(1.0)
+        app.update_idletasks()
+        app.after(0, lambda: messagebox.showinfo("Sukces", "Zakończono przetwarzanie i scalanie plików!"))
+
+    except Exception as e:
+        # Tego brakowało! Teraz jeśli coś wybuchnie, zobaczysz dlaczego.
+        error_msg = f"Wystąpił błąd krytyczny podczas scalania plików:\n{str(e)}"
+        print(error_msg)
+        app.after(0, lambda: messagebox.showerror("Błąd scalania", error_msg))
+        status_label.configure(text="Błąd scalania!")
+
     finally:
-        if final_writer: final_writer.close()
+        if final_writer:
+            final_writer.close()
 
     status_label.configure(text=f"Gotowe! Plik: {os.path.basename(output_parquet_file)}")
     progress_bar_current.set(1.0)
@@ -932,10 +1412,16 @@ def select_files(frame, progress_bar_current, progress_bar_total, lbl_size_info,
     status_label.configure(text="Zaznacz pliki, które mają zostać przetworzone.")
 
 
-def main():
-    global model
-    app = ctk.CTk()
-    app.attributes("-topmost", True)
+def main(parent_window=None):
+    global model, selected_files, file_buttons
+    selected_files.clear()
+    file_buttons.clear()
+    if parent_window:
+        app = ctk.CTkToplevel(parent_window)
+        app.transient(parent_window)  # Trzyma okno kreatora nad głównym oknem
+        app.grab_set()                # Blokuje klikanie w główne okno
+    else:
+        app = ctk.CTk()
 
     def center_window(app, width=800, height=600):
         screen_width = app.winfo_screenwidth()
@@ -1039,7 +1525,7 @@ def main():
         # 2. Ask for METADATA file
         metadata_path = None
         if messagebox.askquestion("Metadane", "Czy dodać osobny plik z metadanymi (np. metadane.xlsx)?") == 'yes':
-            metadata_path = fd.askopenfilename(filetypes=[("Excel", "*.xlsx")])
+            metadata_path = fd.askopenfilename(parent=app, filetypes=[("Excel", "*.xlsx")])
             if not metadata_path: return
 
             # --- TRIGGER MAPPER FOR METADATA ---
@@ -1061,8 +1547,21 @@ def main():
                 return
             # -----------------------------------
 
-        output_file = fd.asksaveasfilename(defaultextension=".parquet", filetypes=[("Parquet", "*.parquet")])
+        output_file = fd.asksaveasfilename(parent=app, defaultextension=".parquet",
+                                           filetypes=[("Parquet", "*.parquet")])
         if not output_file: return
+
+        # --- SPRAWDZANIE CZY MOŻNA WZNOWIĆ ---
+        import glob
+        resume_mode = False
+        existing_parts = glob.glob(f"{output_file}.part_*")
+        # NOWE: Sprawdzamy też, czy istnieje już główny plik .parquet
+        if existing_parts or os.path.exists(output_file):
+            ans = messagebox.askyesno("Punkt kontrolny",
+                                      "Znaleziono pliki z poprzedniej sesji (tymczasowe lub główny plik).\nCzy chcesz wczytać ich zawartość i pominąć już zrobione teksty?")
+            if ans:
+                resume_mode = True
+        # -------------------------------------
 
         process_button.configure(state="disabled")
 
@@ -1073,9 +1572,9 @@ def main():
         threading.Thread(
             target=process_files_thread_target,
             args=(
-            status_label, progress_bar_current, progress_bar_total, lbl_size_info, app, output_file, metadata_path,
-            model.get(),
-            excel_mappings),
+                status_label, progress_bar_current, progress_bar_total, lbl_size_info, app, output_file, metadata_path,
+                model.get(),
+                excel_mappings, resume_mode),  # <--- PRZEKAZUJEMY resume_mode
             daemon=True
         ).start()
 
@@ -1098,7 +1597,8 @@ def main():
                                   variable=switch_var, onvalue="on", offvalue="off")
     toggle_button.pack(padx=20, pady=20)
 
-    app.mainloop()
+    if not parent_window:
+        app.mainloop()
 
 
 if __name__ == "__main__":
