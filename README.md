@@ -166,7 +166,13 @@ Aplikacja udostępnia również:
 2. Zainstaluj wymagane biblioteki:
    ```bash
    pip install -r requirements.txt
+3. Zainstaluj PyTorch w wariancie odpowiednim dla swojej konfiguracji
+   CPU
+   ```bash
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
    ```
+   NVIDIA GPU (na przykład: CUDA 12.6):
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 3. Uruchom aplikację:
    ```bash
    python Korpusuj_beta.py
