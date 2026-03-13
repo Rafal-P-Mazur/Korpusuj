@@ -162,15 +162,15 @@ Aplikacja udostępnia również:
    ```bash
    git clone https://github.com/Rafal-P-Mazur/Korpusuj.git
    cd Korpusuj
-   ``
+   ```
 2. Zainstaluj wymagane biblioteki:
    ```bash
    pip install -r requirements.txt
-   ``
+   ```
 3. Uruchom aplikację:
    ```bash
    python Korpusuj_beta.py
-   ``
+   ```
 
 ### Windows (.exe)
 1. Pobierz najnowszą wersję z [Releases](https://github.com/Rafal-P-Mazur/Korpusuj/releases).
