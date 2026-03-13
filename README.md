@@ -191,6 +191,30 @@ Aplikacja udostępnia również:
 - w środowisku Python można korzystać z konfiguracji Torch zgodnej z GPU
 - wersja exe działa wyłącznie w trybie CPU
 
+
+## Korpus demonstracyjny
+
+Repozytorium zawiera gotowy korpus demonstracyjny w formacie `.parquet`, przeznaczony do szybkiego przetestowania aplikacji bez konieczności samodzielnego budowania korpusu.
+
+Plik demonstracyjny znajduje się w katalogu:
+
+`sample_data/demo_korpus.parquet`
+
+Korpus został przygotowany jako niewielki zbiór testowy z metadanymi czasowymi, dzięki czemu można od razu sprawdzić:
+- wyszukiwanie konkordancyjne,
+- filtrowanie po metadanych,
+- statystyki frekwencyjne,
+- wykresy trendów w czasie.
+
+### Jak użyć
+
+1. uruchom aplikację,
+2. wybierz `Plik -> Nowy projekt`,
+3. wskaż plik `sample_data/demo_korpus.parquet`,
+4. wybierz aktywny korpus z listy rozwijanej w głównym oknie.
+
+Korpus demonstracyjny został przygotowany na podstawie publicznie dostępnych interpelacji sejmowych i służy wyłącznie do testowania funkcji aplikacji.
+
 ## Tworzenie korpusu
 
 Aby utworzyć nowy korpus:
