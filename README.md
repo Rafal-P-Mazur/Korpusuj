@@ -1,136 +1,241 @@
+
 # Korpusuj
 
-Aplikacja do przetwarzania języka naturalnego (NLP). Umożliwia tworzenie automatycznie anotowanych korpusów na podstawie dokumentów TXT, DOCX, XLSX i PDF, przeszukiwanie utworzonego korpusu z wykorzystaniem autorskiego języka CQL (Corpus Query Language) oraz wizualizację danych frekwencyjnych.
+Korpusuj to aplikacja badawcza do budowy, przeszukiwania i analizy anotowanych korpusów tekstowych. Program umożliwia przetwarzanie plików źródłowych do formatu `.parquet`, wyszukiwanie z użyciem autorskiego języka zapytań typu CQL oraz analizę frekwencyjną, kolokacyjną i diachroniczną.
 
-## ⚠️ Status projektu i wydajność
-Projekt ten jest autorskim narzędziem badawczym stworzonym przez językoznawcę przy wsparciu AI. Nie jest to profesjonalny produkt komercyjny.
+## Status projektu
 
-* **Faza Beta:** Aplikacja działa stabilnie w środowisku testowym autora. Jako że konfiguracje sprzętowe użytkowników mogą się różnić, mogą wystąpić nieprzewidziane błędy. Zachęcam do zgłaszania ich w zakładce [Issues](https://github.com/Rafal-P-Mazur/Korpusuj/issues).
-* **Kod źródłowy:** Kod źródłowy odzwierciedla proces uczenia się i eksperymentowania z AI, stąd może nie spełniać wszystkich standardów inżynierii oprogramowania. Kod jest otwarty i dostępny dla każdego, kto chciałby go poprawiać lub rozwijać
-* **Wydajność (CPU vs GPU):**
-    * **Wersja .exe:** Ze względu na rozmiar pliku, gotowa aplikacja korzysta z biblioteki Torch w wersji **CPU-only**. Przetwarzanie dużych korpusów może zająć sporo czasu.
-    * **Wersja Python:** Użytkownicy uruchamiający kod ze źródeł mogą zainstalować wersję Torch z obsługą **CUDA (GPU)**. Stanza wykorzysta wtedy kartę graficzną, co wielokrotnie przyspieszy proces anotacji (tworzenia korpusu).
+Projekt ma charakter badawczy i jest rozwijany jako narzędzie do pracy z korpusami anotowanymi. Repozytorium obejmuje zarówno główną aplikację, jak i kreator korpusów oraz dokumentację języka zapytań.
 
-![Tag](https://img.shields.io/github/v/tag/Rafal-P-Mazur/Korpusuj)
----
+## Główne możliwości
 
-![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/1.png?raw=true)
-![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/2.png?raw=true)
-![image alt](https://github.com/Rafal-P-Mazur/Korpusuj/blob/main/Images/3.png?raw=true)
+- budowa korpusów z plików `.txt`, `.docx`, `.pdf`, `.xlsx` oraz archiwów `.zip`
+- automatyczna anotacja z użyciem modeli **Stanza** lub **spaCy**
+- tokenizacja, lematyzacja, tagowanie morfosyntaktyczne, rozpoznawanie jednostek nazwanych, analiza zależnościowa oraz obsługa koreferencji
+- obsługa plików PDF z ekstrakcją tekstu, a w razie potrzeby także z OCR
+- mapowanie kolumn w plikach Excel oraz import osobnego pliku metadanych
+- filtrowanie wyników z użyciem metadanych podstawowych i własnych kolumn użytkownika
+- wyszukiwanie z użyciem rozbudowanego języka zapytań
+- konstruktor zapytań dostępny z poziomu interfejsu graficznego
+- analiza konkordancyjna, frekwencyjna, kolokacyjna i diachroniczna
+- wizualizacja drzewa zależności, podświetlanie NER i klastrów koreferencyjnych
+- eksport wyników do Excela
+- zapisywanie wybranych fragmentów jako fiszek
 
-## Główne funkcje
-- **Budowa korpusów:** Konwersja surowych plików tekstowych do formatu `.parquet` zawierającego pełną anotację morfosyntaktyczną.
-- **Wyszukiwanie:** Zaawansowany silnik zapytań obsługujący warunki zagnieżdżone, relacje zależnościowe (dependency parsing) i wyrażenia regularne.
-- **Analiza:** Generowanie tabel frekwencyjnych dla lematów i form ortograficznych.
-- **Wizualizacja:** Interaktywne wykresy trendów czasowych (diachroniczne).
-- **Dostępność:** Gotowy plik `.exe` dla systemu Windows (nie wymaga instalacji Pythona).
----
+## Dane wejściowe i format korpusu
+
+Kreator korpusów zapisuje wynik przetwarzania do pliku `.parquet`. W pliku tym przechowywane są:
+
+- tekst źródłowy
+- metadane
+- tokeny
+- lematy
+- tagi morfosyntaktyczne
+- relacje zależnościowe
+- identyfikatory zdań
+- jednostki nazwane
+- informacje o koreferencji
+
+Pliki Excel mogą być używane zarówno jako źródła tekstów, jak i jako osobny plik metadanych. Kreator pozwala mapować kolumny na pola standardowe:
+
+- `Nazwa pliku`
+- `Tytuł`
+- `Treść`
+- `Data publikacji`
+- `Autor`
+
+Dodatkowe kolumny są zachowywane i mogą być później używane do filtrowania wyników.
+
+## Modele językowe
+
+Program obsługuje dwa tryby anotacji:
+
+- **Stanza** — pełny pipeline z tokenizacją, tagowaniem, lematyzacją, NER, analizą zależnościową i koreferencją
+- **spaCy** — alternatywny pipeline z lokalnie pobieranym modelem języka polskiego
+
+Modele są pobierane przy pierwszym użyciu i przechowywane lokalnie w katalogu `models/`.
+
+## Wyszukiwanie
+
+Silnik zapytań obsługuje:
+
+- dopasowanie po `orth`, `base`, `pos`, `upos`, `deprel`, `ner`
+- warunki zagnieżdżone dla relacji `head` i `dependent`
+- atrybuty cech morfosyntaktycznych, np. `case`, `number`, `gender`, `person`, `aspect`
+- koreferencję (`coref`, `coref(H)`, `coref(P)`)
+- okna kontekstowe (`window_base`, `window_orth`)
+- ograniczenie wyszukiwania do jednego zdania przy użyciu operatora `<s>`
+- filtrowanie po frekwencji (`<frequency_base>`, `<frequency_orth>`)
+- filtrowanie po metadanych (`<autor>`, `<tytuł>`, `<data>`, `<metadane:...>`)
+- wyrażenia regularne
+- uproszczony tryb szybkiego wyszukiwania
+
+Aplikacja waliduje składnię zapytania przed uruchomieniem wyszukiwania i przechowuje historię ostatnich zapytań.
+
+## Analiza wyników
+
+### Konkordancje
+
+Wyniki wyszukiwania są prezentowane jako konkordancje z lewym i prawym kontekstem. Po kliknięciu w wiersz można wyświetlić rozszerzony kontekst w pełnym tekście.
+
+Wyniki można sortować według:
+
+- daty publikacji
+- autora
+- tytułu
+- porządku alfabetycznego
+- lewego kontekstu
+- prawego kontekstu
+
+### Statystyki
+
+Program generuje zestawienia frekwencyjne dla:
+
+- form podstawowych
+- form ortograficznych
+- rozkładu w czasie
+- kolokacji
+
+W tabelach wykorzystywane są m.in. następujące miary:
+
+- PMW
+- TF-IDF
+- document frequency
+- Z-score
+
+### Kolokacje
+
+Moduł kolokacji obsługuje analizę:
+
+- liniową
+- składniową
+
+Dostępne są m.in. następujące ustawienia:
+
+- rozmiar okna
+- ograniczenie do jednego zdania
+- filtry POS, UPOS i deprel
+- progi minimalnej frekwencji
+- progi minimalnego rozproszenia
+
+Dostępne miary asocjacji:
+
+- Log-Likelihood
+- MI Score
+- T-score
+- Log-Dice
+
+### Trendy
+
+Zakładka trendów pozwala generować wykresy dla różnych interwałów czasowych:
+
+- dzień
+- miesiąc
+- rok
+
+Dostępne typy wartości:
+
+- liczba wystąpień
+- częstość względna
+- TF-IDF
+- Z-score
+
+Użytkownik może grupować etykiety i zmieniać nazwy serii na wykresie.
+
+## Interfejs i narzędzia dodatkowe
+
+Aplikacja udostępnia również:
+
+- konstruktor zapytań
+- wizualizację drzewa zależności
+- podświetlanie jednostek nazwanych
+- podświetlanie klastrów koreferencyjnych
+- fiszki z zapisywaniem zaznaczonych fragmentów tekstu
+- historię zapytań
+- trwałe ustawienia aplikacji zapisywane w `config.json`
 
 ## Instalacja
+
+### Uruchamianie ze źródeł
+
+1. Sklonuj repozytorium:
+   ```bash
+   git clone https://github.com/Rafal-P-Mazur/Korpusuj.git
+   cd Korpusuj
+   ``
+2. Zainstaluj wymagane biblioteki:
+   ```bash
+   pip install -r requirements.txt
+   ``
+3. Uruchom aplikację:
+   ```bash
+   python Korpusuj_beta.py
+   ``
 
 ### Windows (.exe)
 1. Pobierz najnowszą wersję z [Releases](https://github.com/Rafal-P-Mazur/Korpusuj/releases).
 2. Rozpakuj archiwum ZIP.
 3. Uruchom `Korpusuj.exe` klikając dwukrotnie.
 
-⚠️ Plik nie jest podpisany certyfikatem Windows – system może wyświetlić ostrzeżenie bezpieczeństwa. Jest to normalne.
 
-ℹ️ Plik `.exe` zawiera wersję biblioteki **Torch** skonfigurowaną do pracy **tylko na CPU**.  
+## Uwagi dotyczące wydajności
 
----
+- przy pierwszym użyciu kreatora aplikacja może pobrać wymagane modele językowe
+- przy dużych korpusach czas anotacji może być znaczny
+- w środowisku Python można korzystać z konfiguracji Torch zgodnej z GPU
+- wersja exe działa wyłącznie w trybie CPU
 
-### Python
-1. Zainstaluj Python 3.10.
-2. Sklonuj repozytorium:
-   ```bash
-   git clone https://github.com/Rafal-P-Mazur/Korpusuj.git
-3. Zainstaluj wymagane biblioteki:
-   ```bash
-   pip install -r requirements.txt
+## Tworzenie korpusu
 
-   ⚠️ Aby podczas tworzenia korpusu wykorzystywać GPU, należy pobrać zgodną z kartą graficzną wersję Torch
+Aby utworzyć nowy korpus:
 
-4. Uruchom aplikację:
-   ```bash
-   python Korpusuj_beta.py
+1. uruchom aplikację
+2. wybierz `Plik -> Utwórz korpus`
+3. wskaż pliki źródłowe
+4. wybierz model anotacji
+5. opcjonalnie dodaj osobny plik metadanych
+6. uruchom przetwarzanie
+7. zapisz wynik do pliku `.parquet`
 
----
+Kreator obsługuje:
 
-## Instrukcja użytkowania
+- mapowanie kolumn w arkuszach Excel
+- dodatkowe metadane
+- automatyczne rozpakowywanie archiwów `.zip`
+- checkpointy i wznawianie przerwanego przetwarzania
 
-### Krok 1: Tworzenie korpusu
-1.  W menu głównym należy wybrać: **Plik -> Utwórz korpus**.
-2.  **Wybór plików:**
-    * **Pliki tekstowe:** Obsługiwane formaty to `.txt`, `.docx` oraz `.xlsx` (w przypadku plików Excel wymagane są kolumny: *Tytuł, Treść, Data publikacji*).
-    * **PDF:** Aplikacja posiada wbudowany moduł **OCR**. W przypadku plików PDF będących skanami, tekst zostanie rozpoznany automatycznie (może to wpłynąć na czas przetwarzania).
-    * **Archiwum ZIP:** Możliwe jest wczytywanie plików tekstowych spakowanych w archiwa `.zip`. Aplikacja automatycznie rozpakuje archiwum i przetworzy zawarte w nim pliki.
-3.  **Wybór modelu językowego:**
-    * **Stanza:** Zapewnia wyższą precyzję analizy składniowej (zalecane).
-    * **spaCy:** Oferuje szybsze przetwarzanie danych.
-4.  **Metadane (Opcjonalne):**
-    * Istnieje możliwość załączenia pliku `metadane.xlsx` w celu automatycznego przypisania informacji bibliograficznych.
-    * **Wymagane kolumny:** Arkusz musi zawierać kolumnę **"Nazwa pliku"** (odpowiadającą nazwie pliku źródłowego, np. `tekst1.txt`) oraz kolumny podstawowe: **"Tytuł"**, **"Data publikacji"**, **"Autor"**.
-    * **Format daty:** Zaleca się, aby kolumna "Data publikacji" miała w Excelu ustawiony format **Data**. Aplikacja automatycznie rozpozna i sformatuje tak wprowadzone daty, co zapewni poprawne działanie wykresów trendów.
-    * **Własne pola:** Użytkownik może dodać dowolne inne kolumny (np. "Gatunek", "Źródło", "Portal"), które zostaną zaimportowane i umożliwią później filtrowanie wyników w wyszukiwarce.
-5.  **Przetwarzanie plików:**
-    * Proces uruchamia się przyciskiem **Przetwórz pliki**.
-    * > **Ważne:** Przy **pierwszym użyciu** kreatora aplikacja automatycznie pobierze niezbędne modele językowe (Stanza lub SpaCy) dla języka polskiego. Czas operacji zależy od szybkości łącza internetowego. Kolejne uruchomienia nie wymagają ponownego pobierania.
-6.  Wynikowy plik `.parquet` należy zapisać na dysku.
+## Wczytanie korpusu
 
-### Krok 2: Wczytanie projektu
-1.  Należy powrócić do głównego okna aplikacji.
-2.  Wybrać opcję **Plik -> Nowy projekt**.
-3.  Wskazać utworzony wcześniej plik `.parquet`.
-4.  Aktywny korpus wybiera się z listy rozwijanej w lewym górnym rogu ("Wybierz korpus").
+Aby rozpocząć pracę z gotowym korpusem:
 
-### Krok 3: Wyszukiwanie
-Zapytania wprowadza się w głównym polu tekstowym. Aplikacja obsługuje autorski język zapytań **CQL** z obsługą wyrażeń regularnych.
+1. wybierz `Plik -> Nowy projekt`
+2. wskaż plik `.parquet`
+3. wybierz aktywny korpus z listy w głównym oknie
 
-* **Przykłady zapytań:**
-    * `[base="dom"]` – wyszukiwanie wszystkich form fleksyjnych słowa "dom".
-    * `[pos="adj"][base="chmura"]` – wyszukiwanie przymiotnika stojącego bezpośrednio przed słowem "chmura".
-    * `[pos="subst" & dependent={base="piękny"}]` – wyszukiwanie rzeczownika określanego przez przymiotnik "piękny" (niezależnie od szyku w zdaniu).
-* **Pomoc:** Pełna dokumentacja składni dostępna jest w menu **Pomoc -> Przewodnik po języku zapytań**.
+Aplikacja umożliwia pracę z wieloma korpusami.
 
-### Krok 4: Analiza wyników
-Wyniki prezentowane są w trzech zakładkach:
+## Eksport
 
-#### 1. Wyniki wyszukiwania (Konkordancje)
-* W lewym panelu znajduje się tabela, w której wyświetlane są wyniki wyszukiwania wraz z lewym i prawym kontekstem.
-* Kliknięcie w wiersz powoduje wyświetlenie **pełnego tekstu** artykułu w pprawym panelu.
-* Znalezione frazy są podświetlone kolorami w celu łatwiejszej identyfikacji.
+Wyniki można eksportować do pliku Excel. Eksport może obejmować m.in.:
 
-#### 2. Statystyki
-Zakładka zawiera tabele frekwencyjne generowane automatycznie dla wyników wyszukiwania. Dostępne są następujące widoki:
-* **Formy podstawowe:** Ranking lematów (form podstawowych).
-* **Formy ortograficzne:** Ranking dokładnych form tekstowych.
-* **Częstość w czasie:** Liczba wystąpień w poszczególnych miesiącach.
+- wyniki wyszukiwania
+- frekwencję lematów
+- frekwencję form ortograficznych
+- rozkład w czasie
+- kolokacje
 
-#### 3. Trendy (Wykresy)
-Wizualizacja zmienności użycia słów w czasie.
-* **Tryby:** Miesięczny/Roczny oraz Surowy/Znormalizowany (liczba wystąpień na milion słów).
-* **Legenda:** Elementy dodaje się do wykresu poprzez zaznaczenie ich na liście po lewej stronie.
-* **Edycja:** Pole edycji zapewnia możliwość łączenia synonimów w jedną linię na wykresie (np. sumowanie słów "auto" i "samochód").
-
-### Krok 5: Narzędzia dodatkowe
-
-* **Fiszki:** Aby zapisać fragment tekstu, należy zaznaczyć go w podglądzie pełnego tekstu, wpisać nazwę w polu "Nazwa fiszki" i kliknąć **Zapisz fiszkę**. Fragment zostanie zapisany w pliku tekstowym w folderze `/fiszki`.
-* **Eksport:** Opcja **Plik -> Eksportuj wyniki** umożliwia zapisanie wszystkich tabel i konkordancji do jednego pliku Excel (`.xlsx`).
-
----
-
-## ⚙️ Konfiguracja
-W menu **Ustawienia -> Preferencje** możliwa jest modyfikacja następujących parametrów:
-* **Motyw:** Ciemny / Jasny.
-* **Czcionka:** Rozmiar i krój czcionki.
-* **Kontekst:** Domyślna liczba słów wyświetlana w wynikach wyszukiwania.
-
-## 📂 Struktura plików
+## Struktura plików
 * `Korpusuj.exe` – Plik wykonywalny aplikacji.
 * `models/` – Katalog z lokalnymi modelami NLP (Stanza/SpaCy).
+* `config.json` — zapis preferencji użytkownika
 * `korpusuj.log` – Plik dziennika błędów i operacji.
 * `temp/` – Pliki tymczasowe generowane podczas sesji.
-* `stanza_resources/` (w katalogu użytkownika) – Pobrane modele językowe.
 
-## 📜 Licencja
-Projekt udostępniony na licencji MIT.
+## Ograniczenia
+
+Aplikacja jest rozwijana jako narzędzie badawcze. Wydajność anotacji i wyszukiwania zależy od wielkości danych, wybranego modelu oraz konfiguracji środowiska. Przy dużych korpusach czas działania może być znaczny.
+
+## Licencja
+
+Projekt jest udostępniany na licencji MIT.
+``
