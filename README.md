@@ -269,4 +269,3 @@ Aplikacja jest rozwijana jako narzędzie badawcze. Wydajność anotacji i wyszuk
 ## Licencja
 
 Projekt jest udostępniany na licencji MIT.
-``
