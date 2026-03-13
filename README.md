@@ -126,10 +126,10 @@ W menu **Ustawienia -> Preferencje** możliwa jest modyfikacja następujących p
 * **Kontekst:** Domyślna liczba słów wyświetlana w wynikach wyszukiwania.
 
 ## 📂 Struktura plików
-* `Korpusuj.exe` – Główny plik aplikacji.
-* `temp/` – Pliki tymczasowe (wykresy, podglądy).
-* `fonts/` – Czcionki interfejsu.
-* `fiszki/` – Folder z notatkami użytkownika.
+* `Korpusuj.exe` – Plik wykonywalny aplikacji.
+* `models/` – Katalog z lokalnymi modelami NLP (Stanza/SpaCy).
+* `korpusuj.log` – Plik dziennika błędów i operacji.
+* `temp/` – Pliki tymczasowe generowane podczas sesji.
 * `stanza_resources/` (w katalogu użytkownika) – Pobrane modele językowe.
 
 ## 📜 Licencja
