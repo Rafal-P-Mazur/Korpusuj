@@ -3317,8 +3317,7 @@ def update_highlights():
                         underline=True
                     )
 
-def display_full_text(full_text, result, publication_date, title, author, additional_metadata, row_idx=None,
-                      start_idx=None):
+def display_full_text(full_text, result, publication_date, title, author, additional_metadata, row_idx=None, start_idx=None):
     global current_graph_row_idx, current_graph_start_idx
     global current_display_row_idx, current_display_start_idx, current_body_start_mark
 
@@ -3332,7 +3331,8 @@ def display_full_text(full_text, result, publication_date, title, author, additi
     text_full.insert(ctk.END,
                      f'Data publikacji: {publication_date}, Tytuł: {title}, Autor: {author}')
     if additional_metadata:
-        extra_fields = ', '.join(f', {key}: {value}' for key, value in additional_metadata.items())
+        joined_meta = ', '.join(f'{key}: {value}' for key, value in additional_metadata.items())
+        extra_fields = f', {joined_meta}'
         text_full.insert(ctk.END, extra_fields)
 
     text_full.insert(ctk.END, "\n\n")
