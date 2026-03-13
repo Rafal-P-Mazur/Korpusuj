@@ -166,6 +166,7 @@ Aplikacja udostępnia również:
 2. Zainstaluj wymagane biblioteki:
    ```bash
    pip install -r requirements.txt
+   ```
 3. Zainstaluj PyTorch w wariancie odpowiednim dla swojej konfiguracji
    CPU
    ```bash
