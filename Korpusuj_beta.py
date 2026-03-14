@@ -64,6 +64,14 @@ class SearchState:
     monthly_zscore_for_use: dict = field(default_factory=dict)
     lemma_df_cache: dict = field(default_factory=dict)
     warnings: list = field(default_factory=list)
+    fq_data: list = field(default_factory=list)
+    fq_data_token: list = field(default_factory=list)
+    fq_data_month: list = field(default_factory=list)
+    s_lemma_total_freq: list = field(default_factory=list)
+    s_lemma_global_pmw: list = field(default_factory=list)
+    s_lemma_global_tfidf: list = field(default_factory=list)
+    unique_lemmas: set = field(default_factory=set)
+    has_dates: bool = False
 
 current_state = SearchState()
 state_lock = threading.Lock()
@@ -1771,20 +1779,27 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 selected_tag = None
 original_colors = {}
 
-# --- HISTORIA WYSZUKIWAŃ ---
+# --- HISTORIA WYSZUKIWAŃ (Z CACHE WYNIKÓW) ---
 search_history = []
 MAX_HISTORY = 10
 
+def add_to_history(state: SearchState):
+    """Dodaje pełny stan wyszukiwania (zapytanie + wyliczone wyniki) do historii."""
+    if not state.query or state.query.startswith('Podaj zapytanie np.:'):
+        return
 
-def load_from_history(query):
-    """Wkleja zapytanie z historii do pola i uruchamia wyszukiwanie."""
-    entry_query.delete("1.0", ctk.END)
-    entry_query.insert("1.0", query)
-    search()
+    global search_history
+    # Usuń z historii duplikat (takie samo zapytanie i korpus), by zaktualizowany wynik wskoczył na górę
+    search_history = [s for s in search_history if not (s.query == state.query and s.corpus == state.corpus)]
+    search_history.append(state)
 
+    if len(search_history) > MAX_HISTORY:
+        search_history.pop(0)
+
+    update_history_menu()
 
 def update_history_menu():
-    """Odświeża listę zapytań w zakładce Historia."""
+    """Odświeża listę zapytań w zakładce Historia w górnym Menu."""
     if 'history_menu' not in globals():
         return
 
@@ -1792,37 +1807,191 @@ def update_history_menu():
     if not search_history:
         history_menu.add_command(label="Brak historii", state="disabled")
     else:
-        # Wyświetlamy od najnowszego do najstarszego
-        for q in reversed(search_history):
-            display_label = q[:60] + "..." if len(q) > 60 else q
-            # Używamy lambda query=q by domknięcie (closure) zapamiętało odpowiednią wartość
-            history_menu.add_command(label=display_label, command=lambda query=q: load_from_history(query))
+        for state in reversed(search_history):
+            # Etykieta: "[KORPUS] fragment_zapytania..."
+            q = state.query
+            display_label = f"[{state.corpus}] {q[:45]}..." if len(q) > 45 else f"[{state.corpus}] {q}"
+            history_menu.add_command(label=display_label, command=lambda st=state: restore_from_history(st))
 
         history_menu.add_separator()
         history_menu.add_command(label="Wyczyść historię", command=clear_history)
-
 
 def clear_history():
     search_history.clear()
     update_history_menu()
 
+def restore_from_history(state: SearchState):
+    """Natychmiastowo ładuje zapytanie i pełne WYNIKI z cache'u, bez ponownego parsowania."""
+    global current_state, global_query, global_selected_corpus, full_results_sorted
+    global monthly_lemma_freq, monthly_freq_for_use, monthly_tfidf_for_use, monthly_zscore_for_use
+    global fq_data, fq_data_token, fq_data_month, true_monthly_totals, lemma_df_cache
+    global search_status
 
-def add_to_history(query):
-    """Dodaje nowe zapytanie do historii, pomijając duplikaty z rzędu."""
-    if not query or query.startswith('Podaj zapytanie np.:'):
-        return
+    # 1. Zaktualizuj UI zapytania
+    entry_query.delete("1.0", ctk.END)
+    entry_query.insert("1.0", state.query)
+    corpus_var.set(state.corpus)
+    highlight_entry()
 
-    # Jeśli zapytanie już jest w historii, usuwamy je i dodajemy na samą górę
-    if query in search_history:
-        search_history.remove(query)
+    # 2. Błyskawiczne nadpisanie globalnego stanu pamięci RAM
+    with state_lock:
+        current_state = state
+        global_query = state.query
+        global_selected_corpus = state.corpus
+        full_results_sorted = list(state.results)
+        monthly_lemma_freq = dict(state.monthly_lemma_freq)
+        monthly_freq_for_use = dict(state.monthly_freq_for_use)
+        monthly_tfidf_for_use = dict(state.monthly_tfidf_for_use)
+        monthly_zscore_for_use = dict(state.monthly_zscore_for_use)
+        true_monthly_totals = dict(state.true_monthly_totals)
+        lemma_df_cache = dict(state.lemma_df_cache)
+        fq_data = list(state.fq_data)
+        fq_data_token = list(state.fq_data_token)
+        fq_data_month = list(state.fq_data_month)
 
-    search_history.append(query)
+    # 3. Natychmiastowe Renderowanie Paginacji Wyników (Z głównej tabeli)
+    search_status = 0
+    liczba = len(full_results_sorted)
+    label_results_count.configure(text=f"Znaleziono trafień: {liczba:,}".replace(',', ' '))
+    display_page(global_query, global_selected_corpus)
 
-    # Pilnujemy limitu
-    if len(search_history) > MAX_HISTORY:
-        search_history.pop(0)
+    # 4. Natychmiastowe Renderowanie Statystyk (Jeśli mają daty)
+    if getattr(state, "has_dates", False):
+        paginator_token["data"] = fq_data_token
+        paginator_token["current_page"][0] = 0
+        update_table(paginator_token)
 
-    update_history_menu()
+        paginator_fq["data"] = fq_data
+        paginator_fq["current_page"][0] = 0
+        update_table(paginator_fq)
+
+        paginator_month["data"] = fq_data_month
+        paginator_month["current_page"][0] = 0
+        update_table(paginator_month)
+
+        # Usunięcie starych checkboxów wykresów po lewej
+        for child in checkboxes_frame.winfo_children():
+            child.destroy()
+
+        lemma_vars.clear()
+        merge_entry_vars.clear()
+
+        # Odbudowanie widgetów do klikania wykresów (Kopia czystej logiki z search())
+        def build_listbox_ui_local(parent_frame, sorted_lemma_freq, vars_dict, merge_dict, update_plot_callback, items_per_page=100):
+            vars_dict.clear()
+            merge_dict.clear()
+            update_job = {"after_id": None}
+            current_page_idx = {"idx": 0}
+            local_state_data = {"data": sorted_lemma_freq}
+            theme = THEMES[motyw.get()]
+
+            for lemma, _ in sorted_lemma_freq:
+                vars_dict[lemma] = ctk.BooleanVar(value=False)
+                merge_dict[lemma] = ctk.StringVar(value=lemma)
+
+            container = ctk.CTkFrame(parent_frame, fg_color=theme["frame_fg"], corner_radius=15)
+            rename_entry = ctk.CTkEntry(container, placeholder_text="Nowa nazwa dla zaznaczonych", font=("JetBrains Mono", 12), fg_color=theme["subframe_fg"], corner_radius=8, height=35)
+            rename_entry.pack(fill="x", padx=10, pady=(5, 5))
+            rename_btn = ctk.CTkButton(container, text="Grupuj/Zmień nazwę", font=("Verdana", 12, 'bold'), fg_color=theme["button_fg"], hover_color=theme["button_hover"], text_color=theme["button_text"], corner_radius=8, height=35)
+            rename_btn.pack(fill="x", padx=10, pady=(5, 10))
+
+            nav_frame = ctk.CTkFrame(container, fg_color=theme["subframe_fg"], corner_radius=12)
+            nav_frame.pack(fill="x", padx=10, pady=(0, 10))
+            nav_frame.grid_columnconfigure(0, weight=0); nav_frame.grid_columnconfigure(1, weight=1); nav_frame.grid_columnconfigure(2, weight=0)
+
+            prev_btn = ctk.CTkButton(nav_frame, text="<", width=40, height=35, fg_color=theme["button_fg"], hover_color=theme["button_hover"], text_color=theme["button_text"], corner_radius=8)
+            prev_btn.grid(row=0, column=0, sticky="w", padx=5, pady=5)
+            lbl_page = ctk.CTkLabel(nav_frame, text="1 / 1", font=("Verdana", 12, 'bold'), text_color=theme["label_text"])
+            lbl_page.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
+            next_btn = ctk.CTkButton(nav_frame, text=">", width=40, height=35, fg_color=theme["button_fg"], hover_color=theme["button_hover"], text_color=theme["button_text"], corner_radius=8)
+            next_btn.grid(row=0, column=2, sticky="e", padx=5, pady=5)
+
+            listbox_frame = ctk.CTkScrollableFrame(container, fg_color=theme["subframe_fg"], corner_radius=8, height=300)
+            listbox_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+            def delayed_update():
+                if update_job["after_id"]: container.after_cancel(update_job["after_id"])
+                update_job["after_id"] = container.after(300, update_plot_callback)
+
+            def show_page(page_idx):
+                try:
+                    if not listbox_frame.winfo_exists(): return
+                except: return
+                for widget in listbox_frame.winfo_children(): widget.destroy()
+
+                current_data = local_state_data["data"]
+                total_pages = max(1, math.ceil(len(current_data) / items_per_page))
+                if page_idx >= total_pages: page_idx = max(0, total_pages - 1)
+
+                start = page_idx * items_per_page
+                end = min(start + items_per_page, len(current_data))
+                for lemma, score in current_data[start:end]:
+                    display_name = merge_dict[lemma].get()
+                    score_str = f"{score:.2f}" if isinstance(score, float) else str(score)
+                    cb = ctk.CTkCheckBox(listbox_frame, text=f"{display_name} ({score_str})", variable=vars_dict[lemma], command=delayed_update, font=("Verdana", 12), fg_color=theme["button_fg"], hover_color=theme["button_hover"], text_color=theme["label_text"])
+                    cb.pack(anchor="w", pady=4, padx=5)
+
+                lbl_page.configure(text=f"{page_idx + 1} / {total_pages}")
+                current_page_idx["idx"] = page_idx
+
+            def rename_selected():
+                new_text = rename_entry.get().strip()
+                if not new_text: return
+                renamed_any = False
+                for lemma, _ in local_state_data["data"]:
+                    if vars_dict[lemma].get():
+                        merge_dict[lemma].set(new_text)
+                        renamed_any = True
+                if renamed_any:
+                    show_page(current_page_idx["idx"])
+                    delayed_update()
+
+            rename_btn.configure(command=rename_selected)
+            prev_btn.configure(command=lambda: show_page(current_page_idx["idx"] - 1) if current_page_idx["idx"] > 0 else None)
+            next_btn.configure(command=lambda: show_page(current_page_idx["idx"] + 1) if current_page_idx["idx"] < max(1, math.ceil(len(local_state_data["data"]) / items_per_page)) - 1 else None)
+
+            def set_data(new_sorted_data):
+                local_state_data["data"] = new_sorted_data
+                show_page(0)
+
+            show_page(0)
+            return container, set_data
+
+        container_listbox, set_data_listbox = build_listbox_ui_local(
+            checkboxes_frame, state.s_lemma_total_freq, lemma_vars, merge_entry_vars, update_plot
+        )
+        container_listbox.pack(fill="both", expand=True)
+
+        def toggle_listboxes(*args):
+            mode = wykres_sort_mode.get()
+            def get_max_scores(freq_dict):
+                scores = {}
+                for lemma in state.unique_lemmas:
+                    max_val = max((freq_dict[m].get(lemma, 0) for m in freq_dict), default=0)
+                    scores[lemma] = max_val
+                return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+
+            if mode == "TF-IDF":
+                set_data_listbox(state.s_lemma_global_tfidf)
+            elif mode == "Z-score":
+                set_data_listbox(get_max_scores(state.monthly_zscore_for_use))
+            elif mode == "Częstość względna":
+                set_data_listbox(state.s_lemma_global_pmw)
+            else:
+                set_data_listbox(state.s_lemma_total_freq)
+
+        # Podmiana eventów na nowy lokalny toggle_listboxes
+        for trace_id in wykres_sort_mode.trace_info():
+            wykres_sort_mode.trace_remove(*trace_id[0:2])
+        wykres_sort_mode.trace_add("write", toggle_listboxes)
+        toggle_listboxes()
+
+        # Odbudowanie wykresów z uwzględnieniem danych ze zbuforowanego stanu!
+        force_recalculate_plot()
+    else:
+        # Wyczyść listboxy jeśli brak dat w wybranym korpusie
+        for child in checkboxes_frame.winfo_children():
+            child.destroy()
 
 
 def log_exception(context: str, exc: Exception, user_message: str = None):
@@ -1991,11 +2160,8 @@ def search():
     last_search_warnings = []
     precalculated_bins = []
 
-
-    # --- ZAPIS DO HISTORII ---
+    # --- POBRANIE ZAPYTANIA (BEZ ZAPISU DO HISTORII) ---
     current_query = entry_query.get("1.0", ctk.END).strip()
-    if current_query:
-        add_to_history(current_query)
 
     # --- POBRANIE STANU GUI DO ZMIENNYCH LOKALNYCH (ZAMROŻENIE W GŁÓWNYM WĄTKU) ---
     try:
@@ -2022,6 +2188,11 @@ def search():
     checkboxes_frame.update_idletasks()
 
     button_search.configure(state="disabled")
+
+    if 'paginator_colloc' in globals():
+        paginator_colloc["data"] = []
+        paginator_colloc["current_page"][0] = 0
+        update_table(paginator_colloc)
 
     # Wstrzykujemy stan GUI jako drugi argument do funkcji
     def search_thread(search_token, ui_state):
@@ -2531,6 +2702,18 @@ def search():
                         local_state.monthly_tfidf_for_use = dict(monthly_tfidf_for_use)
                         local_state.monthly_zscore_for_use = dict(monthly_zscore_for_use)
 
+                        # --- NOWE: DODANIE DO STANU STATYSTYK FREKWENCYJNYCH ---
+                        local_state.has_dates = True
+                        local_state.fq_data = fq_data
+                        local_state.fq_data_token = fq_data_token
+                        local_state.fq_data_month = fq_data_month
+                        local_state.s_lemma_total_freq = s_lemma_total_freq
+                        local_state.s_lemma_global_pmw = s_lemma_global_pmw
+                        local_state.s_lemma_global_tfidf = s_lemma_global_tfidf
+                        local_state.unique_lemmas = unique_lemmas
+                        local_state.true_monthly_totals = true_monthly_totals
+                        local_state.lemma_df_cache = lemma_df_cache
+
                         # Atomowo ustanów najnowszy stan i zasil istniejące globalne aliasy używane w GUI:
                         with state_lock:
                             globals()['current_state'] = local_state
@@ -2543,8 +2726,13 @@ def search():
                             globals()['monthly_zscore_for_use'] = dict(local_state.monthly_zscore_for_use)
 
                 app.after(0, lambda: show_search_warnings(last_search_warnings))
+
+                # --- NOWE: ZAPIS DO HISTORII CAŁEGO STANU NA SAM KONIEC ---
+                app.after(0, lambda: add_to_history(local_state))
+
                 # Delegowanie pracy z UI do głównego wątku
                 app.after(0, update_gui)
+
 
             else:
                 # Brak wyników
@@ -5139,6 +5327,18 @@ def calculate_collocs():
             total_actual_slots = 0
             seen_slots = set()
 
+            # --- NOWOŚĆ: KULOODPORNY FILTR KOLOKACJI ---
+            def get_clean_colloc(word):
+                if pd.isna(word) or word is None: return ""
+                # Usuwamy niewidzialne znaki Unicode i twarde spacje
+                w = str(word).replace('\u200b', '').replace('\xad', '').replace('\xa0', '').strip()
+                # Odrzucamy całkowicie puste lub nierozpoznane lematy "_"
+                if not w or w == "_": return ""
+                # Odrzucamy, jeśli znak to wyłącznie interpunkcja (nawet ta polska)
+                import string
+                if all(c in string.punctuation or c in '„”«»–—…' for c in w): return ""
+                return w
+
             # --- 1. ZBIERANIE KOLOKATÓW ---
             for res in full_results_sorted:
                 row_idx, start_idx, end_idx = res[11], res[12], res[13]
@@ -5168,25 +5368,24 @@ def calculate_collocs():
                                      list(range(end_idx, min(sent_end, end_idx + r_span)))
 
                     for i in window_indices:
-                        # Deduplikacja - jeśli token był już zbadany przez inne nakładające się okno, pomijamy
                         if (row_idx, i) in seen_slots:
                             continue
                         seen_slots.add((row_idx, i))
 
                         is_punct = (upostags[i] == "PUNCT") if upostags is not None else (tokens[i] in string.punctuation)
-                        # Każdy token (nawet przecinek) zajmuje miejsce w oknie!
                         total_actual_slots += 1
 
                         if not is_punct:
-                            # Ale tylko prawdziwe słowa dodajemy do liczników kolokacji
                             u_match = (upos_filter == "Wszystkie") if upostags is None else (
                                         upos_filter == "Wszystkie" or upostags[i] == upos_filter)
                             p_match = (pos_filter == "Wszystkie" or postags[i] == pos_filter)
 
                             if u_match and p_match:
-                                colloc = str(form_array[i]).lower() if ignore_case else str(form_array[i])
-                                colloc_counter[colloc] += 1
-                                colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
+                                clean_w = get_clean_colloc(form_array[i])
+                                if clean_w:
+                                    colloc = clean_w.lower() if ignore_case else clean_w
+                                    colloc_counter[colloc] += 1
+                                    colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
                 else:
                     # Tryb: Składniowe (Zależności)
                     word_ids = row_data.word_ids
@@ -5213,14 +5412,15 @@ def calculate_collocs():
                                                         upos_filter == "Wszystkie" or upostags[j] == upos_filter)
                                             p_match = (pos_filter == "Wszystkie" or postags[j] == pos_filter)
                                             if u_match and p_match:
-                                                colloc = str(form_array[j]).lower() if ignore_case else str(form_array[j])
-                                                colloc_counter[colloc] += 1
-                                                colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
+                                                clean_w = get_clean_colloc(form_array[j])
+                                                if clean_w:
+                                                    colloc = clean_w.lower() if ignore_case else clean_w
+                                                    colloc_counter[colloc] += 1
+                                                    colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
 
                         if syn_dir in ["Podrzędnik", "Oba"]:
                             for j in range(sent_start, sent_end):
                                 if head_ids[j] == w_id and j not in range(start_idx, end_idx):
-                                    # Zabezpieczenie przed policzeniem tego samego węzła jako obu stron relacji
                                     if (row_idx, j, "dep") in seen_slots:
                                         continue
                                     seen_slots.add((row_idx, j, "dep"))
@@ -5234,13 +5434,11 @@ def calculate_collocs():
                                                         upos_filter == "Wszystkie" or upostags[j] == upos_filter)
                                             p_match = (pos_filter == "Wszystkie" or postags[j] == pos_filter)
                                             if u_match and p_match:
-                                                colloc = str(form_array[j]).lower() if ignore_case else str(form_array[j])
-                                                colloc_counter[colloc] += 1
-                                                colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
-
-
-
-
+                                                clean_w = get_clean_colloc(form_array[j])
+                                                if clean_w:
+                                                    colloc = clean_w.lower() if ignore_case else clean_w
+                                                    colloc_counter[colloc] += 1
+                                                    colloc_doc_tracker.setdefault(colloc, set()).add(row_idx)
             # --- 2. OBLICZANIE STATYSTYK ---
             inv_idx_data = inverted_indexes[global_selected_corpus]
             bg_tf_raw = inv_idx_data['base_tf'] if form_mode == "Lemat (base)" else inv_idx_data['orth_tf']
@@ -5332,6 +5530,16 @@ def search_from_table(selected_word):
     form_mode = colloc_form_var.get()
     attr = "base" if form_mode == "Lemat (base)" else "orth"
     mode = colloc_mode_var.get()
+    ignore_case = colloc_ignore_case_var.get() # <--- Sprawdzamy stan checkboxa
+
+    # --- NOWOŚĆ: Wstrzykiwanie regexa (Case-Insensitive) ---
+    if ignore_case:
+        import re
+        # Używamy flagi (?i) do ignorowania wielkości liter.
+        # Escapujemy też samo słowo, żeby ew. znaki (np. myślnik) nie zepsuły wzorca.
+        query_val = f"(?i){re.escape(selected_word)}"
+    else:
+        query_val = selected_word
 
     query_groups = [g.strip() for g in original_query.split("||")]
     new_query_groups = []
@@ -5359,12 +5567,10 @@ def search_from_table(selected_word):
             val_l, val_r = 5, 5
 
         for qg in query_groups:
-            # Kolokat po lewej stronie od oryginalnego zapytania
             if val_l > 0:
-                new_query_groups.append(f'[{attr}="{selected_word}"] [*][0,{val_l - 1}] {qg}')
-            # Kolokat po prawej stronie od oryginalnego zapytania
+                new_query_groups.append(f'[{attr}="{query_val}"] [*][0,{val_l - 1}] {qg}')
             if val_r > 0:
-                new_query_groups.append(f'{qg} [*][0,{val_r - 1}] [{attr}="{selected_word}"]')
+                new_query_groups.append(f'{qg} [*][0,{val_r - 1}] [{attr}="{query_val}"]')
 
     # --- TRYB SKŁADNIOWY (Odwracanie ról i wstrzykiwanie relacji) ---
     else:
@@ -5376,18 +5582,18 @@ def search_from_table(selected_word):
             core_str = extract_core(qg)
 
             if syn_dir in ["Nadrzędnik", "Oba"]:
-                # Kolokat to nadrzędnik (głowa). Szukamy kolokata, który ma ZALEŻNIKA (oryginalne słowo)
+                # Kolokat to nadrzędnik (głowa).
                 dep_rule = join_rules(core_str, f'deprel="{deprel}"' if deprel != "Wszystkie" else "")
 
                 if dep_rule:
-                    rule = f'[{attr}="{selected_word}" & dependent={{{dep_rule}}}]'
+                    rule = f'[{attr}="{query_val}" & dependent={{{dep_rule}}}]'
                 else:
-                    rule = f'[{attr}="{selected_word}"]'
+                    rule = f'[{attr}="{query_val}"]'
                 new_query_groups.append(rule)
 
             if syn_dir in ["Podrzędnik", "Oba"]:
-                # Kolokat to podrzędnik (zależnik). Szukamy kolokata z zadanym NADRZĘDNIKIEM (oryginalnym słowem)
-                main_rules = join_rules(f'{attr}="{selected_word}"',
+                # Kolokat to podrzędnik (zależnik).
+                main_rules = join_rules(f'{attr}="{query_val}"',
                                         f'deprel="{deprel}"' if deprel != "Wszystkie" else "")
                 head_rule = f'head={{{core_str}}}' if core_str else ""
 
