@@ -40,7 +40,7 @@ Kreator korpusów zapisuje wynik przetwarzania do pliku `.parquet`. W pliku tym 
 
 Pliki Excel mogą być używane zarówno jako źródła tekstów, jak i jako osobny plik metadanych. Kreator pozwala mapować kolumny na pola standardowe:
 
-- `Nazwa pliku`
+- `Nazwa pliku` (wymagane - zawartość pełni funkcję identifikatora rekordu; należy podać nazwę wraz z rozszerzeniem, np. 1.docx)
 - `Tytuł`
 - `Treść`
 - `Data publikacji`
