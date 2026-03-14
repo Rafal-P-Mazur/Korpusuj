@@ -173,7 +173,9 @@ Aplikacja udostępnia również:
    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
    ```
    NVIDIA GPU (na przykład: CUDA 12.6):
+   ```bash
    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
+   ```
 3. Uruchom aplikację:
    ```bash
    python Korpusuj.py
