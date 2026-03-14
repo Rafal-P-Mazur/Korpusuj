@@ -2090,13 +2090,19 @@ def show_search_error(msg: str):
     button_next.configure(state="disabled")
     button_last.configure(state="disabled")
 
+
 def show_search_warnings(warnings_list):
     if 'warning_label' not in globals():
         return
     if not warnings_list:
         warning_label.configure(text="")
+        # Chowamy etykietę i odzyskujemy miejsce!
+        warning_label.pack_forget()
         return
+
     warning_label.configure(text=" | ".join(warnings_list[:3]))
+    # Pokazujemy etykietę (wymuszając jej pozycję tuż nad paned_window)
+    warning_label.pack(fill="x", padx=10, pady=(0, 5), before=paned_window)
 
 def check_brackets(query):
     stack = []
@@ -5168,13 +5174,17 @@ def apply_theme():
     colloc_frame.configure(fg_color=theme["frame_fg"])
     tabview.configure(fg_color=theme["frame_fg"])
 
-    # Subframes
+    # Subframes (Widoczne, zaokrąglone kafelki z zawartością)
     for frame in [
         pagination_frame, entry_button_frame, pagination_lemma_frame, pagination_orth_frame,
         pagination_month_frame, plot_options_frame, saveplot_button_frame, checkboxes_frame,
-        colloc_controls, pagination_colloc_frame, date_settings_frame  # <--- DODANO date_settings_frame
+        colloc_controls, pagination_colloc_frame, date_settings_frame
     ]:
-        frame.configure(fg_color=theme["subframe_fg"])
+        frame.configure(fg_color=theme["subframe_fg"], border_color=theme["subframe_fg"])
+
+    # Kontenery strukturalne (MUSZĄ być przezroczyste, by było widać między nimi tło okna)
+    for frame in [left_pane, right_pane, right_subframe, buttons_action_frame]:
+        frame.configure(fg_color="transparent")
 
     # --- Zmiana motywu dynamicznych kontrolek (Obejście dla anonimowych etykiet i menu) ---
     def update_frame_children(parent_frame):
@@ -5233,7 +5243,8 @@ def apply_theme():
     for entry in [entry_query, entry_left_context, entry_right_context, fiszka_entrybox, text_full]:
         entry.configure(
             fg_color=theme["subframe_fg"],
-            text_color=theme["label_text"]
+            text_color=theme["label_text"],
+            border_color=theme["subframe_fg"]  # <--- DODANO border_color
         )
 
     # --- Tabview ---
@@ -5257,6 +5268,12 @@ def apply_theme():
     # --- PanedWindow (Przeciągany separator) ---
     paned_window.configure(bg=theme["frame_fg"])
 
+    # KLUCZOWE: Nadpisanie zbuforowanego koloru tła (bg_color),
+    # który ujawnia się podczas zmiany rozmiaru/przeciągania ramki.
+    left_pane.configure(bg_color=theme["frame_fg"])
+    right_pane.configure(bg_color=theme["frame_fg"])
+    right_subframe.configure(bg_color=theme["subframe_fg"])
+
     # Fonts
     font_tuple = (font_family.get(), fontsize)
     for tbl in (text_result, frekw_dane_tabela, frekw_dane_tabela_orth, frekw_dane_tabela_month,
@@ -5270,6 +5287,15 @@ def apply_theme():
         tbl.set_text_colors(theme["text_colors"])
         tbl.set_selected_row_color(theme["selected_row"])
         tbl.set_canvas_background(theme["canvas_bg"])
+
+        try:
+            tbl.configure(bg=theme["canvas_bg"])
+        except Exception:
+            pass
+        try:
+            tbl.configure(bg_color=theme["canvas_bg"])
+        except Exception:
+            pass
 
     # Tabela 5-kolumnowa
     frekw_dane_tabela_month.set_text_colors(theme["text_colors_month"])
@@ -5928,7 +5954,7 @@ tabview.configure(border_width=0, border_color="#3E3F42")
 
 # Main result frame
 result_frame = ctk.CTkFrame(tab_wyniki, corner_radius=15, fg_color="#2C2F33")
-result_frame.pack(fill="both", expand=True, padx=15, pady=(5, 15))
+result_frame.pack(fill="both", expand=True, padx=15, pady=(0, 15))
 
 
 warning_label = ctk.CTkLabel(
@@ -5938,14 +5964,14 @@ warning_label = ctk.CTkLabel(
     text_color="#D9A04F",
     anchor="w"
 )
-warning_label.pack(fill="x", padx=10, pady=(0, 5))
+#warning_label.pack(fill="x", padx=10, pady=(0, 5))
 
 
 
 # Utworzenie PanedWindow (widżetu z przeciąganym separatorem)
 # Top frame for pagination + entry/buttons
-paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor="sb_h_double_arrow")
-paned_window.pack(fill="both", expand=True, padx=10, pady=10)
+paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor="sb_h_double_arrow", opaqueresize=False)
+paned_window.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
 # Utworzenie dwóch głównych kontenerów dla lewej i prawej strony (one będą zmieniane przez separator)
 left_pane = ctk.CTkFrame(paned_window, fg_color="transparent")
@@ -6023,7 +6049,8 @@ entry_button_frame.pack(fill="x", padx=5, pady=(0, 5))
 
 fiszka_entrybox = ctk.CTkEntry(entry_button_frame, placeholder_text="Nazwa fiszki",
                                font=("Verdana", 12, 'bold'), height=35, corner_radius=8, fg_color="#2C2F33")
-fiszka_entrybox.pack(pady=10, padx=10, fill="x", expand=True, side="left")
+# Zmiana: pady=5
+fiszka_entrybox.pack(pady=5, padx=10, fill="x", expand=True, side="left")
 
 selected_file = ctk.StringVar(value="Otwórz fiszkę")
 dropdown = ctk.CTkOptionMenu(
@@ -6040,7 +6067,8 @@ dropdown = ctk.CTkOptionMenu(
     dropdown_hover_color="#3E3782",
     dropdown_font=("Verdana", 12, 'bold')
 )
-dropdown.pack(pady=10, padx=5, side="right")
+# Zmiana: pady=5
+dropdown.pack(pady=5, padx=5, side="right")
 
 save_selection_button = ctk.CTkButton(
     entry_button_frame,
@@ -6053,7 +6081,8 @@ save_selection_button = ctk.CTkButton(
     hover_color="#57965C",
     command=save_to_file
 )
-save_selection_button.pack(pady=10, padx=5, side="right")
+# Zmiana: pady=5
+save_selection_button.pack(pady=5, padx=5, side="right")
 
 right_subframe = ctk.CTkFrame(right_pane, fg_color="transparent")
 right_subframe.pack(fill="both", expand=True, padx=5, pady=0)
