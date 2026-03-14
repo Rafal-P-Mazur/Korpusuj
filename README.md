@@ -52,8 +52,8 @@ Dodatkowe kolumny są zachowywane i mogą być później używane do filtrowania
 
 Program obsługuje dwa tryby anotacji:
 
-- **Stanza** — pełny pipeline z tokenizacją, tagowaniem, lematyzacją, NER, analizą zależnościową i koreferencją
-- **spaCy** — alternatywny pipeline z lokalnie pobieranym modelem języka polskiego
+- **Stanza** — pełny potok analityczny nastawiony na maksymalną dokładność (tokenizacja, lematyzacja, POS, NER, składnia zależnościowa oraz koreferencja).
+- **spaCy** — lżejszy i znacznie szybszy potok NLP (tokenizacja, lematyzacja, POS, NER, składnia zależnościowa), zoptymalizowany pod kątem wydajności przy dużych zbiorach danych.
 
 Modele są pobierane przy pierwszym użyciu i przechowywane lokalnie w katalogu `models/`.
 
@@ -158,7 +158,7 @@ Aplikacja udostępnia również:
 
 ## Instalacja
 
-### Uruchamianie ze źródeł
+### Uruchamianie ze źródeł (Python, zalecana wersja 3.11)
 
 1. Sklonuj repozytorium:
    ```bash
@@ -220,14 +220,14 @@ Korpus został przygotowany jako niewielki zbiór testowy z metadanymi czasowymi
 
 Korpus demonstracyjny został przygotowany na podstawie publicznie dostępnych interpelacji sejmowych i służy wyłącznie do testowania funkcji aplikacji.
 
-## Tworzenie korpusu
+## Tworzenie własnego korpusu
 
 Aby utworzyć nowy korpus:
 
 1. uruchom aplikację
 2. wybierz `Plik -> Utwórz korpus`
-3. wskaż pliki źródłowe
-4. wybierz model anotacji
+3. wskaż pliki źródłowe 
+4. wybierz model anotacji (Przy pierwszym użyciu aplikacja pobierze wymagane modele do folderu models/)
 5. opcjonalnie dodaj osobny plik metadanych
 6. uruchom przetwarzanie
 7. zapisz wynik do pliku `.parquet`
