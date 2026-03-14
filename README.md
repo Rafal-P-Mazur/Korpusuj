@@ -22,7 +22,7 @@ Projekt ma charakter badawczy i jest rozwijany jako narzędzie do pracy z korpus
 - eksport wyników do Excela
 - zapisywanie wybranych fragmentów jako fiszek
 
-- ![App Screenshot 1](Images/1.png)
+![App Screenshot 1](Images/1.png)
 
 ## Dane wejściowe i format korpusu
 
