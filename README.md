@@ -176,7 +176,7 @@ Aplikacja udostępnia również:
    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126
 3. Uruchom aplikację:
    ```bash
-   python Korpusuj_beta.py
+   python Korpusuj.py
    ```
 
 ### Windows (.exe)
