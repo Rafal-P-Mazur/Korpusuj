@@ -18,13 +18,6 @@ from tkinter import filedialog
 import re
 import json
 import threading
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-import matplotlib.cm as cm
-import matplotlib.pyplot as plt
 from PIL import Image
 import shutil
 from collections import Counter
@@ -33,17 +26,89 @@ import math
 from datetime import datetime, timedelta
 import ast
 import string
-import webview
-import creator
-import fiszki_tkinter
 import table
 from tkinter import messagebox
 import pyarrow.parquet as pq
 from dateutil.relativedelta import relativedelta
 import calendar
 
+def notify_status(msg):
+    # Sprawdzamy, czy launcher jest uruchomiony i ma funkcję update_status
+    if '__main__' in sys.modules and hasattr(sys.modules['__main__'], 'update_status'):
+        sys.modules['__main__'].update_status(msg)
 
-matplotlib.use('Agg')
+notify_status("Wczytywanie bibliotek systemowych...")
+
+# ==========================================
+# LAZY LOADERY (Wczytywanie na żądanie)
+# ==========================================
+_creator_module = None
+_creator_module = None
+
+
+def get_creator_module():
+    global _creator_module
+    if _creator_module is None:
+        # 1. Tworzymy tymczasowe okienko informacyjne
+        loading_win = ctk.CTkToplevel(app)
+        loading_win.title("Ładowanie...")
+        loading_win.geometry("300x120")
+        loading_win.attributes("-topmost", True)
+        loading_win.overrideredirect(True)  # Opcjonalnie: usuwa ramkę okna
+
+        # Centrowanie względem okna głównego
+        x = app.winfo_x() + (app.winfo_width() // 2) - 150
+        y = app.winfo_y() + (app.winfo_height() // 2) - 60
+        loading_win.geometry(f"+{x}+{y}")
+
+        lbl = ctk.CTkLabel(loading_win, text="Ładowanie modułu kreatora korpusów...\nMoże to potrwać kilka sekund.",
+                           font=("Verdana", 12))
+        lbl.pack(expand=True, pady=20)
+
+        # 2. Wymuszamy natychmiastowe narysowanie okienka
+        loading_win.update()
+
+        # 3. Zmieniamy kursor na "oczekiwanie" (kółko/klepsydra)
+        app.configure(cursor="wait")
+
+        # 4. Właściwy ciężki import modułu
+        import creator
+        _creator_module = creator
+
+        # 5. Sprzątanie: zamykamy okienko i przywracamy kursor
+        loading_win.destroy()
+        app.configure(cursor="")
+
+    return _creator_module
+
+_fiszki_module = None
+def get_fiszki_module():
+    global _fiszki_module
+    if _fiszki_module is None:
+        import fiszki_tkinter
+        _fiszki_module = fiszki_tkinter
+    return _fiszki_module
+
+_plot_stack = None
+def get_plot_stack():
+    global _plot_stack
+    if _plot_stack is None:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        import matplotlib.cm as cm
+        _plot_stack = {
+            "plt": plt,
+            "Figure": Figure,
+            "FigureCanvasAgg": FigureCanvasAgg,
+            "cm": cm
+        }
+    return _plot_stack
+# ==========================================
+
+
 warnings.filterwarnings("ignore")
 try:
     from ctypes import windll
@@ -94,6 +159,7 @@ styl_wykresow = None  # set in UI
 wykres_sort = None  # set in UI
 
 
+
 # Determine the base directory for the fonts
 if getattr(sys, 'frozen', False):  # If running as a PyInstaller .exe
     BASE_DIR = sys._MEIPASS
@@ -101,6 +167,8 @@ if getattr(sys, 'frozen', False):  # If running as a PyInstaller .exe
 else:
     BASE_DIR = os.path.dirname(__file__)
     BASE_DIR_CORP = os.path.dirname(os.path.abspath(__file__))
+
+
 
 # Paths and defaults
 CONFIG_PATH = os.path.join(BASE_DIR_CORP, 'config.json')
@@ -156,7 +224,7 @@ logging.info("Logger initialized")
 
 
 
-
+notify_status("Ładowanie zasobów i czcionek...")
 # Define font paths
 FONT1_PATH = os.path.join(BASE_DIR, "fonts", "JetBrainsMono-Bold.ttf")
 FONT2_PATH = os.path.join(BASE_DIR, "fonts", "JetBrainsMono-Regular.ttf")
@@ -2475,7 +2543,10 @@ def search():
                             ])
 
                     if ui_state["is_plotting"] == 'Tak':
-                        # Wykres również generowany w tle - dzięki API obiektowemu Matplotlib!
+                        # Wykres również generowany w tle - dzięki API obiektowemu Matplotlib
+                        plot_stack = get_plot_stack()
+                        Figure = plot_stack["Figure"]
+                        FigureCanvasAgg = plot_stack["FigureCanvasAgg"]
                         yearly_grouped = {}
                         for key, data_ in monthly_freq_for_use.items():
                             year, month = key.split('-')
@@ -3006,6 +3077,11 @@ def update_plot():
     global full_results_sorted, true_monthly_totals, lemma_vars, merge_entry_vars, lemma_df_cache, global_selected_corpus
     global precalculated_bins, precalculated_bin_totals, precalculated_lemma_counts
 
+    plot_stack = get_plot_stack()
+    Figure = plot_stack["Figure"]
+    FigureCanvasAgg = plot_stack["FigureCanvasAgg"]
+    cm = plot_stack["cm"]
+
     # 1. Obiektowa funkcja do rysowania pustego ekranu
     def draw_empty(message):
         fig = Figure(figsize=(12, 7), dpi=100)
@@ -3180,6 +3256,11 @@ def show_dependency_graph():
     global current_graph_row_idx, current_graph_start_idx, global_selected_corpus
     if current_graph_row_idx is None or current_graph_start_idx is None:
         return
+
+    plot_stack = get_plot_stack()
+    Figure = plot_stack["Figure"]
+    FigureCanvasAgg = plot_stack["FigureCanvasAgg"]
+    plt = plot_stack["plt"]
 
     # Pobranie danych o zdaniu
     df = dataframes[global_selected_corpus]
@@ -4783,6 +4864,7 @@ def open_webview_window(file_name):
         return webview_thread
 
     def worker():
+        import webview
         # Używamy przekazanej nazwy pliku
         file_path = os.path.join(BASE_DIR, f"temp/{file_name}")
         window = webview.create_window(
@@ -4809,7 +4891,8 @@ def fiszki_load_file_content(value):
         return webview_thread
 
     def worker():
-        fiszki_tkinter.load_file_content(value)
+        get_fiszki_module().load_file_content(value)
+
 
     # inicjalizacja nowego wątku
     webview_thread = threading.Thread(target=worker, name="MainThread", daemon=True)
@@ -4986,8 +5069,6 @@ def register_text_widget(widget):
     widget.configure(font=(font_family.get(), fontsize))
 
 
-def apply_plot_style():
-    plt.style.use('dark_background' if styl_wykresow.get() == 'ciemny' else 'default')
 
 THEMES = {
     "ciemny": {
@@ -5610,42 +5691,14 @@ def search_from_table(selected_word):
         entry_query.insert("1.0", new_query)
         search()
 
+
+
 # Tworzenie interfejsu GUI
+notify_status("Inicjalizacja silnika graficznego...")
 app = ctk.CTk()
+import tkinter as tk
+tk._default_root = app
 app.withdraw()
-splash = ctk.CTkToplevel(app)
-
-splash.overrideredirect(True)  # Removes window decorations
-# Desired splash size
-# Desired splash size (wartości bazowe)
-width, height = 400, 400
-
-# Pobieramy mnożnik skalowania ekranu z biblioteki CTk (np. 1.5 dla 150%)
-scaling = ctk.ScalingTracker.get_window_scaling(splash)
-
-# Obliczamy rzeczywisty fizyczny rozmiar okna na ekranie
-actual_width = int(width * scaling)
-actual_height = int(height * scaling)
-
-# Pobieramy fizyczne wymiary ekranu
-screen_width = splash.winfo_screenwidth()
-screen_height = splash.winfo_screenheight()
-
-# Obliczamy idealny środek z uwzględnieniem skalowania
-x = int((screen_width - actual_width) // 2)
-y = int((screen_height - actual_height) // 2)
-
-splash.geometry(f"{width}x{height}+{x}+{y}")
-logo_path= os.path.join(BASE_DIR, "temp/logo.png")
-logo_image = ctk.CTkImage(
-    Image.open(logo_path),  # path to your image
-    size=(400, 400)          # resize to fit splash screen
-)
-
-# Create a label with the image
-splash_label = ctk.CTkLabel(splash, image=logo_image, text="")  # text="" removes text
-splash_label.pack(expand=True)
-splash.update()
 
 menu = Menu(app)
 
@@ -5653,7 +5706,7 @@ file_menu = menu.menu_bar(text="Plik", tearoff=0)
 file_menu.add_command(label="Nowy projekt", command=load_corpora)
 file_menu.add_command(label="Eksportuj wyniki", command=export_data)
 file_menu.add_separator()
-file_menu.add_command(label="Utwórz korpus", command=lambda: creator.main(app))
+file_menu.add_command(label="Utwórz korpus", command=lambda: get_creator_module().main(app))
 file_menu.add_separator()
 file_menu.add_command(label="Zamknij", command=lambda: exit())
 file_menu = menu.menu_bar(text="Edytuj", tearoff=0)
@@ -5759,12 +5812,18 @@ entry_query.bind("<FocusOut>", on_focus_out)
 entry_query.bind("<KeyRelease>", highlight_entry)
 
 search_path = os.path.join(BASE_DIR, "temp/s.png")
-# Search button
-s_img = ctk.CTkImage(dark_image=Image.open(search_path), size=(50, 50))
+try:
+    img_search = Image.open(search_path).convert("RGBA")
+    s_img = ctk.CTkImage(light_image=img_search, dark_image=img_search, size=(50, 50))
+except Exception:
+    s_img = None
+
 button_search = ctk.CTkButton(
-    top_frame_container, text="", image=s_img,
+    top_frame_container, text="" if s_img else "Szukaj", image=s_img,
     fg_color="#4B6CB7", hover_color="#5B7CD9", width=50, height=50, command=search
 )
+if s_img:
+    button_search.image = s_img  # Twarde przypisanie (ochrona przed usunięciem z RAM)
 button_search.grid(row=1, rowspan=2, column=3, pady=1, sticky="w")
 
 label_results_count = ctk.CTkLabel(
@@ -5807,14 +5866,25 @@ option_sort = ctk.CTkOptionMenu(
     corner_radius=8
 )
 option_sort.grid(row=2, column=6, padx=1, pady=1, sticky="w")
-settings_path= os.path.join(BASE_DIR, "temp/u.png")
-# Settings button
-settings_icon = ctk.CTkImage(dark_image=Image.open(settings_path), size=(50, 50))
-settings_button = ctk.CTkButton(top_frame_container, image=settings_icon, text="", fg_color="#4B6CB7", hover_color="#5B7CD9", width=50, height=50, command=settings_window)
+
+settings_path = os.path.join(BASE_DIR, "temp/u.png")
+try:
+    img_settings = Image.open(settings_path).convert("RGBA")
+    settings_icon_img = ctk.CTkImage(light_image=img_settings, dark_image=img_settings, size=(50, 50))
+except Exception:
+    settings_icon_img = None
+
+settings_button = ctk.CTkButton(
+    top_frame_container, text="" if settings_icon_img else "Opcje", image=settings_icon_img,
+    fg_color="#4B6CB7", hover_color="#5B7CD9", width=50, height=50, command=settings_window
+)
+if settings_icon_img:
+    settings_button.image = settings_icon_img  # Twarde przypisanie
 settings_button.grid(row=1, rowspan=2, column=7, pady=1, sticky="w")
 
 
 # Create tab view
+notify_status("Budowanie interfejsu użytkownika...")
 tabview = ctk.CTkTabview(
     app,
     corner_radius=12,
@@ -6572,13 +6642,12 @@ show_table("Formy podstawowe (base)")
 app.bind("<Button-1>", remove_selection)
 app.bind_all("<Control-c>", copy_text)
 
+
 # Apply on startup
+notify_status("Przygotowywanie widoku...")
 apply_theme()
-apply_plot_style()
-app.state("zoomed")
-splash.destroy()
-app.deiconify()
-app.update()
+
+
 
 # --- NOWE: Wymuszenie podziału PanedWindow na idealne 50/50 po załadowaniu okna ---
 def set_initial_pane_ratio():
@@ -6591,25 +6660,33 @@ def set_initial_pane_ratio():
     except Exception:
         pass
 
-# Odpalamy funkcję ułamek sekundy po pełnym renderowaniu interfejsu
-app.after(50, set_initial_pane_ratio)
+
 # ----------------------------------------------------------------------------------
 
 def on_closing():
     try:
-        # Próbujemy grzecznie wyłączyć pętlę i zniszczyć okno
         app.quit()
         app.destroy()
     except Exception:
-        # Ignorujemy wbudowane błędy CustomTkintera (TclError) podczas niszczenia widżetów
         pass
     finally:
-        # Używamy os._exit(0), aby natychmiast i bezwarunkowo ubić proces Pythona.
-        # To zapobiega też "wiszeniu" w menedżerze zadań jakichkolwiek naszych wątków w tle
         os._exit(0)
 
-# Przypisujemy naszą funkcję do zdarzenia kliknięcia "X" (WM_DELETE_WINDOW)
-if __name__ == "__main__":
+def main():
+    # Pokazujemy gotowe, w pełni wyrenderowane okno
+    app.state("zoomed")
+    app.deiconify()
+    app.update()
+
+    # Ustawiamy proporcje po załadowaniu
     app.after(50, set_initial_pane_ratio)
+
+    # Podpinamy zamykanie
     app.protocol("WM_DELETE_WINDOW", on_closing)
+
+    # Odpalamy główną pętlę!
     app.mainloop()
+
+
+if __name__ == "__main__":
+    main()
