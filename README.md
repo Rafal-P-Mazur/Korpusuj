@@ -22,6 +22,8 @@ Projekt ma charakter badawczy i jest rozwijany jako narzędzie do pracy z korpus
 - eksport wyników do Excela
 - zapisywanie wybranych fragmentów jako fiszek
 
+- ![App Screenshot 1](Images/1.png)
+
 ## Dane wejściowe i format korpusu
 
 Kreator korpusów zapisuje wynik przetwarzania do pliku `.parquet`. W pliku tym przechowywane są:
