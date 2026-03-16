@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
 if sys.stdout is not None:
@@ -51,7 +52,7 @@ try:
     if not hasattr(torch.utils.data.dataset, 'T_co'):
         torch.utils.data.dataset.T_co = typing.TypeVar('T_co', covariant=True)
     import herference
-    print("SUKCES: Herference zaimportowane pomyślnie na górze pliku!")
+    logging.info("SUKCES: Herference zaimportowane pomyślnie na górze pliku!")
 except Exception as e:
     herference = None
     messagebox.showerror("Błąd importu Herference", f"Nie udało się zaimportować biblioteki herference:\n\n{e}")
@@ -201,92 +202,126 @@ class ColumnMapper(ctk.CTkToplevel):
 
 
 # --- FUNKCJE POMOCNICZE ---
-def chunk_text_safe(text, chunk_size=3000, max_dotless_chars=400):
-    chunks = []
-    paragraphs = text.split('\n')
-    current_chunk = []
-    current_length = 0
-    current_dotless = 0
+def chunk_text_safe(
+    text: str,
+    chunk_size: int = 15000,
+    max_dotless_chars: int = 800,
+    backtrack_window: int = 600,
+    min_piece_in_danger: int = 1200,
+) -> list[str]:
+    """
+    Dzieli tekst na 'NLP-przyjazne' fragmenty:
+      - sklejanie akapitów do chunk_size,
+      - ochrona przed tasiemcami (ciąg bez końca zdania),
+      - preferencja cięć na końcu zdania, potem spacji, dopiero na końcu „na sztywno”.
+    """
+    SENT_END_RE = re.compile(r'[.!?][\'")\]]*(?:\s+|$|(?=[^\d]))')
+    PARA_END_RE = re.compile(r'[.!?][\'")\]]*\s*$')
+    SAFE_GAP_RE = re.compile(r'[.!?][\'")\]]*(?:\s+|$|(?=[^\d]))')
 
-    for paragraph in paragraphs:
-        paragraph_full = paragraph + '\n'
-        para_len = len(paragraph_full)
+    chunks: list[str] = []
+    paragraphs = text.split("\n")
+    current_chunk_parts: list[str] = []
+    current_len = 0
+    dotless = 0
 
-        # Znajdź pozycję ostatniej kropki/znaku końca zdania w tym akapicie
-        last_dot = max(paragraph_full.rfind('.'), paragraph_full.rfind('!'), paragraph_full.rfind('?'))
+    def flush():
+        nonlocal current_chunk_parts, current_len, dotless
+        if current_chunk_parts:
+            chunks.append("".join(current_chunk_parts))
+            current_chunk_parts = []
+            current_len = 0
+            dotless = 0
 
-        # Ile znaków bez kropki przybędzie, jeśli dodamy ten akapit?
-        if last_dot == -1:
-            added_dotless = current_dotless + para_len
-            new_dotless = current_dotless + para_len
-        else:
-            added_dotless = current_dotless + last_dot
-            new_dotless = para_len - 1 - last_dot
+    def soft_cut(block: str, limit: int) -> list[str]:
+        """
+        Tnij blok na kawałki <= limit:
+          1) cofnij do najbliższej przerwy po końcu zdania (SAFE_GAP_RE),
+          2) jeśli się nie uda — do ostatniej spacji,
+          3) jeśli brak spacji — twardo (edge-case).
+        """
+        out = []
+        start = 0
+        L = len(block)
+        while start < L:
+            remaining = L - start
+            if remaining <= limit:
+                out.append(block[start:])
+                break
 
-        # INTELIGENTNY BEZPIECZNIK: Jeśli dodanie akapitu stworzy tasiemca > max_dotless_chars (np. 400 znaków bez kropki)
-        # a w buforze już coś mamy, zamykamy obecny bufor, żeby ratować pamięć RAM.
-        if added_dotless > max_dotless_chars and current_length > 0:
-            chunks.append("".join(current_chunk))
-            current_chunk = []
-            current_length = 0
-            current_dotless = 0
+            end = start + limit
+            search_start = max(start, end - backtrack_window)
+            window = block[search_start:end]
 
-            if last_dot == -1:
-                new_dotless = para_len
+            # 1) preferowany bezpieczny „koniec zdania” (ostatnie dopasowanie w oknie)
+            m = None
+            for mm in SAFE_GAP_RE.finditer(window):
+                m = mm
+            if m:
+                cut = search_start + m.end()
             else:
-                new_dotless = para_len - 1 - last_dot
-
-        # Normalna logika dodawania do paczki
-        if current_length + para_len <= chunk_size:
-            current_chunk.append(paragraph_full)
-            current_length += para_len
-            current_dotless = new_dotless
-        elif para_len <= chunk_size:
-            if current_chunk:
-                chunks.append("".join(current_chunk))
-            current_chunk = [paragraph_full]
-            current_length = para_len
-            current_dotless = new_dotless
-        else:
-            # Sytuacja skrajna: Jeden, gigantyczny akapit większy niż 3000 znaków
-            if current_chunk:
-                chunks.append("".join(current_chunk))
-                current_chunk = []
-
-            start = 0
-            text_len = len(paragraph_full)
-            while start < text_len:
-                if text_len - start <= chunk_size:
-                    chunks.append(paragraph_full[start:])
-                    break
-
-                end = start + chunk_size
-                window_size = 500
-                search_start = max(start, end - window_size)
-                window = paragraph_full[search_start:end]
-
-                safe_breaks = [m.start() for m in re.finditer(r'(?<=[.!?])\s', window)]
-
-                if safe_breaks:
-                    cut_offset = safe_breaks[-1]
-                    real_end = search_start + cut_offset
+                # 2) ostatnia spacja w oknie
+                last_space = window.rfind(" ")
+                if last_space != -1:
+                    cut = search_start + last_space
                 else:
-                    last_space = window.rfind(' ')
-                    if last_space != -1:
-                        real_end = search_start + last_space
-                    else:
-                        real_end = end
+                    # 3) brak spacji — spróbuj w całym [start:end], a jak nie — twardo end
+                    fallback_space = block[start:end].rfind(" ")
+                    cut = start + fallback_space if fallback_space != -1 else end
 
-                chunks.append(paragraph_full[start:real_end])
-                start = real_end
+            if cut <= start:  # zabezpieczenie przed pętlą
+                cut = end
+            out.append(block[start:cut])
+            start = cut
+        return out
 
-            # Zerujemy po przetworzeniu wielkiego akapitu
-            current_length = 0
-            current_dotless = 0
+    for para in paragraphs:
+        para_full = para + "\n"
+        para_len = len(para_full)
 
-    if current_chunk:
-        chunks.append("".join(current_chunk))
+        # A) wykrywanie „tasiemca” — realne końce zdań, nie tylko „kropka+spacja”
+        dangerous = False
+        last_end = 0
+        for m in SENT_END_RE.finditer(para_full):
+            if m.start() - last_end > max_dotless_chars:
+                dangerous = True
+                break
+            last_end = m.end()
+        if not dangerous and (para_len - last_end) > max_dotless_chars:
+            dangerous = True
 
+
+
+        # B) jeżeli akapit jest „niebezpieczny” albo większy niż chunk_size — tnij go
+        if dangerous or para_len > chunk_size:
+            flush()
+            # KLUCZ: dla „tasiemców” nie tniemy na 800, tylko do rozsądnego minimum
+            target_limit = chunk_size if not dangerous else min_piece_in_danger
+            for piece in soft_cut(para_full, limit=target_limit):
+                chunks.append(piece)
+            continue
+
+        # C) normalne sklejanie akapitów do chunk_size
+        if not PARA_END_RE.search(para_full.strip()):
+            dotless += para_len
+        else:
+            dotless = 0
+
+        if dotless > max_dotless_chars and current_len > 0:
+            flush()
+            # zaczynamy nowy chunk od tego akapitu
+            current_chunk_parts.append(para_full)
+            current_len = para_len
+            dotless = 0 if PARA_END_RE.search(para_full.strip()) else para_len
+            continue
+
+        if current_len + para_len > chunk_size:
+            flush()
+
+        current_chunk_parts.append(para_full)
+        current_len += para_len
+
+    flush()
     return chunks
 
 
@@ -319,7 +354,7 @@ def calculate_real_total_size(file_paths):
             else:
                 total_size += os.path.getsize(path)
         except Exception as e:
-            print(f"Błąd obliczania rozmiaru dla {path}: {e}")
+            logging.warning(f"Błąd obliczania rozmiaru dla {path}: {e}")
             total_size += os.path.getsize(path)
     return total_size
 
@@ -345,7 +380,7 @@ def process_pdf(file_path, status_label, app):
                     result = reader.readtext(pix.tobytes("png"), detail=0)
                     text += " ".join(result) + " "
     except Exception as e:
-        print(f"Błąd PDF: {e}")
+        logging.warning(f"Błąd PDF: {e}")
         pass
     return text.replace('-\n', '').replace('\n', ' ')
 
@@ -399,7 +434,7 @@ def process_xlsx(file_path, mapping=None):
             })
         return data
     except Exception as e:
-        print(f"Błąd Excel {file_path}: {e}")
+        logging.warning(f"Błąd Excel {file_path}: {e}")
         return []
 
 
@@ -517,12 +552,15 @@ def initialize_spacy(status_label, app):
 # --- NLP PROCESSING ---
 def process_single_text(text, filename, status_label, progress_bar, app):
     if not text.strip(): return None
-    chunks = chunk_text_safe(text, chunk_size=3000)
+    chunks = chunk_text_safe(text, chunk_size=15000)
     all_processed_tokens = []
     global_sent_id_offset = 0
     global_char_offset = 0
     total_chunks = len(chunks)
     progress_bar.set(0)
+
+    # --- NOWE: GLOBALNY LICZNIK DLA CAŁEGO PLIKU (Rozwiązuje problem kolizji chunków) ---
+    global_cluster_id_counter = 1
 
     for i, chunk in enumerate(chunks):
         if not chunk.strip():
@@ -534,7 +572,7 @@ def process_single_text(text, filename, status_label, progress_bar, app):
             update_status(status_label, f"Przetwarzam: {filename} (Część {i + 1}/{total_chunks})", app)
             doc = nlp_stanza(chunk)
         except Exception as e:
-            print(f"Błąd Stanza (część {i + 1}): {e}")
+            logging.warning(f"Błąd Stanza (część {i + 1}): {e}")
             global_char_offset += len(chunk)
             continue
 
@@ -542,65 +580,56 @@ def process_single_text(text, filename, status_label, progress_bar, app):
             global_char_offset += len(chunk)
             continue
 
-
-
         # --- BUDOWANIE MAPY KOTWIC (HYBRYDA: ROLA + ID) DLA STANZA ---
         coref_anchors = {}
         try:
-            word_to_chain = {}
-            chain_to_words = {}
-            chain_id_to_cluster_id = {}
-            cluster_id_counter = 1
+            # Stanza trzyma gotowe klastry w doc.coref: lista CorefChain (doc-level)
+            if hasattr(doc, "coref") and doc.coref:
+                for chain in doc.coref:
+                    c_id_str = str(global_cluster_id_counter)
+                    global_cluster_id_counter += 1
 
-            # Krok 1: Przypisywanie ID łańcucha
-            for sent_idx, sentence in enumerate(doc.sentences):
-                for word in sentence.words:
-                    if hasattr(word, 'coref_chains') and word.coref_chains:
-                        chain_idx = word.coref_chains[0].chain.index
-                        word_to_chain[(sent_idx, word.id)] = chain_idx
+                    for mention in getattr(chain, "mentions", []):
+                        s_idx = getattr(mention, "sentence", getattr(mention, "sent_id", None))
+                        if s_idx is None:
+                            continue
 
-                        if chain_idx not in chain_id_to_cluster_id:
-                            chain_id_to_cluster_id[chain_idx] = str(cluster_id_counter)
-                            cluster_id_counter += 1
+                        # Zabezpieczenie na zero-anaphora / nietypowe indeksy
+                        if not isinstance(getattr(mention, "start_word", None), int) or not isinstance(
+                                getattr(mention, "end_word", None), int):
+                            continue
 
-                        if chain_idx not in chain_to_words:
-                            chain_to_words[chain_idx] = []
-                        chain_to_words[chain_idx].append((sent_idx, word))
+                        sentence_obj = doc.sentences[s_idx]
+                        span_words = sentence_obj.words[mention.start_word:mention.end_word]
+                        if not span_words:
+                            continue
 
-            # Krok 2: Kotwiczenie tagu i przypisanie ID
-            visited_coref_words = set()
-            for sent_idx, sentence in enumerate(doc.sentences):
-                for word_list_idx, word in enumerate(sentence.words):
-                    key = (sent_idx, word.id)
-                    if key in word_to_chain and key not in visited_coref_words:
-                        chain_idx = word_to_chain[key]
-                        c_id_str = chain_id_to_cluster_id[chain_idx]
-
-                        mention_words = []
-                        for w in sentence.words[word_list_idx:]:
-                            k = (sent_idx, w.id)
-                            if word_to_chain.get(k) == chain_idx:
-                                mention_words.append(w)
-                                visited_coref_words.add(k)
-                            else:
-                                break
-
-                        mention_ids = {w.id for w in mention_words}
+                        # --- Heurystyka wyznaczania Head ---
+                        mention_ids = {w.id for w in span_words if isinstance(w.id, int)}
                         anchor = None
-                        for w in mention_words:
+                        for w in span_words:
+                            if not isinstance(w.id, int):
+                                continue
                             if w.head not in mention_ids:
                                 anchor = w
                                 break
+                        if anchor is None:
+                            # fallback: ostatni "normalny" word, jeśli istnieje
+                            anchor = next((w for w in reversed(span_words) if isinstance(w.id, int)), None)
+                            if anchor is None:
+                                continue
 
-                        if anchor is None: anchor = mention_words[-1]
-
-                        # Zapisujemy Rolę + ID w postaci listy
-                        for w in mention_words:
+                        # --- Role Head/Part ---
+                        for w in span_words:
+                            if not isinstance(w.id, int):  # pomijamy puste węzły
+                                continue
                             role = "Head" if w.id == anchor.id else "Part"
-                            coref_anchors.setdefault((sent_idx, w.id), []).append(f"{role}-{c_id_str}")
+                            coref_anchors.setdefault((s_idx, w.id), []).append(f"{role}-{c_id_str}")
+
         except Exception as e:
-            print(f"Błąd mapowania koreferencji Stanza: {e}")
+            logging.warning(f"Błąd mapowania koreferencji Stanza: {e}")
         # -----------------------------------------------------------------
+
 
 
         chunk_char_pos = 0
@@ -710,15 +739,19 @@ def reconstruct_nkjp_tag(tag_str, morph_obj):
         return base
     return ":".join(parts)
 
+
 def process_single_text_spacy(text, filename, status_label, progress_bar, app):
     if not text.strip(): return None
     nlp_spacy.max_length = 2000000
-    chunks = chunk_text_safe(text, chunk_size=3000)
+    chunks = chunk_text_safe(text, chunk_size=15000)
     all_processed_tokens = []
     global_sent_id_offset = 0
     global_char_offset = 0
     total_chunks = len(chunks)
     progress_bar.set(0)
+
+    # --- NOWE: GLOBALNY LICZNIK DLA CAŁEGO PLIKU ---
+    global_cluster_id_counter = 1
 
     for i, chunk in enumerate(chunks):
         if not chunk.strip():
@@ -736,52 +769,53 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
             global_char_offset += len(chunk)
             continue
 
-
-        # --- DODANE: MAPA KOTWIC (HERFERENCE HYBRYDA: ROLA + ID) ---
+        # --- DODANE: MAPA KOTWIC (HERFERENCE: ROLA + ID) ---
         coref_anchors = {}
-        if hasattr(doc._, 'coref') and doc._.coref:
+        if hasattr(doc._, "coref") and doc._.coref:
             try:
-                cluster_id_counter = 1
-                for cluster in doc._.coref:
-                    if not cluster: continue
+                text_obj = doc._.coref  # api.Text
+                for cluster in text_obj.clusters:
+                    if not getattr(cluster, "mentions", None):
+                        continue
 
-                    c_id_str = str(cluster_id_counter)
-                    cluster_id_counter += 1
+                    c_id_str = str(global_cluster_id_counter)
+                    global_cluster_id_counter += 1
 
-                    mentions = []
-                    for m in cluster:
-                        if isinstance(m, int):
-                            mentions.append([doc[m]])
-                        elif hasattr(m, 'start') and hasattr(m, 'end'):
-                            mentions.append(doc[m.start:m.end])
-                        else:
-                            try:
-                                l = list(m)
-                                if len(l) > 0 and isinstance(l[0], int): mentions.append([doc[idx] for idx in l])
-                            except Exception:
-                                pass
+                    for mention in cluster.mentions:
+                        span = getattr(mention, "span", None)
 
-                    if not mentions: continue
+                        # Fallback: jeśli align nie ustawił span, spróbuj indices
+                        if span is None:
+                            idx = getattr(mention, "indices", None)
+                            if idx and len(idx) == 2:
+                                start, end = idx  # end w api.Mention jest inkluzywny
+                                # defensywnie: end może być < start, sprawdzamy też granice dokumentu
+                                if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end < len(doc):
+                                    span = doc[start:end + 1]
 
-                    for span in mentions:
-                        if not span: continue
+                        if not span:
+                            continue
+
+                        # --- Head/Part heurystyka ---
                         mention_tokens = set(span)
                         anchor = None
                         for token in span:
+                            # Szukamy korzenia (słowa, którego nadrzędnik jest poza wzmianką)
                             if token.head not in mention_tokens or token.head == token:
                                 anchor = token
                                 break
 
-                        if anchor is None: anchor = span[-1]
+                        if anchor is None:
+                            anchor = span[-1]
 
-                        # Zapisujemy Rolę + ID w postaci listy
                         for token in span:
                             role = "Head" if token.i == anchor.i else "Part"
                             coref_anchors.setdefault(token.i, []).append(f"{role}-{c_id_str}")
-            except Exception as e:
-                print(f"Błąd mapowania koreferencji: {e}")
 
+            except Exception as e:
+                logging.warning(f"Błąd mapowania koreferencji (herference): {e}")
         # ----------------------------------------
+
 
         for sent_idx, sentence in enumerate(sentences, start=1):
             real_sent_id = sent_idx + global_sent_id_offset
@@ -943,7 +977,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     try:
         total_size_bytes = calculate_real_total_size(selected_paths)
     except Exception as e:
-        print(f"Błąd obliczania rozmiaru: {e}")
+        logging.warning(f"Błąd obliczania rozmiaru: {e}")
         total_size_bytes = 1
 
     if total_size_bytes == 0: total_size_bytes = 1
@@ -974,7 +1008,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
             if "Nazwa pliku" in df_meta.columns:
                 extra_meta_columns = [col for col in df_meta.columns if col != "Nazwa pliku"]
             else:
-                print("Warning: Metadane file missing 'Nazwa pliku' column (after mapping).")
+                logging.warning("Brak kolumny 'Nazwa pliku' w metadanych po mapowaniu.")
 
             pl_months = {
                 'stycznia': '01', 'lutego': '02', 'marca': '03', 'kwietnia': '04',
@@ -1016,7 +1050,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                             metadata_dict[fn][col] = str(val).strip() if pd.notna(val) else ""
             status_label.configure(text="Metadane wczytane.")
         except Exception as e:
-            print(f"Błąd metadanych: {e}")
+            logging.warning(f"Błąd metadanych: {e}")
 
     # 2. Init Model
     if model_name == "Stanza":
@@ -1049,9 +1083,9 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
             try:
                 recovered_name = f"{output_parquet_file}.part_000_recovered"
                 os.rename(output_parquet_file, recovered_name)
-                print(f"Odzyskano główny plik jako: {recovered_name}")
+                logging.warning(f"Odzyskano główny plik jako: {recovered_name}")
             except Exception as e:
-                print(f"Nie udało się zmienić nazwy głównego pliku: {e}")
+                logging.warning(f"Nie udało się zmienić nazwy głównego pliku: {e}")
         # ----------------------------------------
 
         existing_parts = glob.glob(f"{output_parquet_file}.part_*")
@@ -1092,7 +1126,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
 
                     temp_files_created.append(p_file)
                 except Exception as e:
-                    print(f"Błąd odtwarzania punktu kontrolnego {p_file}: {e}")
+                    logging.warning(f"Błąd odtwarzania punktu kontrolnego {p_file}: {e}")
 
             # --- MOST DLA STARYCH CHECKPOINTÓW Z METADANYMI ---
             for fname, meta in metadata_dict.items():
@@ -1308,7 +1342,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
         for i, part_file in enumerate(temp_files_created):
             progress_bar_current.set((i + 1) / total_parts)
 
-            print(f"Scalam część {i + 1} z {total_parts}: {part_file}")
+            logging.warning(f"Scalam część {i + 1} z {total_parts}: {part_file}")
 
             status_label.configure(text=f"Scalanie plików... (paczka {i + 1}/{total_parts})")
             app.update_idletasks()
@@ -1364,7 +1398,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     except Exception as e:
         # Tego brakowało! Teraz jeśli coś wybuchnie, zobaczysz dlaczego.
         error_msg = f"Wystąpił błąd krytyczny podczas scalania plików:\n{str(e)}"
-        print(error_msg)
+        logging.warning(error_msg)
         app.after(0, lambda: messagebox.showerror("Błąd scalania", error_msg))
         status_label.configure(text="Błąd scalania!")
 

@@ -1539,68 +1539,104 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 
                 return True
 
+            def expand_mention(s_idx, e_limit, current_conds):
+                current_cond_list = current_conds if isinstance(current_conds, list) else [current_conds]
+                is_coref_m = False
+                for c in current_cond_list:
+                    if c and len(c) >= 1 and c[0] == "coref(M)":
+                        is_coref_m = True
+                        break
+
+                if not is_coref_m:
+                    return s_idx + 1  # Standardowy skok o 1 słowo
+
+                n_idx = s_idx + 1
+                c_tags = corefs[s_idx] if corefs is not None else []
+                if isinstance(c_tags, str): c_tags = [c_tags]
+
+                # Zbieramy ID klastra dla bieżącego słowa
+                active_c_ids = {t.split("-")[-1] for t in c_tags if t not in ("0", "O", "_", None)}
+                if not active_c_ids:
+                    return n_idx
+
+                # Pożeramy w prawo tak długo, jak długo kolejne słowa mają ten sam ID klastra
+                while n_idx < e_limit:
+                    next_tags = corefs[n_idx] if corefs is not None else []
+                    if isinstance(next_tags, str): next_tags = [next_tags]
+                    next_active = {t.split("-")[-1] for t in next_tags if t not in ("0", "O", "_", None)}
+
+                    shared = active_c_ids.intersection(next_active)
+                    if shared:
+                        active_c_ids = shared
+                        n_idx += 1
+                    else:
+                        break
+                return n_idx
+
             def match_pattern(start_idx, cond_list):
-                if not cond_list:
-                    return start_idx
+                if not cond_list: return start_idx
                 first = cond_list[0]
 
                 if isinstance(first, tuple) and first and first[0] == "repeat":
-                    base_cond, min_rep, max_rep = first[1], first[2], first[3]
+                    base_cond = first[1]
+                    min_rep = first[2]
+                    max_rep = first[3]
 
-                    # --- ZMIANA: range(max_rep, min_rep - 1, -1) ---
-                    # Idziemy od największej liczby powtórzeń do najmniejszej
                     for count in range(max_rep, min_rep - 1, -1):
                         new_idx, valid = start_idx, True
                         for _ in range(count):
                             if new_idx >= num_tokens:
-                                valid = False;
-                                break
-                            if not match_conditions(new_idx, base_cond if isinstance(base_cond, list) else [base_cond]):
-                                valid = False;
-                                break
-                            new_idx += 1
+                                valid = False; break
+                            base_cond_list = base_cond if isinstance(base_cond, list) else [base_cond]
+                            if not match_conditions(new_idx, base_cond_list):
+                                valid = False; break
+                            # --- Używamy ekspansji zamiast new_idx += 1 ---
+                            new_idx = expand_mention(new_idx, num_tokens, base_cond_list)
 
                         if valid:
-                            # Jeśli najdłuższy ciąg pasuje, sprawdź resztę zapytania
                             remainder = match_pattern(new_idx, cond_list[1:])
                             if remainder is not None:
                                 return remainder
                     return None
                 else:
-
-                    if start_idx >= num_tokens or not match_conditions(start_idx, first):
+                    first_cond_list = first if isinstance(first, list) else [first]
+                    if start_idx >= num_tokens or not match_conditions(start_idx, first_cond_list):
                         return None
-                    return match_pattern(start_idx + 1, cond_list[1:])
+                    # --- Używamy ekspansji zamiast start_idx + 1 ---
+                    new_idx = expand_mention(start_idx, num_tokens, first_cond_list)
+                    return match_pattern(new_idx, cond_list[1:])
 
             def match_pattern_in_range(start_idx, cond_list, end_limit):
-                if not cond_list:
-                    return start_idx
+                if not cond_list: return start_idx
                 first = cond_list[0]
                 if isinstance(first, tuple) and first and first[0] == "repeat":
                     base_cond = first[1]
                     min_rep = first[2]
                     max_rep = first[3]
 
-                    # --- KLUCZOWA ZMIANA: range(max_rep, min_rep - 1, -1) ---
                     for count in range(max_rep, min_rep - 1, -1):
                         new_idx = start_idx
                         valid = True
                         for _ in range(count):
-                            if new_idx >= end_limit or not match_conditions(new_idx, base_cond if isinstance(base_cond,
-                                                                                                             list) else [
-                                base_cond]):
-                                valid = False
-                                break
-                            new_idx += 1
+                            if new_idx >= end_limit:
+                                valid = False; break
+                            base_cond_list = base_cond if isinstance(base_cond, list) else [base_cond]
+                            if not match_conditions(new_idx, base_cond_list):
+                                valid = False; break
+                            # --- Używamy ekspansji zamiast new_idx += 1 ---
+                            new_idx = expand_mention(new_idx, end_limit, base_cond_list)
                         if valid:
                             remainder = match_pattern_in_range(new_idx, cond_list[1:], end_limit)
                             if remainder is not None:
                                 return remainder
                     return None
                 else:
-                    if start_idx >= end_limit or not match_conditions(start_idx, first):
+                    first_cond_list = first if isinstance(first, list) else [first]
+                    if start_idx >= end_limit or not match_conditions(start_idx, first_cond_list):
                         return None
-                    return match_pattern_in_range(start_idx + 1, cond_list[1:], end_limit)
+                    # --- Używamy ekspansji zamiast start_idx + 1 ---
+                    new_idx = expand_mention(start_idx, end_limit, first_cond_list)
+                    return match_pattern_in_range(new_idx, cond_list[1:], end_limit)
 
             def match_pattern_in_sentence(start_idx, cond_list, sentence_ids):
                 sent_id = sentence_ids[start_idx]
@@ -3539,13 +3575,17 @@ def update_highlights():
         current_theme = motyw.get()  # Pobieramy aktualny motyw ("ciemny" lub "jasny")
 
         if current_theme == "ciemny":
-            # Pastelowe, jasne kolory - idealne do ciemnego tła (#1F2328)
-            colors_ner = ["#FF9D9A", "#9DFF9A", "#9A9DFF", "#FF9AFF", "#FFFF9A", "#9AFFFF", "#FFC99A", "#C99AFF"]
-            colors_coref = ["#FFB347", "#84B6F4", "#FDCAE1", "#CFCFC4", "#B0E0E6", "#FDFD96", "#FF6961", "#77DD77"]
+            colors_ner = ["#FF9D9A", "#9DFF9A", "#9A9DFF", "#FF9AFF", "#FFFF9A", "#9AFFFF", "#FFC99A", "#C99AFF",
+                          "#FFA07A", "#20B2AA", "#778899", "#9370DB"]
+            colors_coref = ["#FFB347", "#84B6F4", "#FDCAE1", "#CFCFC4", "#B0E0E6", "#FDFD96", "#FF6961", "#77DD77",
+                            "#F08080", "#E6E6FA", "#DDA0DD", "#40E0D0", "#FFDAB9", "#98FB98", "#AFEEEE", "#DB7093",
+                            "#F0E68C", "#E0FFFF"]
         else:
-            # Ciemne, nasycone kolory - czytelne na jasnym tle (#E6E8E8)
-            colors_ner = ["#B30000", "#006600", "#0000B3", "#800080", "#B35900", "#008080", "#D2143A", "#5900B3"]
-            colors_coref = ["#A0522D", "#2F4F4F", "#483D8B", "#8B0000", "#556B2F", "#008B8B", "#8B4513", "#4B0082"]
+            colors_ner = ["#B30000", "#006600", "#0000B3", "#800080", "#B35900", "#008080", "#D2143A", "#5900B3",
+                          "#8B0000", "#556B2F", "#2F4F4F", "#483D8B"]
+            colors_coref = ["#A0522D", "#2F4F4F", "#483D8B", "#8B0000", "#556B2F", "#008B8B", "#8B4513", "#4B0082",
+                            "#B22222", "#006400", "#8B008B", "#D2691E", "#0000CD", "#228B22", "#4682B4", "#C71585",
+                            "#DAA520", "#1E90FF"]
 
         palette = colors_ner if is_ner else colors_coref
         idx = sum(ord(c) for c in str(text)) % len(palette)
@@ -3763,8 +3803,10 @@ def highlight_entry(event=None):
 
     entry_query.tag_config("question", foreground=text_inside_quotation_color)
 
-    # --- Kolorowanie ról koreferencyjnych (H) i (P) ---
-    role_tags = {"(H)": "#D400FF", "(P)": "#00D4FF"}  # Fioletowy dla Head, Turkusowy dla Part
+
+    # --- Kolorowanie ról koreferencyjnych (H), (P) i (M) ---
+    role_tags = {"(H)": "#D400FF", "(P)": "#00D4FF",
+                 "(M)": "#FFD400"}  # Fioletowy (Head), Turkusowy (Part), Żółty (Mention)
 
     for role, color in role_tags.items():
         start_idx = "1.0"
@@ -4076,7 +4118,8 @@ class ConditionRow(ctk.CTkFrame):
             self.op_menu.configure(state="normal", values=list(self.op_map.keys()))
             self.coref_role_var = ctk.StringVar(value="Dowolna ranga")
             ctk.CTkOptionMenu(self.val_container, variable=self.coref_role_var,
-                              values=["Dowolna ranga", "(H) - Głowa", "(P) - Część"], width=130,
+                              # Dodajemy opcję (M)
+                              values=["Dowolna ranga", "(H) - Głowa", "(P) - Część", "(M) - Cała wzmianka"], width=150,
                               **dropdown_kwargs).pack(side="left", padx=(0, 5))
 
             self.text_entry = ctk.CTkEntry(self.val_container, placeholder_text="Powiązane słowo...",
@@ -4199,6 +4242,8 @@ class ConditionRow(ctk.CTkFrame):
                 attr = "coref(H)"
             elif role == "(P) - Część":
                 attr = "coref(P)"
+            elif role == "(M) - Cała wzmianka":
+                attr = "coref(M)"
 
         # 3. Parametry okna (window_base / window_orth)
         if attr in ["window_base", "window_orth"]:
@@ -5970,7 +6015,7 @@ warning_label = ctk.CTkLabel(
 
 # Utworzenie PanedWindow (widżetu z przeciąganym separatorem)
 # Top frame for pagination + entry/buttons
-paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor="sb_h_double_arrow", opaqueresize=False)
+paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor="size_we", opaqueresize=False)
 paned_window.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
 # Utworzenie dwóch głównych kontenerów dla lewej i prawej strony (one będą zmieniane przez separator)
