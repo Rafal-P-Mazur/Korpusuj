@@ -49,7 +49,7 @@ Dodatkowe kolumny są zachowywane i mogą być później używane do filtrowania
 Program obsługuje dwa tryby anotacji:
 
 - **Stanza** — pełny potok analityczny nastawiony na maksymalną dokładność (tokenizacja, lematyzacja, POS, NER, składnia zależnościowa oraz koreferencja).
-- **spaCy** — lżejszy i znacznie szybszy potok NLP (tokenizacja, lematyzacja, POS, NER, składnia zależnościowa), zoptymalizowany pod kątem wydajności przy dużych zbiorach danych.
+- **spaCy** — lżejszy i znacznie szybszy potok NLP (tokenizacja, lematyzacja, POS, NER, składnia zależnościowa), zoptymalizowany pod kątem wydajności przy dużych zbiorach danych. Do koreferencji wykorzystywany jest model Herference.
 
 Modele są pobierane przy pierwszym użyciu i przechowywane lokalnie w katalogu `models/`.
 
