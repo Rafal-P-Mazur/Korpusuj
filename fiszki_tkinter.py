@@ -544,8 +544,22 @@ function hsearchContent() {{
     title = f"Fiszka: {choice}"
     window_accessor = lambda: pywebview_window
     api = EditorAPI(file_path=file_path, encoding_used=encoding_used, window_accessor=window_accessor)
-    pywebview_window = webview.create_window(title, html=html_template, js_api=api, width=900, height=600)
-    webview.start(debug=False)
+    import platform
+
+    # create window
+    pywebview_window = webview.create_window(
+        title,
+        html=html_template,
+        js_api=api,
+        width=900,
+        height=600
+    )
+
+    # start webview - MUST be on main thread on macOS
+    if platform.system() == "Darwin":
+        webview.start(gui='cocoa', debug=False)
+    else:
+        webview.start(debug=False)
 
 
 def load_file_content(choice):

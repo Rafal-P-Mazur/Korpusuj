@@ -233,12 +233,18 @@ ROMAN_RECORD_START_RE = re.compile(
 
 # Silny koniec zdania
 STRONG_SENT_END_RE = re.compile(
-    r'[.!?][\'")\]]*(?:\s+(?=[A-ZĄĆĘŁŃÓŚŹŻ])|$)'
+    r'(?<!\bul)(?<!\bUl)(?<!\bnp)(?<!\bNp)(?<!\btzw)(?<!\bdr)(?<!\bks)(?<!prof)(?<!mgr)(?<!m\.in)(?<!\bal)(?<!\bAl)(?<!\blok)(?<!\bpl)(?<!\bPl)[.!?][\'")\]]*(?:\s+(?=[A-ZĄĆĘŁŃÓŚŹŻ])|$)'
 )
 
 # Separator pól dla rekordów półtabelarycznych
 FIELD_BREAK_RE = re.compile(
     r'(?:\s[-–—]\s|;\s+|:\s+)'
+)
+
+# NOWE: Ukryta granica listy (np. "prawnik Izabela Aleksandra")
+# Szuka: mała litera -> spacja -> (Wielka litera + małe) -> spacja -> (Wielka litera)
+IMPLIED_RECORD_BREAK_RE = re.compile(
+    r'(?<=[a-ząćęłńóśźż])\s+(?=[A-ZĄĆĘŁŃÓŚŹŻ][a-ząćęłńóśźż]+\s+[A-ZĄĆĘŁŃÓŚŹŻ])'
 )
 
 # Słabszy fallback po interpunkcji
@@ -399,20 +405,28 @@ def soft_cut_preserve(
             if last_match:
                 cut = search_start + last_match.end()
             else:
-                # 3) Słabsza interpunkcja
+                # 2.5) Ukryta granica listy (bezinterpunkcyjne przejście na Imię i Nazwisko)
                 last_match = None
-                for m in SOFT_BREAK_RE.finditer(window):
+                for m in IMPLIED_RECORD_BREAK_RE.finditer(window):
                     last_match = m
                 if last_match:
-                    cut = search_start + last_match.end()
+                    # Tniemy na spacji (start dopasowania), żeby nie ucinać Imienia
+                    cut = search_start + last_match.start()
                 else:
-                    # 4) Ostatnia spacja
-                    last_space = window.rfind(" ")
-                    if last_space != -1:
-                        cut = search_start + last_space
+                    # 3) Słabsza interpunkcja
+                    last_match = None
+                    for m in SOFT_BREAK_RE.finditer(window):
+                        last_match = m
+                    if last_match:
+                        cut = search_start + last_match.end()
                     else:
-                        # 5) Twarde cięcie
-                        cut = end
+                        # 4) Ostatnia spacja
+                        last_space = window.rfind(" ")
+                        if last_space != -1:
+                            cut = search_start + last_space
+                        else:
+                            # 5) Twarde cięcie
+                            cut = end
 
         if cut <= start:
             cut = end
@@ -430,30 +444,41 @@ def chunk_structured_records(
     structured_chunk_size: int = 4000,
     max_records_per_chunk: int = 6,
     backtrack_window: int = 800,
+    max_dotless_chars: int = 800,       # <-- NOWE: Przekazany próg tasiemca
+    min_piece_in_danger: int = 1200     # <-- NOWE: Przekazany bezpieczny limit
 ) -> list[str]:
     """
     Dedykowane, LOSSLESS cięcie dla tekstów rekordowych / wyliczeniowych.
-
-    Założenia:
-      - rekord jest podstawową jednostką,
-      - preambuła jest traktowana osobno,
-      - rekordy pakujemy do mniejszego limitu niż zwykła narracja,
-      - jeśli pojedynczy rekord jest za długi, tniemy go miękko.
+    Teraz z dynamicznym progiem bezpieczeństwa dla "tasiemców".
     """
     effective_limit = min(chunk_size, structured_chunk_size)
     preamble, records = split_structured_segments(text, style=style)
 
     out: list[str] = []
 
+    # --- NOWE: Dynamiczny estymator limitu dla konkretnego bloku ---
+    def get_dynamic_limit(block: str) -> int:
+        last_end = 0
+        for m in STRONG_SENT_END_RE.finditer(block):
+            if m.start() - last_end > max_dotless_chars:
+                return min(effective_limit, min_piece_in_danger)
+            last_end = m.end()
+        # Sprawdzamy resztówkę po ostatniej kropce
+        if len(block) - last_end > max_dotless_chars:
+            return min(effective_limit, min_piece_in_danger)
+        return effective_limit
+    # ---------------------------------------------------------------
+
     # 1) Preambuła
     if preamble:
-        if len(preamble) <= effective_limit:
+        limit = get_dynamic_limit(preamble)
+        if len(preamble) <= limit:
             out.append(preamble)
         else:
             out.extend(
                 soft_cut_preserve(
                     preamble,
-                    limit=effective_limit,
+                    limit=limit,
                     backtrack_window=backtrack_window,
                 )
             )
@@ -472,21 +497,23 @@ def chunk_structured_records(
             current_records = 0
 
     for rec in records:
-        # Rekord większy niż limit -> nie mieszamy z innymi, tniemy miękko
-        if len(rec) > effective_limit:
+        limit = get_dynamic_limit(rec) # Badamy konkretny rekord
+
+        # Rekord większy niż jego dynamiczny limit -> tniemy miękko
+        if len(rec) > limit:
             flush()
             out.extend(
                 soft_cut_preserve(
                     rec,
-                    limit=effective_limit,
+                    limit=limit,
                     backtrack_window=backtrack_window,
                 )
             )
             continue
 
-        # Ograniczenie po rozmiarze i liczbie rekordów
+        # Ograniczenie po rozmiarze i liczbie rekordów (uwzględnia dynamiczny limit!)
         if current_parts and (
-            current_len + len(rec) > effective_limit
+            current_len + len(rec) > limit
             or current_records >= max_records_per_chunk
         ):
             flush()
@@ -510,14 +537,6 @@ def chunk_text_safe(
 ) -> list[str]:
     """
     Dzieli tekst na NLP-przyjazne fragmenty.
-
-    Tryby:
-      - structured (numeric / letter / bullet / roman)
-      - zwykła narracja
-
-    UWAGA:
-      Funkcja jest LOSSLESS: nie zmienia treści wejścia.
-      To ważne dla offsetów downstream.
     """
     # 1) ROUTING: tekst rekordowy / wyliczeniowy
     style = detect_record_style(text)
@@ -529,11 +548,15 @@ def chunk_text_safe(
             structured_chunk_size=structured_chunk_size,
             max_records_per_chunk=max_records_per_chunk,
             backtrack_window=max(backtrack_window, 800),
+            max_dotless_chars=max_dotless_chars,       # <-- PRZEKAZUJEMY
+            min_piece_in_danger=min_piece_in_danger    # <-- PRZEKAZUJEMY
         )
 
     # 2) ZWYKŁY TEKST
-    ANY_PUNCT_GAP_RE = re.compile(r'[.!?,\-;:][\'")\]]*\s+')
-    PARA_END_RE = re.compile(r'[.!?][\'")\]]*\s*$')
+    ANY_PUNCT_GAP_RE = re.compile(r'[.!?,\-;—–:][\'")\]]*\s+')
+    PARA_END_RE = re.compile(
+        r'(?<!\b[a-ząćęłńóśźż])(?<!\b[a-ząćęłńóśźż]{2})(?<!\b[a-ząćęłńóśźż]{3})[.!?][\'")\]]*\s*$'
+    )
 
     chunks: list[str] = []
     paragraphs = text.split("\n")
@@ -1664,7 +1687,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     meta_json_bytes = json.dumps(metadata_export, ensure_ascii=False).encode('utf-8')
 
     final_writer = None
-    reference_columns = None  # <--- NOWA ZMIENNA ZAPAMIĘTUJĄCA WZÓR
+    reference_columns = None
 
     try:
         total_parts = len(temp_files_created)

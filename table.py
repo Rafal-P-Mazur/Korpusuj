@@ -3,8 +3,19 @@ import tkinter as tk
 
 
 class CustomTable(ctk.CTkFrame):
-    def __init__(self, master, headers, data, min_column_widths, justify_list, rows_per_page, fulltext_data, search_callback=None, search_column_index=1, sort_callback=None, sortable=True, **kwargs):
+    def __init__(self, master, headers, data, min_column_widths, justify_list, rows_per_page, fulltext_data,
+                 search_callback=None, search_column_index=1, sort_callback=None, sortable=True, **kwargs):
+
+        # --- POPRAWKA 1: Usuwamy niewidoczny margines (padding) ramki ---
+        kwargs.setdefault("corner_radius", 0)
+        kwargs.setdefault("fg_color", "transparent")
+
         super().__init__(master, **kwargs)
+        import platform
+        if platform.system() == "Darwin":
+            self.safe_cursor = "arrow"
+        else:
+            self.safe_cursor = "hand2"
         self.sortable = sortable
         self._initializing = True
         self._suppress_resize = False
@@ -38,11 +49,13 @@ class CustomTable(ctk.CTkFrame):
 
         # Ustawiamy siatkę dla głównego kontenera tabeli
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)
         self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
 
-        self.canvas = ctk.CTkCanvas(self, background='#1d1e1e', highlightthickness=0)
+        # Dodane bd=0, aby usunąć 2-pikselową natywną ramkę płótna
+        self.canvas = ctk.CTkCanvas(self, background='#1d1e1e', highlightthickness=0, bd=0)
         self.canvas.grid(row=0, column=0, sticky="nsew")
-
         # Pasek pionowy
         self.scrollbar = ctk.CTkScrollbar(self, orientation="vertical", command=self.canvas.yview)
         self.scrollbar.grid(row=0, column=1, sticky="ns")
@@ -270,7 +283,7 @@ class CustomTable(ctk.CTkFrame):
 
                 # --- TUTAJ ZMIANA ---
                 if self.sortable:
-                    header_label.configure(cursor="hand2")
+                    header_label.configure(cursor=self.safe_cursor)
                     header_label.bind("<Button-1>", lambda event, col=c: self.on_header_click(col))
                 # --------------------
 
@@ -291,7 +304,7 @@ class CustomTable(ctk.CTkFrame):
                         self.table_frame, text="", wraplength=self.min_column_widths[c],
                         anchor=self.text_anchors[c], justify=self.justify_list[c],
                         fg_color=row_color, text_color=self.text_colors[c],
-                        font=self.font, pady=10, padx=5, cursor="hand2"  # <--- KURSOR ŁAPKI
+                        font=self.font, pady=10, padx=5, cursor=self.safe_cursor  # <--- KURSOR ŁAPKI
                     )
                     label.grid(row=r, column=c, sticky="nsew")
 
@@ -355,7 +368,8 @@ class CustomTable(ctk.CTkFrame):
 
         # Zarządzanie pionowym paskiem (tylko grid!)
         if bbox and bbox[3] > canvas_height:
-            self.scrollbar.grid()
+            # --- POPRAWKA 3: Sztywne parametry pionowe ---
+            self.scrollbar.grid(row=0, column=1, sticky="ns")
             self.canvas.configure(yscrollcommand=self.scrollbar.set)
         else:
             self.scrollbar.grid_remove()
@@ -363,7 +377,8 @@ class CustomTable(ctk.CTkFrame):
 
         # Zarządzanie poziomym paskiem (tylko grid!)
         if bbox and bbox[2] > canvas_width:
-            self.h_scrollbar.grid()
+            # --- POPRAWKA 3: Sztywne parametry poziome ---
+            self.h_scrollbar.grid(row=1, column=0, sticky="ew")
             self.canvas.configure(xscrollcommand=self.h_scrollbar.set)
         else:
             self.h_scrollbar.grid_remove()

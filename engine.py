@@ -1,16 +1,161 @@
 import os
 import sys
+from pathlib import Path
+import subprocess
+import logging
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
-if sys.stdout is not None:
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+def launch_webview(target_path: str):
+    import os
+    import sys
+    import subprocess
+    from pathlib import Path
+
+    absolute_path = str(Path(target_path).resolve())
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--run-webview", absolute_path]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), "--run-webview", absolute_path]
+
+    logging.info(f"launch_webview -> {absolute_path}")
+    subprocess.Popen(cmd, creationflags=creationflags)
+
+if "--run-webview" in sys.argv:
+    try:
+        raw_target = sys.argv[sys.argv.index("--run-webview") + 1]
+
+        import webview
+        import platform
+        import urllib.parse
+        from pathlib import Path
+
+        # 1. Jeśli już dostaliśmy gotowy file:// URI -> użyj bez zmian
+        if str(raw_target).startswith("file://"):
+            file_url = raw_target
+            parsed = urllib.parse.urlparse(raw_target)
+            absolute_path = urllib.parse.unquote(parsed.path)
+            if os.name == "nt" and absolute_path.startswith("/"):
+                absolute_path = absolute_path.lstrip("/")
+        else:
+            # 2. Normalizacja ścieżki lokalnej (względnej lub bezwzględnej)
+            candidate = Path(raw_target)
+
+            if candidate.is_absolute():
+                resolved = candidate.resolve()
+            else:
+                search_bases = []
+
+                # katalog roboczy
+                search_bases.append(Path.cwd())
+
+                # katalog skryptu / exe
+                if getattr(sys, "frozen", False):
+                    search_bases.append(Path(os.path.dirname(sys.executable)))
+                else:
+                    search_bases.append(Path(os.path.dirname(os.path.abspath(__file__))))
+
+                # katalog zasobów PyInstaller
+                if hasattr(sys, "_MEIPASS"):
+                    search_bases.append(Path(sys._MEIPASS))
+
+                resolved = None
+                for base in search_bases:
+                    probe = (base / raw_target).resolve()
+                    if probe.exists():
+                        resolved = probe
+                        break
+
+                if resolved is None:
+                    resolved = (search_bases[0] / raw_target).resolve()
+
+            absolute_path = str(resolved)
+            file_url = "file:///" + urllib.parse.quote(
+                absolute_path.replace("\\", "/").lstrip("/")
+            )
+
+        if os.path.exists(absolute_path):
+            title = Path(absolute_path).name
+            if title.lower() == "report.html":
+                title = "Raport semantyczny"
+
+            webview.create_window(
+                title,
+                url=file_url,
+                width=1400,
+                height=900,
+                resizable=True,
+                text_select=True
+            )
+        else:
+            webview.create_window(
+                "Błąd",
+                html=f"""
+                <html>
+                  <body style="font-family: Arial; padding: 24px;">
+                    <h2>Nie znaleziono pliku</h2>
+                    <p>{absolute_path}</p>
+                  </body>
+                </html>
+                """
+            )
+
+        if platform.system() == "Darwin":
+            webview.start(gui="cocoa", debug=False)
+        else:
+            webview.start(debug=False)
+        sys.exit(0)
+
+    except Exception as e:
+        logging.error(f"Błąd Webview: {e}")
+        sys.exit(0)
+
+if "--run-semantic-trainer" in sys.argv:
+    try:
+        sys.argv.remove("--run-semantic-trainer")
+
+        # 2. Importujemy moduł (dzięki temu PyInstaller wie, że ma go spakować do .exe!)
+        import semantic_trainer
+
+        exit_code = semantic_trainer.main()
+        sys.exit(exit_code)
+    except Exception as e:
+
+        logging.info(f"Krytyczny błąd w procesie podrzędnym trainera: {e}")
+        sys.exit(1)
+
+if "--run-semantic-report" in sys.argv:
+    try:
+        sys.argv.remove("--run-semantic-report")
+        import semantic_reports_analytical_v7_1 as semantic_report
+        exit_code = semantic_report.main()
+        sys.exit(exit_code)
+    except Exception as e:
+        logging.info(f"Błąd procesu raportu semantycznego: {e}")
+        sys.exit(1)
+
+if "--run-fiszki" in sys.argv:
+    try:
+        val = sys.argv[sys.argv.index("--run-fiszki") + 1]
+        import fiszki_tkinter
+
+        fiszki_tkinter.load_file_content(val)
+    except Exception as e:
+        logging.info(f"Błąd Fiszek: {e}")
+    sys.exit(0)
+# =========================================================================
+
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
 if sys.stderr is not None:
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-import logging
 from logging.handlers import RotatingFileHandler
 import traceback
 import pandas as pd
+import networkx as nx
 import numpy as np
 import customtkinter as ctk
 import tkinter as tk
@@ -31,6 +176,9 @@ from tkinter import messagebox
 import pyarrow.parquet as pq
 from dateutil.relativedelta import relativedelta
 import calendar
+import time
+from word_profile import compute_word_profile, flatten_word_profile
+from sense_inducer import SenseInducer
 
 def notify_status(msg):
     # Sprawdzamy, czy launcher jest uruchomiony i ma funkcję update_status
@@ -39,13 +187,2303 @@ def notify_status(msg):
 
 notify_status("Wczytywanie bibliotek systemowych...")
 
+
+# ==========================================
+# MODUŁ SEMANTYCZNY
+# ==========================================
+class SemanticEngine:
+    """Klasa zarządzająca logiką, ładowaniem i pamięcią sieci semantycznej."""
+
+    def __init__(self):
+        self.df_neighbors = None
+        self.index = None
+        self.knn_set = None
+
+        # Nowe zmienne dla WSD
+        self.vectors = None
+        self.senses_cache = {}
+
+        # NOWE: Cache dla kontekstu grafowego, żeby nie zamrozić UI
+        self.graph_sense_cache = {}
+
+        self.hubness_index = {}  # Dodane: cache na preobliczoną hubowość
+
+    def network_exists(self, current_corpus_path):
+        """Sprawdza, czy na dysku istnieją pliki wygenerowanej sieci semantycznej dla danego korpusu."""
+        if not current_corpus_path:
+            return False
+        base_path = str(Path(current_corpus_path).with_suffix(""))
+        return any(os.path.exists(p) for p in [
+            f"{base_path}.wektor",
+            f"{base_path}.semantic.fasttext.neighbors.parquet",
+            f"{base_path}.semantic.neighbors.parquet"
+        ])
+
+    def open_training_setup(self, parent_app, current_corpus_name, current_corpus_path, theme, on_success_callback):
+        """Otwiera okno UI z parametrami przed uruchomieniem budowania sieci semantycznej."""
+        if not current_corpus_path:
+            messagebox.showwarning("Brak danych", "Najpierw wybierz korpus z menu po lewej stronie!")
+            return
+
+        setup_win = ctk.CTkToplevel(parent_app)
+        setup_win.title("Konfiguracja sieci semantycznej")
+        setup_win.geometry("450x450")
+        setup_win.configure(fg_color=theme["app_bg"])
+        setup_win.attributes("-topmost", True)
+
+        ctk.CTkLabel(setup_win, text=f"Ustawienia sieci: {current_corpus_name}",
+                     font=("Verdana", 14, "bold")).pack(pady=(20, 15))
+
+        frame = ctk.CTkFrame(setup_win, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=30)
+
+        def add_param(label_text, default_val, is_dropdown=False, options=None):
+            row = ctk.CTkFrame(frame, fg_color="transparent")
+            row.pack(fill="x", pady=5)
+            ctk.CTkLabel(row, text=label_text, width=180, anchor="w").pack(side="left")
+            if is_dropdown:
+                var = ctk.StringVar(value=default_val)
+                w = ctk.CTkOptionMenu(row, variable=var, values=options)
+            else:
+                var = ctk.StringVar(value=str(default_val))
+                w = ctk.CTkEntry(row, textvariable=var)
+            w.pack(side="right", fill="x", expand=True, padx=(10, 0))
+            return var
+
+        # Parametry
+        algo_var = add_param("Algorytm (--algo):", "fasttext", True, ["fasttext", "word2vec"])
+        min_count_var = add_param("Min. wystąpień (--min-count):", "10")
+        epochs_var = add_param("Epoki (--epochs):", "20")
+        window_var = add_param("Rozmiar okna (--window):", "15")
+        vocab_var = add_param("Słownik (--neighbors...):", "10000")
+        precomp_var = add_param("Zapisz top N (--precompute...):", "200")
+
+        def on_start():
+            params = {
+                "algo": algo_var.get(),
+                "min_count": min_count_var.get(),
+                "epochs": epochs_var.get(),
+                "window": window_var.get(),
+                "vocab": vocab_var.get(),
+                "precomp": precomp_var.get()
+            }
+            setup_win.destroy()
+            self._run_training_process(parent_app, current_corpus_name, current_corpus_path, theme, on_success_callback,
+                                       params)
+
+        ctk.CTkButton(setup_win, text="Rozpocznij budowanie", font=("Verdana", 12, "bold"),
+                      height=40, command=on_start).pack(pady=20, padx=30, fill="x")
+
+    def _run_training_process(self, parent_app, current_corpus_name, current_corpus_path, theme, on_success_callback,
+                              params):
+        """Właściwy proces budowania sieci (uruchamiany po zatwierdzeniu konfiguracji)."""
+        win = ctk.CTkToplevel(parent_app)
+        win.title("Budowanie sieci semantycznej")
+        win.geometry("600x450")
+        win.configure(fg_color=theme["app_bg"])
+        win.attributes("-topmost", True)
+
+        ctk.CTkLabel(win, text=f"Budowanie sieci dla: {current_corpus_name}",
+                     font=("Verdana", 14, "bold")).pack(pady=(15, 5))
+
+        progress = ctk.CTkProgressBar(win, mode="indeterminate", height=10)
+        progress.pack(fill="x", padx=20, pady=10)
+        progress.start()
+
+        log_box = ctk.CTkTextbox(win, wrap="word", font=("Consolas", 11),
+                                 fg_color="#1E1E1E", text_color="#00FF00")
+        log_box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        corpus_path_safe = str(Path(current_corpus_path).resolve())
+
+        def run_training_in_background():
+            if getattr(sys, "frozen", False):
+                # Wersja skompilowana (.exe) - wywołujemy bezpośrednio plik binarny z flagą
+                cmd = [sys.executable, "--run-semantic-trainer"]
+            else:
+                # Wersja skryptowa (.py) - wywołujemy interpreter, potem ścieżkę skryptu, potem flagę
+                cmd = [sys.executable, os.path.abspath(__file__), "--run-semantic-trainer"]
+            cmd.extend([
+                "--parquet", corpus_path_safe,
+                "--algo", params["algo"],
+                "--min-count", str(params["min_count"]),  # Zawsze bezpieczniej wymusić str()
+                "--epochs", str(params["epochs"]),
+                "--window", str(params["window"]),
+                "--neighbors-for-top-vocab", str(params["vocab"]),
+                "--precompute-neighbors", str(params["precomp"]),
+                "--no-lower",
+                "--no-full-model",
+                "--allowed-upos", "NOUN", "PROPN", "ADJ", "VERB"
+            ])
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            try:
+                process = subprocess.Popen(
+                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding='utf-8', errors='replace', bufsize=1, creationflags=creationflags
+                )  # ^^^ DODANO errors='replace' ^^^
+
+                for line in process.stdout:
+                    win.after(0, lambda l=line: (log_box.insert("end", l), log_box.see("end")))
+
+                process.wait()
+
+                if process.returncode == 0:
+                    win.after(0, lambda: log_box.insert("end", "\nBudowanie zakończone i spakowane pomyślnie!\n"))
+                    win.after(0, on_success_callback)
+                else:
+                    win.after(0, lambda: log_box.insert("end", f"\nWystąpił błąd (kod: {process.returncode})\n"))
+                    logging.error(f"Błąd procesu semantic_trainer.py. Kod: {process.returncode}")
+            except Exception as e:
+                win.after(0, lambda: log_box.insert("end", f"\nKrytyczny błąd uruchamiania: {e}\n"))
+                logging.error(f"Krytyczny błąd podczas uruchamiania treningu semantycznego: {e}", exc_info=True)
+            finally:
+                win.after(0, progress.stop)
+
+        threading.Thread(target=run_training_in_background, daemon=True).start()
+
+    def build_semantic_report(
+            self,
+            parent_app,
+            current_corpus_name,
+            current_corpus_path,
+            lemma,
+            theme,
+            open_report_callback,
+            params=None,
+    ):
+        if not current_corpus_path:
+            messagebox.showwarning("Brak danych", "Najpierw wybierz korpus z menu po lewej stronie!")
+            return
+
+        if not lemma or not str(lemma).strip():
+            messagebox.showwarning("Brak lemy", "Najpierw wybierz lub wpisz słowo centralne do raportu.")
+            return
+
+        params = params or {}
+        report_top_k = str(params.get("report_top_k", params.get("top_k", 0)))
+        min_similarity = str(params.get("min_similarity", 0.30))
+
+        safe_lemma = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(lemma).strip())
+        corpus_base = Path(current_corpus_path).with_suffix("")
+        report_dir = corpus_base.parent / f"{corpus_base.name}.semantic_reports" / safe_lemma
+
+        win = ctk.CTkToplevel(parent_app)
+        win.title("Generowanie raportu semantycznego")
+        win.geometry("700x500")
+        win.configure(fg_color=theme["app_bg"])
+        win.attributes("-topmost", True)
+
+        ctk.CTkLabel(
+            win,
+            text=f"Raport semantyczny: {lemma}",
+            font=("Verdana", 14, "bold")
+        ).pack(pady=(15, 5))
+
+        progress = ctk.CTkProgressBar(win, mode="indeterminate", height=10)
+        progress.pack(fill="x", padx=20, pady=10)
+        progress.start()
+
+        log_box = ctk.CTkTextbox(
+            win,
+            wrap="word",
+            font=("Consolas", 11),
+            fg_color="#1E1E1E",
+            text_color="#00FF00"
+        )
+        log_box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+
+        corpus_path_safe = str(Path(current_corpus_path).resolve())
+        report_dir_safe = str(report_dir.resolve())
+
+        def run_report_in_background():
+            if getattr(sys, "frozen", False):
+                cmd = [sys.executable, "--run-semantic-report"]
+            else:
+                cmd = [sys.executable, os.path.abspath(__file__), "--run-semantic-report"]
+
+            report_top_k = str(params.get("report_top_k", params.get("top_k", 0)))
+            min_similarity = str(params.get("min_similarity", 0.30))
+
+            cmd.extend([
+                "--artifacts", corpus_path_safe,
+                "--lemma", str(lemma).strip(),
+                "--output-dir", report_dir_safe,
+
+                "--top-k-neighbors", report_top_k,
+                "--min-similarity", min_similarity,
+
+                "--top-core", "12",
+                "--top-distinctive", "12",
+                "--top-interpretive", "12",
+
+                "--table-size", "40",
+                "--tail-size", "20",
+                "--orphan-size", "50",
+
+                "--globality-threshold", "0.40",
+                "--frame-edge-threshold", "0.42",
+                "--bridge-similarity-threshold", "0.45",
+                "--frame-assignment-min-similarity", "0.10",
+                "--core-quantile", "0.60",
+                "--max-plot-words", "120",
+            ])
+
+
+            creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1,
+                    creationflags=creationflags
+                )
+
+                for line in process.stdout:
+                    win.after(0, lambda l=line: (log_box.insert("end", l), log_box.see("end")))
+
+                process.wait()
+
+                if process.returncode == 0:
+                    html_path = str((report_dir / "report.html").resolve())
+                    win.after(0, lambda: log_box.insert("end", "\nRaport wygenerowany pomyślnie.\n"))
+                    win.after(0, lambda: open_report_callback(html_path))
+                else:
+                    win.after(0,
+                              lambda: log_box.insert("end", f"\nWystąpił błąd raportu (kod: {process.returncode})\n"))
+                    logging.error(f"Błąd procesu semantic_reports_analytical_v7_1.py. Kod: {process.returncode}")
+
+            except Exception as e:
+                win.after(0, lambda: log_box.insert("end", f"\nKrytyczny błąd uruchamiania: {e}\n"))
+                logging.error(f"Krytyczny błąd podczas generowania raportu semantycznego: {e}", exc_info=True)
+            finally:
+                win.after(0, progress.stop)
+
+        threading.Thread(target=run_report_in_background, daemon=True).start()
+
+
+    def load_neighbors(self, current_corpus_path):
+        import numpy as np
+        if not current_corpus_path:
+            self.df_neighbors = None
+            self.index = None
+            self.knn_set = None
+            self.vectors = None
+            self.senses_cache = {}
+            self.graph_sense_cache = {}
+            self.hubness_index = {}  # <--- POPRAWKA 5: Reset przy braku korpusu
+            return
+
+        import zipfile
+        corpus_path_obj = Path(current_corpus_path)
+        base_path = str(corpus_path_obj.with_suffix(""))
+        wektor_path = f"{base_path}.wektor"
+
+        loaded_df = None
+        loaded_vectors_df = None
+
+        if os.path.exists(wektor_path):
+            try:
+                with zipfile.ZipFile(wektor_path, 'r') as zf:
+                    parquet_files = [f for f in zf.namelist() if f.endswith(".neighbors.parquet")]
+                    vector_files = [f for f in zf.namelist() if f.endswith(".vectors.parquet")]
+
+                    if parquet_files:
+                        with zf.open(parquet_files[0]) as f:
+                            loaded_df = pd.read_parquet(f)
+                    if vector_files:
+                        with zf.open(vector_files[0]) as f:
+                            loaded_vectors_df = pd.read_parquet(f)
+
+                    notify_status(f"Dane sieci semantycznej załadowane: {os.path.basename(wektor_path)}")
+            except Exception as e:
+                logging.error(f"Błąd odczytu archiwum .wektor sieci semantycznej: {e}", exc_info=True)
+        else:
+            # Stare formaty offline
+            for suffix in [".semantic.fasttext.neighbors.parquet", ".semantic.neighbors.parquet"]:
+                p = f"{base_path}{suffix}"
+                if os.path.exists(p):
+                    try:
+                        loaded_df = pd.read_parquet(p)
+                        notify_status(f"Dane sieci semantycznej załadowane (stary format): {os.path.basename(p)}")
+                        break
+                    except Exception as e:
+                        logging.error(f"Błąd odczytu pliku parquet sieci semantycznej {p}: {e}", exc_info=True)
+
+            v_path = f"{base_path}.semantic.vectors.parquet"
+            if os.path.exists(v_path):
+                try:
+                    loaded_vectors_df = pd.read_parquet(v_path)
+                except Exception as e:
+                    logging.error(f"Błąd odczytu wektorów: {e}")
+
+        self.df_neighbors = loaded_df
+
+        # Inicjalizacja słownika wektorów z DataFrame
+        if loaded_vectors_df is not None:
+            self.vectors = {row['lemma']: np.array(row['vector']) for _, row in loaded_vectors_df.iterrows()}
+        else:
+            self.vectors = None
+            logging.warning("Sieć semantyczna załadowana, ale brakuje wektorów (WSD nie będzie działać).")
+
+        self.senses_cache = {}
+        self.graph_sense_cache = {}
+
+        if loaded_df is not None:
+            self.index = {}
+            self.knn_set = {}
+            has_freq = 'neighbor_freq' in loaded_df.columns
+            loaded_df = loaded_df.sort_values(by=['lemma', 'similarity'], ascending=[True, False])
+            MUTUAL_M = 50
+
+            for lemma, group in loaded_df.groupby('lemma'):
+                neighbors = group['neighbor'].tolist()
+                scores = group['similarity'].tolist()
+                freqs = group['neighbor_freq'].tolist() if has_freq else [0] * len(neighbors)
+
+                self.index[lemma] = list(zip(neighbors, scores, freqs))
+                self.knn_set[lemma] = set(neighbors[:MUTUAL_M])
+        else:
+            self.index = None
+            self.knn_set = None
+
+
+
+        # Resetujemy przy każdym ładowaniu nowego modelu/sąsiadów
+        self.hubness_index = {}
+
+        if not self.index:
+            return
+
+        # ========================================================
+        # NOWA LOGIKA HUBNOŚCI: Globalne "In-Degree"
+        # ========================================================
+        # Prawdziwy hub to słowo, które bardzo często pojawia się w
+        # listach sąsiadów INNYCH słów. Liczymy globalną frekwencję.
+        hub_counts = {}
+        for lemma, neighbors in self.index.items():
+            for n_word, n_score, _ in neighbors:
+                # Bierzemy pod uwagę tylko w miarę silne relacje (>0.40)
+                if float(n_score) >= 0.40:
+                    hub_counts[n_word] = hub_counts.get(n_word, 0) + 1
+
+        counts = list(hub_counts.values())
+        if not counts:
+            return
+
+        # Wyznaczamy dynamiczne statystyki populacji
+        # (dzięki temu algorytm zadziała i dla małych, i dla gigantycznych korpusów)
+        import numpy as np
+        p50 = float(np.percentile(counts, 50))  # Mediana
+        max_count = float(max(counts)) if counts else 1.0  # Absolutny król hubów
+
+        all_words = set(self.index.keys()).union(set(hub_counts.keys()))
+
+        for word in all_words:
+            c = hub_counts.get(word, 0)
+
+            if c <= p50:
+                self.hubness_index[word] = 0.0
+            else:
+                # Skala logarytmiczna: hiper-huby dostają ~1.0, huby domenowe wyraźnie mniej
+                numerator = math.log((c - p50) + 1)
+                denominator = math.log((max_count - p50) + 1) if max_count > p50 else 1.0
+
+                self.hubness_index[word] = min(1.0, numerator / denominator)
+
+    def get_max_available_neighbors(self):
+        """Zwraca maksymalną liczbę sąsiadów dostępną w wczytanym indeksie (ze słownika)."""
+        if self.index:
+            # Pobieramy pierwszy z brzegu wpis i sprawdzamy długość listy jego sąsiadów
+            first_key = next(iter(self.index))
+            return len(self.index[first_key])
+        return 0
+
+    def get_neighbors(self, word, top_n=25):
+        """Pobiera sąsiadów z uwzględnieniem limitu top_n."""
+        if self.index is None:
+            return word, []
+
+        search_word = word.strip()
+        if search_word in self.index:
+            return search_word, self.index[search_word][:top_n]
+        elif search_word.lower() in self.index:
+            return search_word.lower(), self.index[search_word.lower()][:top_n]
+        elif search_word.capitalize() in self.index:
+            return search_word.capitalize(), self.index[search_word.capitalize()][:top_n]
+        return search_word, []
+
+    def is_mutual_knn(self, u: str, v: str) -> bool:
+        # [BEZ ZMIAN]
+        if self.knn_set is None:
+            return False
+        return (v in self.knn_set.get(u, set())) and (u in self.knn_set.get(v, set()))
+
+    @staticmethod
+    def dynamic_bridge_threshold(freq_u: int, freq_v: int, base: float = 0.55) -> float:
+        # [BEZ ZMIAN]
+        import math
+        fu, fv = max(0, int(freq_u or 0)), max(0, int(freq_v or 0))
+        if fu == 0 and fv == 0: return base
+        hub = max(fu, fv)
+        boost = 0.06 * max(0.0, math.log10(hub / 2000)) if hub > 0 else 0.0
+        return max(0.55, min(0.78, base + boost))
+
+    # ==========================================
+    # NOWE METODY DO OBSŁUGI SENSÓW (WSD)
+    # ==========================================
+
+    def get_or_create_senses(self, lemma):
+        """Pobiera wygenerowane sensy z cache lub liczy je na żądanie."""
+        if not self.vectors or not self.index:
+            return []
+
+        # Używamy nowej metody do normalizacji klucza
+        actual_lemma = self._resolve_key(lemma, self.index)
+
+        # Sprawdzamy czy znormalizowane słowo jest też w wektorach
+        if not actual_lemma or actual_lemma not in self.vectors:
+            return []
+
+        # Jeśli już wcześniej policzyliśmy klastry dla tego słowa
+        if actual_lemma in self.senses_cache:
+            return self.senses_cache[actual_lemma]
+
+        # Liczymy klastry i zapisujemy do cache
+        from sense_inducer import SenseInducer
+        debug_semantic_frames = False
+        senses = SenseInducer.induce(
+            actual_lemma,
+            self.vectors,
+            self.index,
+            debug=debug_semantic_frames
+        )
+        self.senses_cache[actual_lemma] = senses
+
+        return senses
+
+    def get_cached_senses(self, lemma):
+        """
+        Zwraca sensy tylko wtedy, gdy są już w cache.
+        NIE uruchamia indukcji sensów.
+        """
+        if not self.vectors or not self.index:
+            return []
+
+        actual_lemma = self._resolve_key(lemma, self.index)
+
+        if not actual_lemma or actual_lemma not in self.vectors:
+            return []
+
+        return self.senses_cache.get(actual_lemma, [])
+
+
+
+    def disambiguate_instance(self, sentence_tokens, target_idx, lemma):
+        """Zwraca ID sensu dla podanego słowa w zdaniu. (Oczekuje tokenów w formie słowników np. {'lemma': '...'})"""
+        senses = self.get_or_create_senses(lemma)
+        if not senses:
+            return None
+
+        # Zbuduj wektor kontekstu omijając badane słowo
+        ctx = []
+        for i, tok in enumerate(sentence_tokens):
+            if i == target_idx:
+                continue
+            tok_lemma = tok.get("lemma", "").lower()
+            if tok_lemma in self.vectors:
+                ctx.append(self.vectors[tok_lemma])
+
+        if not ctx:
+            return None
+
+        ctx_vec = np.mean(ctx, axis=0)
+
+        best_sid = None
+        best_score = -1
+
+        for s in senses:
+            score = np.dot(ctx_vec, s["vector"]) / (np.linalg.norm(ctx_vec) * np.linalg.norm(s["vector"]) + 1e-9)
+            if score > best_score:
+                best_sid = s["sense_id"]
+                best_score = score
+
+        return best_sid
+
+    # ==========================================
+    # GRAPH-CONDITIONED EXPANSION (GRAPH-WSD)
+    # ==========================================
+
+    def _resolve_key(self, lemma, target_dict):
+        if not target_dict or not lemma:
+            return None
+        search_word = lemma.strip()
+        for candidate in [search_word, search_word.lower(), search_word.capitalize()]:
+            if candidate in target_dict:
+                return candidate
+        return None
+
+    def get_representation_vector(self, lemma, sense_id=None):
+        actual_lemma = self._resolve_key(lemma, self.vectors)
+        if not actual_lemma:
+            return None
+
+        if sense_id is None:
+            return self.vectors[actual_lemma]
+
+        senses = self.get_or_create_senses(actual_lemma)
+        for s in senses:
+            if s["sense_id"] == sense_id:
+                return s["vector"]
+        return self.vectors[actual_lemma]
+
+    def build_graph_context_vector(self, root_lemma, parent_lemma, root_sense_id=None, parent_sense_id=None,
+                                   local_neighbor_lemmas=None, alpha=0.45, beta=0.40, gamma=0.10, delta=0.05):
+        vecs = []
+        v_root = self.get_representation_vector(root_lemma, root_sense_id)
+        v_parent = self.get_representation_vector(parent_lemma, parent_sense_id)
+        v_parent_base = self.get_representation_vector(parent_lemma, None)
+
+        if v_root is not None: vecs.append((alpha, v_root))
+        if v_parent is not None: vecs.append((beta, v_parent))
+        if v_parent_base is not None: vecs.append((delta, v_parent_base))
+
+        if gamma > 0 and local_neighbor_lemmas and self.vectors:
+            local_vecs = []
+            for w in local_neighbor_lemmas:
+                norm_w = self._resolve_key(w, self.vectors)
+                if norm_w: local_vecs.append(self.vectors[norm_w])
+
+            if local_vecs:
+                v_local = np.mean(local_vecs, axis=0)
+                vecs.append((gamma, v_local))
+
+        if not vecs: return None
+        ctx = sum(weight * vec for weight, vec in vecs)
+        norm = np.linalg.norm(ctx) + 1e-9
+        return ctx / norm
+
+    def _cos(self, u, v):
+        if u is None or v is None: return -1.0
+        return float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9))
+
+    def choose_graph_sense(
+            self,
+            child_lemma,
+            root_lemma,
+            parent_lemma,
+            root_sense_id=None,
+            parent_sense_id=None,
+            local_neighbor_lemmas=None,
+            allow_induce=True
+    ):
+        actual_child = self._resolve_key(child_lemma, self.vectors)
+        actual_root = self._resolve_key(root_lemma, self.vectors) if root_lemma else None
+        actual_parent = self._resolve_key(parent_lemma, self.vectors) if parent_lemma else None
+
+        if not actual_child:
+            return None, None, -1.0
+
+        # allow_induce w kluczu cache, żeby nie mieszać:
+        # - fallbacku bez indukcji
+        # - pełnego wyniku po indukcji
+        cache_key = (
+            actual_child,
+            actual_root,
+            actual_parent,
+            root_sense_id,
+            parent_sense_id,
+            bool(allow_induce)
+        )
+
+        if cache_key in self.graph_sense_cache:
+            return self.graph_sense_cache[cache_key]
+
+        ctx_vec = self.build_graph_context_vector(
+            root_lemma,
+            parent_lemma,
+            root_sense_id,
+            parent_sense_id,
+            local_neighbor_lemmas
+        )
+        v_child_base = self.vectors.get(actual_child)
+
+        if ctx_vec is None:
+            res = (None, v_child_base, -1.0)
+            self.graph_sense_cache[cache_key] = res
+            return res
+
+        # KLUCZOWA ZMIANA:
+        # allow_induce=False -> tylko cache, bez odpalania SenseInducer
+        if allow_induce:
+            senses = self.get_or_create_senses(actual_child)
+        else:
+            senses = self.get_cached_senses(actual_child)
+
+        if not senses:
+            score = self._cos(ctx_vec, v_child_base) if v_child_base is not None else -1.0
+            res = (None, v_child_base, score)
+            self.graph_sense_cache[cache_key] = res
+            return res
+
+        best_sid, best_vec, best_score = None, None, -float("inf")
+        for s in senses:
+            sc = self._cos(ctx_vec, s["vector"])
+            if sc > best_score:
+                best_sid, best_vec, best_score = s["sense_id"], s["vector"], sc
+
+        res = (best_sid, best_vec, best_score)
+        self.graph_sense_cache[cache_key] = res
+        return res
+
+
+    def get_or_create_frames(self, lemma):
+        return self.get_or_create_senses(lemma)
+
+    def choose_graph_frame(
+            self,
+            child_lemma,
+            root_lemma,
+            parent_lemma,
+            root_sense_id=None,
+            parent_sense_id=None,
+            local_neighbor_lemmas=None
+    ):
+        return self.choose_graph_sense(
+            child_lemma,
+            root_lemma,
+            parent_lemma,
+            root_sense_id=root_sense_id,
+            parent_sense_id=parent_sense_id,
+            local_neighbor_lemmas=local_neighbor_lemmas
+        )
+
+    def get_halo_candidates(self, center_lemma, top_n=150, min_sim=0.35):
+        """Pobiera kandydatów do tła semantycznego (Halo) bez naruszania struktury grafu Core."""
+        if not self.index:
+            return []
+
+        matched_center = self._resolve_key(center_lemma, self.index)
+        if not matched_center:
+            return []
+
+        raw = self.index.get(matched_center, [])
+        candidates = []
+        for u, base_sim, _ in raw[:top_n]:
+            sim = float(base_sim)
+            if sim >= min_sim:
+                candidates.append((u, sim))
+
+        return candidates
+
+    def get_contextual_neighbors(self, center_lemma, top_n=25, root_lemma=None, parent_lemma=None, root_sense_id=None,
+                                 parent_sense_id=None, local_neighbor_lemmas=None, base_weight=0.45, parent_weight=0.30,
+                                 root_weight=0.20, local_weight=0.00, domain_lambda=0.20):
+        matched_center = self._resolve_key(center_lemma, self.index)
+        if not matched_center: return center_lemma, []
+
+        raw = self.index[matched_center]
+        root_vec = self.get_representation_vector(root_lemma, root_sense_id) if root_lemma else None
+        parent_vec = self.get_representation_vector(parent_lemma, parent_sense_id) if parent_lemma else None
+        local_vec = None
+
+        if local_weight > 0 and local_neighbor_lemmas and self.vectors:
+            local_vecs = [self.vectors[self._resolve_key(w, self.vectors)] for w in local_neighbor_lemmas if
+                          self._resolve_key(w, self.vectors)]
+            if local_vecs: local_vec = np.mean(local_vecs, axis=0)
+
+        out = []
+        # Przekazujemy lokalnych sąsiadów TYLKO gdy ich waga w eksperymencie jest > 0
+        effective_local = local_neighbor_lemmas if local_weight > 0 else None
+
+        for u, base_sim, freq in raw:
+            actual_u = self._resolve_key(u, self.vectors)
+            if not actual_u: continue
+
+            child_sid, child_vec, sense_score = self.choose_graph_sense(
+                actual_u,
+                root_lemma or matched_center,
+                parent_lemma or matched_center,
+                root_sense_id,
+                parent_sense_id,
+                effective_local,
+                allow_induce=False
+            )
+            s_parent = self._cos(parent_vec, child_vec) if parent_vec is not None else 0.0
+            s_root = self._cos(root_vec, child_vec) if root_vec is not None else 0.0
+            s_local = self._cos(local_vec, child_vec) if local_vec is not None else 0.0
+
+            # 1. Baza do karania - to Twoje dotychczasowe obliczenia
+            contextual_score = (
+                    base_weight * float(base_sim)
+                    + parent_weight * s_parent
+                    + root_weight * s_root
+                    + local_weight * s_local
+            )
+
+            # 2. Pobranie hubności dla słowa 'u' z indeksu
+            actual_candidate = self._resolve_key(u, self.hubness_index) or u
+            hubness_penalty = self.hubness_index.get(actual_candidate, 0.0)
+
+            # 3. Nałożenie kary na ostateczny wynik (z ujemnym score na selektywnych listach)
+            final_score = contextual_score - (domain_lambda * hubness_penalty)
+
+            out.append({
+                "lemma": u,
+                "base_similarity": float(base_sim),
+                "contextual_score": float(contextual_score),
+                "score": float(final_score),  # Ukarany score do rankingu
+                "graph_weight": float(contextual_score),  # Prawdziwe podobieństwo do krawędzi
+                "freq": int(freq),
+                "sense_id": child_sid,
+                "sense_score": float(sense_score)
+            })
+
+        out.sort(key=lambda x: x["score"], reverse=True)
+        # ZMIANA: Zwracamy wszystkie wyliczone i posortowane węzły (limit np. do 150)
+        return matched_center, out[:150]
+
+class SemanticNetworkViewer:
+    """Klasa renderująca i zarządzająca oknem grafu sieci semantycznej."""
+
+    def __init__(self, parent_app, engine, theme, insert_query_callback):
+        self.app = parent_app
+        self.engine = engine
+        self.theme = theme
+        self.on_insert_query = insert_query_callback
+
+        stack = get_plot_stack()
+        self.nx = stack["nx"]
+        self.FigureCanvasTkAgg = stack["FigureCanvasTkAgg"]
+
+        # --- STAN TOPOLOGICZNY ---
+        self.G = self.nx.Graph()
+        self.pos = {}
+        self.current_center = None
+
+        # --- STAN HALO ---
+        self.halo_nodes = {}
+
+        # --- ZMIENNE STANU GRAFU DLA KONTEKSTU ---
+        self.current_root = None
+        self.node_parent = {}
+        self.node_sense_id = {}
+        self.node_root = {}
+        self.expanded_centers_history = []
+
+        self.draw_static_bridges = False
+        self.draw_contextual_bridges = True
+
+        # --- WSD ---
+        self.selected_sense_id = None
+        self.selected_members = set()
+        self.current_senses = []
+        self.last_neighbors = []
+
+        self.win = ctk.CTkToplevel(self.app)
+        self.win.title("Sieć semantyczna")
+        self.win.geometry("1400x750")
+        self.win.configure(fg_color=self.theme["app_bg"])
+        self.win.attributes("-topmost", True)
+
+
+        self.domain_lambda_var = tk.DoubleVar(value=0.20)
+
+        self.layout_seed_var = ctk.StringVar(value="")
+
+        # Inicjalizacja UI (w tym self.ax i self.canvas)
+        self._build_ui(stack)
+
+        # TOOLTIP: Inicjalizacja po zbudowaniu self.ax
+        self._init_tooltip()
+
+        # Podpięcie zdarzeń interakcji (Hover + Click)
+        self.canvas.mpl_connect("motion_notify_event", self.on_hover)
+        self.canvas.mpl_connect("button_press_event", self.on_click)
+
+    def _init_tooltip(self):
+        """Pomocnik bezpiecznie odtwarzający tooltip po wyczyszczeniu osi."""
+        if hasattr(self, 'annot'):
+            try:
+                self.annot.remove()
+            except Exception:
+                pass
+
+        self.annot = self.ax.annotate(
+            "", xy=(0, 0), xytext=(15, 15),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.4", fc="#ffffe0", ec="black", lw=1, alpha=0.9),
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3")
+        )
+        self.annot.set_visible(False)
+        self.annot.set_zorder(10)
+
+    def _get_stable_angle(self, *parts):
+        """Generuje stabilny kąt (w radianach) używając kryptograficznego hasha."""
+        import hashlib
+        import math
+        key = "::".join(parts).encode("utf-8")
+        digest = hashlib.blake2b(key, digest_size=8).hexdigest()
+        return math.radians(int(digest, 16) % 360)
+
+    def _build_ui(self, stack):
+        self.graph_container = ctk.CTkFrame(self.win, fg_color="white", corner_radius=12)
+        self.graph_container.pack(side="left", fill="both", expand=True, padx=20, pady=20)
+
+        self.side_panel = ctk.CTkFrame(self.win, fg_color="transparent", width=500)
+        self.side_panel.pack(side="right", fill="y", padx=(0, 20), pady=20)
+        self.side_panel.pack_propagate(False)
+
+        self.search_frame = ctk.CTkFrame(self.side_panel, fg_color="transparent")
+        self.search_frame.pack(fill="x", pady=(0, 10))
+
+        self.entry_word = ctk.CTkEntry(self.search_frame, placeholder_text="Słowo centralne...", font=("Verdana", 14),
+                                       height=35)
+        self.entry_word.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        self.entry_word.bind("<Return>", self.execute_search)
+
+        self.btn_go = ctk.CTkButton(self.search_frame, text="Eksploruj", width=90, height=35,
+                                    font=("Verdana", 12, "bold"),
+                                    command=self.execute_search)
+        self.btn_go.pack(side="right")
+
+        self.append_mode_var = ctk.BooleanVar(value=True)
+        self.append_checkbox = ctk.CTkCheckBox(
+            self.side_panel, text="Rozwijaj obecną gałąź",
+            variable=self.append_mode_var, font=("Verdana", 11)
+        )
+        self.append_checkbox.pack(fill="x", pady=(0, 10))
+
+        self.mode_var = ctk.StringVar(value="Eksploracja")
+        self.mode_selector = ctk.CTkSegmentedButton(
+            self.side_panel, values=["Eksploracja", "Kręgosłup (MST)", "Klastry"],
+            variable=self.mode_var, command=lambda _: self.render_graph()
+        )
+        self.mode_selector.pack(fill="x", pady=(0, 10))
+
+        # --- WSD controls (overlay + sort listy) ---
+        self.wsd_var = ctk.StringVar(value="Wszystkie ramy")
+
+        self.wsd_label = ctk.CTkLabel(
+            self.side_panel, text="Profil użycia:", font=("Verdana", 12, "bold")
+        )
+
+        self.wsd_label.pack(fill="x", pady=(0, 4))
+
+        self.wsd_menu = ctk.CTkOptionMenu(
+            self.side_panel,
+            variable=self.wsd_var,
+            values=["Wszystkie ramy"],
+            command=self.on_wsd_select,
+            state="disabled"
+        )
+        self.wsd_menu.pack(fill="x", pady=(0, 10))
+
+        self.btn_reset = ctk.CTkButton(self.side_panel, text="Wyczyść sieć", fg_color="#D9534F",
+                                       command=self.reset_graph)
+        self.btn_reset.pack(fill="x", pady=(0, 10))
+
+        self.neighbors_limit_var = ctk.IntVar(value=25)
+        self.btn_settings = ctk.CTkButton(self.side_panel, text="⚙ Ustawienia grafu",
+                                          command=self.open_settings,
+                                          fg_color="#6c757d", hover_color="#5a6268")
+        self.btn_settings.pack(fill="x", pady=(0, 10))
+
+        self.btn_report = ctk.CTkButton(
+            self.side_panel,
+            text="Raport semantyczny",
+            command=self.generate_semantic_report,
+            fg_color="#2E8B57",
+            hover_color="#256F46"
+        )
+        self.btn_report.pack(fill="x", pady=(0, 10))
+
+        self.results_frame = ctk.CTkScrollableFrame(
+            self.side_panel,
+            fg_color=self.theme["subframe_fg"],
+            corner_radius=12,
+            width=480
+        )
+        self.results_frame.pack(fill="both", expand=True)
+
+        self.fig = stack["Figure"](figsize=(6, 6), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = self.FigureCanvasTkAgg(self.fig, master=self.graph_container)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        from matplotlib.backends.backend_tkagg import NavigationToolbar2Tk
+        self.toolbar = NavigationToolbar2Tk(self.canvas, self.graph_container)
+        self.toolbar.update()
+        self.toolbar.pack(side="bottom", fill="x")
+
+        self.fig.canvas.mpl_connect('scroll_event', self.zoom_on_scroll)
+
+    def zoom_on_scroll(self, event):
+        if event.xdata is None or event.ydata is None: return
+        base_scale = 1.2
+        if event.button == 'up':
+            scale_factor = 1 / base_scale
+        elif event.button == 'down':
+            scale_factor = base_scale
+        else:
+            scale_factor = 1
+
+        cur_xlim, cur_ylim = self.ax.get_xlim(), self.ax.get_ylim()
+        new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
+        new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
+        relx = (cur_xlim[1] - event.xdata) / (cur_xlim[1] - cur_xlim[0])
+        rely = (cur_ylim[1] - event.ydata) / (cur_ylim[1] - cur_ylim[0])
+
+        self.ax.set_xlim([event.xdata - new_width * (1 - relx), event.xdata + new_width * relx])
+        self.ax.set_ylim([event.ydata - new_height * (1 - rely), event.ydata + new_height * rely])
+        self.canvas.draw_idle()
+
+    def reset_graph(self):
+        self.G.clear()
+        self.halo_nodes.clear() # Usunięto if hasattr(...)
+        self.pos = {}
+        self.current_center = None
+        self.current_root = None
+        self.ax.clear()
+        self.canvas.draw()
+        for widget in self.results_frame.winfo_children(): widget.destroy()
+
+        self.node_parent.clear()
+        self.node_sense_id.clear()
+        self.node_root.clear()
+        self.last_neighbors = []
+        self.current_senses = []
+        self.selected_sense_id = None
+        self.selected_members = set()
+
+        if hasattr(self, 'expanded_centers_history'):
+            self.expanded_centers_history.clear()
+        self._init_tooltip()
+
+    def open_settings(self):
+        # 1. ZABEZPIECZENIE: Sprawdzamy, czy okno już istnieje
+        if hasattr(self, 'settings_win') and self.settings_win is not None and self.settings_win.winfo_exists():
+            self.settings_win.lift()  # Wyciągnij na wierzch
+            self.settings_win.focus()  # Zwróć na nie uwagę klawiatury/myszki
+            return
+
+        max_avail = self.engine.get_max_available_neighbors()
+        if max_avail == 0:
+            max_avail = 50
+
+        # Przypisujemy okno do zmiennej instancji (self.settings_win)
+        self.settings_win = ctk.CTkToplevel(self.win)
+        self.settings_win.title("Ustawienia Grafu")
+        self.settings_win.geometry("350x450")  # <--- POWIĘKSZONE OKNO
+
+        # 2. NAPRAWA CHOWANIA SIĘ POD SPÓD
+        self.settings_win.transient(self.win)  # Zawsze utrzymuj nad oknem grafu
+        self.settings_win.grab_set()  # Blokuje klikanie w graf, dopóki to okno jest otwarte
+
+        self.settings_win.configure(fg_color=self.theme["app_bg"])
+
+        # Pozycjonowanie na środku okna grafu
+        x = self.win.winfo_x() + (self.win.winfo_width() // 2) - 175
+        y = self.win.winfo_y() + (self.win.winfo_height() // 2) - 200  # <--- ZMIENIONE WYRÓWNANIE DO ŚRODKA
+        self.settings_win.geometry(f"+{x}+{y}")
+
+        ctk.CTkLabel(self.settings_win, text=f"Liczba wyświetlanych sąsiadów\n(Max w tej sieci: {max_avail})",
+                     font=("Verdana", 12)).pack(pady=10)
+
+        slider = ctk.CTkSlider(
+            self.settings_win,
+            from_=5,
+            to=max_avail,
+            number_of_steps=max_avail - 5,
+            variable=self.neighbors_limit_var
+        )
+        slider.pack(pady=10, padx=20)
+
+        val_label = ctk.CTkLabel(self.settings_win, textvariable=self.neighbors_limit_var, font=("Verdana", 12, "bold"))
+        val_label.pack()
+
+        # --- NOWA SEKCJA: Preferencja domenowa ---
+        domain_frame = ctk.CTkFrame(self.settings_win, fg_color="transparent")
+        domain_frame.pack(fill="x", padx=10, pady=(15, 5))
+
+
+        title_label = ctk.CTkLabel(domain_frame, text="Preferuj słownictwo domenowe", font=("Verdana", 12, "bold"))
+        title_label.pack(pady=(0, 5))
+
+        lambda_val_label = ctk.CTkLabel(domain_frame, text="", font=("Verdana", 11))
+        lambda_val_label.pack(pady=(0, 5))
+
+        def update_lambda_label(val):
+            val = float(val)
+            if val < 0.1:
+                desc = "Wyłączone (standard)"
+            elif val <= 0.3:
+                desc = "Lekka preferencja (domyślnie)"
+            elif val <= 0.6:
+                desc = "Wyraźnie domenowo"
+            else:
+                desc = "Mocno selektywne"
+            lambda_val_label.configure(text=f"Wartość: {val:.2f} — {desc}")
+
+        # TWORZYMY SUWAK TYLKO RAZ:
+        lambda_scale = ctk.CTkSlider(
+            domain_frame,
+            from_=0.0,
+            to=1.0,
+            number_of_steps=100,
+            variable=self.domain_lambda_var,
+            command=update_lambda_label
+        )
+        lambda_scale.pack(fill="x", padx=15, pady=5)
+
+        # Inicjalizacja tekstu - wywołujemy ręcznie po stworzeniu widgetów
+        update_lambda_label(self.domain_lambda_var.get())
+
+        tooltip_label = ctk.CTkLabel(
+            domain_frame,
+            text="Zmniejsza wagę słów generycznych (hubów),\nwydobywając słownictwo specyficzne.",
+            text_color="gray",
+            font=("Verdana", 10)
+        )
+        tooltip_label.pack(pady=(0, 5))
+
+
+        def apply_and_close():
+            # 1. Zapisujemy historię eksploracji, żeby zachować strukturę drzewa i gałęzi
+            history_to_redraw = list(getattr(self, 'expanded_centers_history', []))
+            saved_center = getattr(self, 'current_center', None)
+
+            # 2. Bezpiecznie zamykamy okno ustawień
+            if hasattr(self, 'settings_win') and self.settings_win is not None:
+                self.settings_win.destroy()
+                self.settings_win = None
+
+            if history_to_redraw:
+                # 3. Czyścimy "brudny" graf
+                self.reset_graph()
+
+                # 4. Odtwarzamy krok po kroku. Ponieważ nasza matematyczna "podłoga" działa
+                # teraz perfekcyjnie, śmieciowe słowa po prostu nie przetrwają tego odtworzenia!
+                for step in history_to_redraw:
+                    self.explore_node(step["word"], parent=step.get("parent"))
+
+                    # Przywrócenie ramy WSD, jeśli była wybrana
+                    if step.get("sense_id") is not None:
+                        self.node_sense_id[step["word"]] = step["sense_id"]
+
+                # Aktualizujemy pasek wyszukiwania do ostatniego aktywnego węzła
+                if self.current_center:
+                    self.entry_word.delete(0, "end")
+                    self.entry_word.insert(0, self.current_center)
+
+            elif saved_center:
+                # Fallback, jeśli nie było historii
+                self.reset_graph()
+                self.entry_word.delete(0, "end")
+                self.entry_word.insert(0, saved_center)
+                self.explore_node(saved_center, parent=None)
+
+        # 3. Zabezpieczenie zamknięcia okna "iksem" (X) w rogu
+        def on_close():
+            self.settings_win.destroy()
+            self.settings_win = None
+
+        self.settings_win.protocol("WM_DELETE_WINDOW", on_close)
+
+        seed_frame = ctk.CTkFrame(self.settings_win, fg_color="transparent")
+        seed_frame.pack(fill="x", padx=10, pady=(5, 5))
+
+        ctk.CTkLabel(seed_frame, text="Ziarno losowości (Seed)", font=("Verdana", 12, "bold")).pack(pady=(0, 5))
+
+        seed_entry = ctk.CTkEntry(
+            seed_frame,
+            textvariable=self.layout_seed_var,
+            placeholder_text="Zostaw puste dla losowości",
+            justify="center"
+        )
+        seed_entry.pack(fill="x", padx=15)
+
+        ctk.CTkLabel(
+            seed_frame,
+            text="Wpisz liczbę całkowitą, aby zamrozić układ grafu.",
+            text_color="gray",
+            font=("Verdana", 10)
+        ).pack(pady=(0, 5))
+
+        ctk.CTkButton(self.settings_win, text="Zastosuj", command=apply_and_close,
+                      fg_color=self.theme["button_fg"], hover_color=self.theme["button_hover"]).pack(pady=10)
+
+    def generate_semantic_report(self):
+        lemma = (self.current_center or self.entry_word.get().strip())
+        if not lemma:
+            messagebox.showwarning("Brak lemy", "Najpierw wybierz lub wpisz słowo centralne.")
+            return
+
+        current_corpus_name = corpus_var.get()
+        current_corpus_path = files.get(current_corpus_name)
+
+        self.engine.build_semantic_report(
+            parent_app=self.app,
+            current_corpus_name=current_corpus_name,
+            current_corpus_path=current_corpus_path,
+            lemma=lemma,
+            theme=self.theme,
+            open_report_callback=open_webview_window,
+            params={
+                "report_top_k": 0,
+                "hops": 2,
+                "top_k": self.neighbors_limit_var.get(),
+                "min_similarity": 0.45,
+            }
+        )
+
+    def hit_test_core(self, event, pixel_threshold=25):
+        """Zwraca nazwę głównego węzła (Core), jeśli w niego kliknięto/najechano."""
+        if not self.G.nodes or event.x is None or event.y is None:
+            return None
+
+        import numpy as np
+        click_px = np.array([event.x, event.y])
+
+        closest_word = None
+        min_dist_px = float('inf')
+
+        for word in self.G.nodes():
+            if word not in self.pos:
+                continue
+
+            # Transformacja współrzędnych danych na piksele ekranu
+            node_px = self.ax.transData.transform(self.pos[word])
+
+            dist_px = np.linalg.norm(click_px - node_px)
+            if dist_px < min_dist_px and dist_px < pixel_threshold:
+                min_dist_px = dist_px
+                closest_word = word
+
+        return closest_word
+
+    def render_graph(self):
+        import math
+        self.ax.clear()
+
+        # --- ZMIANA 1: Sprawdzamy czy mamy cokolwiek do rysowania (Core lub Halo) ---
+        has_core = len(self.G.nodes()) > 0
+        has_halo = bool(getattr(self, 'halo_nodes', None))
+
+        if not has_core and not has_halo:
+            self._init_tooltip()  # <--- DODANO TO!
+            self.canvas.draw()
+            return
+
+        mode = self.mode_var.get()
+        node_sizes, labels, node_colors = [], {}, []
+
+        # Cała Twoja obecna logika Core (wykona się tylko jeśli self.G nie jest puste)
+        if has_core:
+
+            for n in self.G.nodes():
+                n_type = self.G.nodes[n].get('type')
+                freq = self.G.nodes[n].get('freq', 1)
+                wdeg = sum(self.G[n][nbr].get('weight', 0) for nbr in self.G.neighbors(n))
+
+                # Używamy pierwiastka dla lepszego odzwierciedlenia różnic
+                # 300 to rozmiar bazowy, 5 to siła rośnięcia węzła.
+                base_size = 300 + (math.sqrt(max(freq, 1)) * 5)
+
+                # Zabezpieczenie, żeby węzeł nie zajął przypadkiem całego ekranu dla skrajnych słów (opcjonalne)
+                base_size = min(base_size, 2000)
+
+                if n == getattr(self, 'current_root', None):
+                    final_size = max(base_size * 1.25, 1400)
+                elif n == getattr(self, 'current_center', None):
+                    if self.G.nodes[n].get('terminal'):
+                        final_size = base_size * 1.05
+                    else:
+                        final_size = base_size * 1.15
+                elif n_type == 'center':
+                    if self.G.nodes[n].get('terminal'):
+                        final_size = base_size * 0.95
+                    else:
+                        final_size = base_size * 1.05
+                else:
+                    final_size = base_size
+
+                node_sizes.append(final_size)
+
+                if n == getattr(self, 'current_root', None) or n == getattr(self, 'current_center',
+                                                                            None) or n_type == 'center' or wdeg > 1.2 or len(
+                        self.G.nodes()) < 50:
+                    labels[n] = n
+
+            if mode == "Klastry":
+                from networkx.algorithms import community
+                try:
+                    comms = community.greedy_modularity_communities(self.G, weight='weight')
+                    palette = ['#FF595E', '#1982C4', '#8AC926', '#FFCA3A', '#6A4C93', '#F15BB5', '#00BBF9', '#00F5D4']
+                    for n in self.G.nodes():
+                        for i, comm in enumerate(comms):
+                            if n in comm:
+                                node_colors.append(palette[i % len(palette)])
+                                break
+                        else:
+                            node_colors.append('#CCCCCC')
+                except Exception:
+                    node_colors = ['#1982C4'] * len(self.G.nodes())
+            else:
+                for n in self.G.nodes():
+                    if n == getattr(self, 'current_root', None):
+                        node_colors.append('#FFCA3A')  # Złoty Rdzeń Absolutny
+                    elif self.G.nodes[n].get('terminal'):
+                        node_colors.append('#9E9E9E')  # Zgaszony szary dla liści
+                    elif n == getattr(self, 'current_center', None):
+                        node_colors.append('#FF2E63')  # Czerwone aktywne centrum
+                    elif self.G.nodes[n].get('type') == 'center':
+                        node_colors.append('#08D9D6')  # Morskie historyczne centra
+                    else:
+                        node_colors.append('#EAEAEA')  # Jasnoszary dla sąsiadów
+
+            # --- WSD overlay z OCHRONĄ ROOTA ---
+            members = getattr(self, 'selected_members', set()) or set()
+            if members:
+                accent = "#9A5BB6"
+                dim = "lightgray"
+                new_colors = []
+                for n, current_color in zip(self.G.nodes(), node_colors):
+                    if n == getattr(self, 'current_root', None):
+                        new_colors.append('#FFCA3A')  # Ochrona: Root zawsze zostaje złoty!
+                    else:
+                        new_colors.append(accent if n in members else dim)
+                node_colors = new_colors
+
+            # --- DYNAMICZNE OBRYSY (Stroke) DLA CZYTELNOŚCI ---
+            edge_colors_list = []
+            line_widths_list = []
+            for n in self.G.nodes():
+                if n == getattr(self, 'current_root', None):
+                    edge_colors_list.append('#2B2D42')  # Ciemnogranatowy, gruby obrys dla roota
+                    line_widths_list.append(2.5)
+                elif self.G.nodes[n].get('terminal'):
+                    edge_colors_list.append('#707070')  # Ciemniejszy szary obrys dla ślepych zaułków
+                    line_widths_list.append(1.5)
+                else:
+                    edge_colors_list.append('white')  # Czysty, biały obrys dla reszty (jak dotychczas)
+                    line_widths_list.append(1.0)
+
+            edges_to_draw = self.G.edges(data=True)
+            if mode == "Kręgosłup (MST)":
+                T = self.nx.maximum_spanning_tree(self.G, weight='weight')
+                edges_to_draw = T.edges(data=True)
+
+
+            # --- CIĄGŁE SKALOWANIE LINII ZAMIAST KUBEŁKÓW ---
+            # --- CIĄGŁE SKALOWANIE LINII ZAMIAST KUBEŁKÓW ---
+            # --- CIĄGŁE SKALOWANIE LINII Z DYNAMICZNĄ NORMALIZACJĄ ---
+            edges_to_draw_list = list(edges_to_draw)
+            if edges_to_draw_list:
+                line_widths = []
+                alphas = []
+
+                center = getattr(self, 'current_center', None)
+                root = getattr(self, 'current_root', None)
+
+                # 1. Znajdujemy absolutne maksimum i minimum TYLKO dla głównych krawędzi
+                main_weights = [d.get('weight', 0.0) for u, v, d in edges_to_draw_list
+                                if (u == center or v == center or u == root or v == root)]
+
+                if main_weights:
+                    max_w = max(main_weights)
+                    min_w = min(main_weights)
+                    diff = max_w - min_w
+                    if diff < 0.05: diff = 1.0  # Zabezpieczenie przed dzieleniem przez zero (graf z 1 sąsiadem)
+                else:
+                    max_w, min_w, diff = 1.0, 0.0, 1.0
+
+                # 2. Rysujemy linie z rozciągnięciem kontrastu
+                for u, v, d in edges_to_draw_list:
+                    w = d.get('weight', 0.0)
+                    is_main_edge = (u == center or v == center or u == root or v == root)
+
+                    if is_main_edge:
+                        # GŁÓWNE KRAWĘDZIE: Przeliczamy wagę na skalę od 0.0 (najsłabsza) do 1.0 (najsilniejsza)
+                        norm_w = max(0.0, min(1.0, (w - min_w) / diff))
+
+                        # Grubości skalujemy od 0.5 px (najsłabsza) do 5.5 px (lider!)
+                        line_widths.append(0.5 + (norm_w ** 2) * 5.0)
+
+                        # Przezroczystość od 20% do 90%
+                        alphas.append(0.20 + (norm_w * 0.70))
+                    else:
+                        # MOSTY KONTEKSTOWE: Pozostają wyciszone w tle
+                        line_widths.append((w ** 3) * 1.5)
+                        alphas.append(max(0.05, min(0.30, w ** 2)))
+
+                # 3. W Matplotlib musimy narysować krawędzie pętlą dla indywidualnego 'alpha'
+                for (u, v, d), width, alpha in zip(edges_to_draw_list, line_widths, alphas):
+                    self.nx.draw_networkx_edges(
+                        self.G, self.pos,
+                        edgelist=[(u, v)],
+                        ax=self.ax,
+                        width=width,
+                        alpha=alpha,
+                        edge_color='#8A9AAB'
+                    )
+
+
+            # Rysujemy węzły z dodaniem obrysów!
+            node_collection = self.nx.draw_networkx_nodes(
+                self.G, self.pos, ax=self.ax,
+                node_size=node_sizes, node_color=node_colors,
+                edgecolors=edge_colors_list, linewidths=line_widths_list
+            )
+            if node_collection is not None:
+                node_collection.set_zorder(3)
+
+            self.nx.draw_networkx_labels(self.G, self.pos, labels=labels, ax=self.ax, font_size=9,
+                                         font_color='#1A202C', font_weight='bold',
+                                         bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=0.5))
+
+        # --- ZMIANA 2: Węzły HALO jako chmura punktów na samym dole ---
+        self.halo_scatter = None  # <--- DODANE ZEROWANIE NA SAMYM POCZĄTKU
+        if has_halo:
+            halo_positions = [d['pos'] for d in self.halo_nodes.values() if 'pos' in d]
+            if halo_positions:
+                hx, hy = zip(*halo_positions)
+                # Zapisujemy referencję do scatter, przyda się do hit-testingu i zorder=1 rysuje je pod grafem
+                self.halo_scatter = self.ax.scatter(
+                    hx, hy,
+                    s=40, c='gray', alpha=0.4, edgecolors='none', zorder=1
+                )
+        else:
+            self.halo_scatter = None
+
+
+        # --- ZMIANA 3: Odtworzenie Tooltipa ---
+        self._init_tooltip()
+        self.ax.margins(0.15)
+        self.ax.set_axis_off()
+        self.fig.tight_layout()
+        self.canvas.draw()
+
+    def hit_test_halo(self, event, pixel_threshold=10):
+        """Zwraca słowo Halo, jeśli kliknięto/najechano blisko niego, licząc w pikselach."""
+        if not self.halo_nodes or event.x is None or event.y is None:
+            return None
+
+        click_px = np.array([event.x, event.y])  # event.x i event.y to pozycje w PIKSELACH
+
+        closest_word = None
+        min_dist_px = float('inf')
+
+        for word, data in self.halo_nodes.items():
+            if 'pos' not in data: continue
+
+            # Transformacja współrzędnych danych (layoutu) na piksele ekranu
+            node_px = self.ax.transData.transform(data['pos'])
+
+            dist_px = np.linalg.norm(click_px - node_px)
+            if dist_px < min_dist_px and dist_px < pixel_threshold:
+                min_dist_px = dist_px
+                closest_word = word
+
+        return closest_word
+
+
+    def on_hover(self, event):
+        if event.inaxes != self.ax: return
+
+        # 1. Najpierw sprawdzamy Core
+        hovered_core = self.hit_test_core(event, pixel_threshold=20)
+        if hovered_core:
+            pos = self.pos[hovered_core]
+            self.annot.xy = pos
+            self.annot.set_text(hovered_core)
+            self.annot.set_visible(True)
+            self.canvas.draw_idle()
+            return
+
+        # 2. Potem sprawdzamy Halo
+        hovered_halo = self.hit_test_halo(event, pixel_threshold=10)
+        if hovered_halo:
+            pos = self.halo_nodes[hovered_halo]['pos']
+            self.annot.xy = pos
+            self.annot.set_text(hovered_halo)
+            self.annot.set_visible(True)
+            self.canvas.draw_idle()
+        else:
+            # Ukrycie etykiety, jeśli kursor jest w pustym miejscu
+            if self.annot.get_visible():
+                self.annot.set_visible(False)
+                self.canvas.draw_idle()
+
+    def on_click(self, event):
+        if event.inaxes != self.ax: return
+
+        # --- NOWE 1: Sprawdzamy najpierw główne węzły (Core) ---
+        clicked_core = self.hit_test_core(event, pixel_threshold=25)
+        if clicked_core:
+            #print(f"Aktywowanie istniejącego węzła: {clicked_core}")
+
+            # Aktualizujemy pasek wyszukiwania w GUI
+            self.entry_word.delete(0, 'end')
+            self.entry_word.insert(0, clicked_core)
+
+            # Symulujemy wciśnięcie przycisku/Entera (uwzględnia tryb dołączania)
+            self.execute_search()
+            return  # Przerywamy, żeby nie sprawdzać tła
+
+        # --- NOWE 2: Sprawdzamy węzły tła (Halo) tylko jeśli nie kliknięto w Core ---
+        clicked_halo = self.hit_test_halo(event, pixel_threshold=10)
+        if clicked_halo:
+            #print(f"Awansowanie węzła tła: {clicked_halo}")
+
+            anchor = self.halo_nodes[clicked_halo].get('anchor')
+            if clicked_halo in self.halo_nodes:
+                del self.halo_nodes[clicked_halo]
+
+            self.explore_node(clicked_halo, parent=anchor)
+
+    def _format_sense_label(self, sense: dict) -> str:
+        sid = sense.get("frame_id", sense.get("sense_id", "?"))
+        label = (sense.get("label") or "").strip()
+        anchors = sense.get("anchors", []) or []
+        members = sense.get("members", []) or []
+        frame_type = sense.get("frame_type", sense.get("profile_type", "semantic"))
+
+        if frame_type == "contextual":
+            prefix = "Rama kontekstowa"
+        else:
+            prefix = "Rama semantyczna"
+
+        preview_terms = (anchors or members)[:4]
+        preview = ", ".join(preview_terms)
+        if len(anchors or members) > 4:
+            preview += ", ..."
+
+        if label:
+            raw_tokens = {t.strip() for t in label.split(",") if t.strip()}
+            anchor_tokens = {t.strip() for t in anchors[:3] if isinstance(t, str) and t.strip()}
+            overlap = len(raw_tokens & anchor_tokens)
+            bad_prefix = label.lower().startswith(("rama", "profil", "sense"))
+
+            if not bad_prefix and (not anchor_tokens or overlap > 0):
+                return f"{prefix} {sid}: {label}"
+
+        return f"{prefix} {sid}: {preview}"
+
+
+    def execute_search(self, event=None):
+        word = self.entry_word.get().strip()
+        if not word: return
+
+        # Znormalizowane sprawdzanie, czy to nie jest to samo słowo
+        current_norm = self.engine._resolve_key(getattr(self, 'current_center', None), self.engine.index)
+        word_norm = self.engine._resolve_key(word, self.engine.index)
+
+        if current_norm and word_norm and current_norm == word_norm:
+            return
+
+        if self.append_mode_var.get() and getattr(self, 'current_center', None):
+            self.explore_node(word, parent=self.current_center)
+        else:
+            self.explore_node(word, parent=None)
+
+    def explore_node(self, word, parent=None):
+        if not word: return
+        if parent is None:
+            self.current_root = word
+
+
+
+        root_lemma = self.current_root or word
+        root_sense_id = self.node_sense_id.get(root_lemma)
+        parent_sense_id = self.node_sense_id.get(parent) if parent else None
+
+        local_neighbors = [n for n in self.G.neighbors(parent)] if parent and self.G.has_node(parent) else []
+
+        # Pobieramy szerszą listę uwzględniającą karę (lambda)
+        # Pobieramy szerszą listę uwzględniającą karę (lambda)
+        matched_word, all_res = self.engine.get_contextual_neighbors(
+            center_lemma=word, top_n=150,
+            root_lemma=root_lemma, parent_lemma=parent or word,
+            root_sense_id=root_sense_id, parent_sense_id=parent_sense_id, local_neighbor_lemmas=local_neighbors,
+            domain_lambda=self.domain_lambda_var.get()
+        )
+
+        for widget in self.results_frame.winfo_children(): widget.destroy()
+
+        self.current_center = matched_word
+
+        # --- ZMIANA: Prawidłowy, rozciągliwy podział na Core oraz Halo ---
+        limit = self.neighbors_limit_var.get()
+
+        if all_res:
+            best_score = all_res[0]["score"]
+            lambda_val = float(self.domain_lambda_var.get())
+
+            # Zoptymalizowany margines bezpieczeństwa
+            # Używamy 0.45 zamiast 0.60, żeby podłoga wpadła idealnie
+            # w "przepaść" wygenerowaną przez algorytm.
+            margin = 0.35 + (0.45 * lambda_val)
+            raw_floor = best_score - margin
+
+            # Twarde dno: Podłoga odcięcia nigdy nie powinna być niższa niż -0.15.
+            # Jeśli słowo po karze spada poniżej -0.15, to jest w 100% zepsutym hubem.
+            score_floor = max(0.05, raw_floor)
+
+            filtered_core = [x for x in all_res if x["score"] >= score_floor]
+            core_res = filtered_core[:limit]
+
+            core_lemmas = {x["lemma"] for x in core_res}
+            halo_res = [x for x in all_res if x["lemma"] not in core_lemmas]
+
+            # --- DEBUG LOG ---
+            print(f"\n=== LAMBDA = {lambda_val:.2f} | center = {matched_word} ===")
+            print(f"Lider: {best_score:.3f} | Margines: {margin:.3f} | PODŁOGA: {score_floor:.3f}")
+            for item in all_res:
+                marker = "✅ (CORE)" if item["score"] >= score_floor and item["lemma"] in core_lemmas else "❌ (HALO)"
+                print(f"{item['lemma']:18s} score={item['score']:+.3f} {marker}")
+        else:
+            core_res = []
+            halo_res = []
+
+        self.last_neighbors = core_res  # W panelu bocznym pokazujemy tylko Core
+
+        if parent:
+            center_sid, _, _ = self.engine.choose_graph_sense(self.current_center, root_lemma, parent, root_sense_id,
+                                                              parent_sense_id)
+            self.node_sense_id[self.current_center] = center_sid
+        else:
+            self.node_sense_id.setdefault(self.current_center, None)
+
+        if self.G.has_node(self.current_center):
+            self.G.nodes[self.current_center]['type'] = 'center'
+
+        # Zapisz historię eksploracji węzłów ręcznie klikniętych (tzw. "Pinned")
+        step_record = {
+            "word": matched_word,
+            "parent": parent,
+            "root": root_lemma,
+            "sense_id": self.node_sense_id.get(matched_word)
+        }
+
+        self.expanded_centers_history = [s for s in self.expanded_centers_history if
+                                         not (s.get("word") == matched_word and s.get("parent") == parent)]
+        self.expanded_centers_history.append(step_record)
+
+        if parent:
+            self.node_parent[self.current_center] = parent
+            self.node_root[self.current_center] = root_lemma
+
+        # Pobieranie WSD (bez zmian)
+        self.current_senses = self.engine.get_or_create_senses(self.current_center)
+        if self.current_senses:
+            values = ["Wszystkie ramy"] + [self._format_sense_label(s) for s in self.current_senses]
+            self.wsd_menu.configure(values=values, state="normal")
+            self.wsd_var.set("Wszystkie ramy")
+        else:
+            self.wsd_menu.configure(values=["Wszystkie ramy"], state="disabled")
+            self.wsd_var.set("Wszystkie ramy")
+
+        self.selected_sense_id = None
+        self.selected_members = set()
+
+        if not core_res:
+            ctk.CTkLabel(self.results_frame, text=f"Ślepy zaułek (liść).\nBrak własnych powiązań dla: {matched_word}",
+                         text_color="gray").pack(pady=20)
+
+            self._add_terminal_core_node(self.current_center, parent=parent)
+            self._update_core_layout()
+            self._cleanup_halo()
+            self._update_halo_positions()
+            self.render_graph()
+            return
+
+            # --- ZMIANA: Przekazujemy również halo_res do aktualizacji grafu ---
+        self.update_graph_data(self.current_center, core_res, halo_res, parent)
+        self.render_graph()
+        self._render_neighbors_list()
+
+    def _add_contextual_bridges(self, neighbors_data, sim_threshold=0.62, max_bridges_per_node=2):
+        """Łączy nowo dodanych sąsiadów w lokalną siatkę bazując na aktualnym sensie/wektorze."""
+        reps = {}
+        # <--- POPRAWKA 3: Budowa mostów bez kary za hubowość
+        eligible_neighbors = [
+            item for item in neighbors_data
+            if item.get("contextual_score", item.get("base_similarity", 0.0)) >= 0.35
+        ]
+
+        # 1. Pobierzemy faktyczne wektory (reprezentacje) używane w tym widoku
+        for item in eligible_neighbors:  # ZMIANA: pętla iteruje teraz po przefiltrowanej liście
+            lemma = item["lemma"]
+            sid = item.get("sense_id")
+            vec = self.engine.get_representation_vector(lemma, sid)
+            if vec is not None:
+                reps[lemma] = vec
+
+        bridge_counts = {lemma: 0 for lemma in reps}
+        lemmas = list(reps.keys())
+
+        # 2. Pętla porównująca każdego sąsiada z każdym innym sąsiadem
+        for i in range(len(lemmas)):
+            for j in range(i + 1, len(lemmas)):
+                u, v = lemmas[i], lemmas[j]
+
+                # Zabezpieczenie przed "makaronem" (zbyt gęstą siecią)
+                if bridge_counts[u] >= max_bridges_per_node or bridge_counts[v] >= max_bridges_per_node:
+                    continue
+
+                # Liczymy rzeczywiste podobieństwo węzłów w locie
+                sim = self.engine._cos(reps[u], reps[v])
+
+                if sim >= sim_threshold:
+                    if self.G.has_edge(u, v):
+                        self.G[u][v]["weight"] = max(self.G[u][v].get("weight", 0), sim)
+                    else:
+                        self.G.add_edge(u, v, weight=sim)
+
+                    bridge_counts[u] += 1
+                    bridge_counts[v] += 1
+
+    def _prune_center_neighbors(self, center_word, desired_core_words):
+        """
+        Usuwa z core tych sąsiadów centrum, którzy nie należą już do nowego top N (desired_core).
+        Zdegradowane słowa wrzuca do tła (halo), o ile nie są zablokowanymi centrami (pinned).
+        """
+        if not self.G.has_node(center_word):
+            return
+
+        desired = set(desired_core_words)
+        pinned_centers = {step["word"] for step in getattr(self, 'expanded_centers_history', [])}
+
+        # Iterujemy po aktualnych sąsiadach w grafie
+        for nbr in list(self.G.neighbors(center_word)):
+            # Centrum i historyczne centra zostają nienaruszone
+            if nbr == center_word or nbr in desired or nbr in pinned_centers:
+                continue
+
+            # Nie degradujemy węzłów, które same są centrami
+            if self.G.nodes[nbr].get("type") == "center":
+                continue
+
+            # Pobieramy dotychczasową siłę połączenia, by zachować estetykę tła
+            sim = self.G[center_word][nbr].get("weight", 0.35)
+
+            # Downgrade do halo
+            self.halo_nodes[nbr] = {
+                "anchor": center_word,
+                "sim": max(0.35, float(sim))
+            }
+
+            # Odpinamy krawędź od centrum
+            if self.G.has_edge(center_word, nbr):
+                self.G.remove_edge(center_word, nbr)
+
+            # Jeśli węzeł został sam (sierota) -> usuń go całkowicie ze struktury
+            if self.G.has_node(nbr) and self.G.degree(nbr) == 0:
+                self.G.remove_node(nbr)
+                self.pos.pop(nbr, None)
+                self.node_sense_id.pop(nbr, None)
+                self.node_parent.pop(nbr, None)
+                self.node_root.pop(nbr, None)
+
+    # ZMIANA: Dodany argument halo_data
+    def update_graph_data(self, center_word, core_data, halo_data, parent=None):
+        """Główny orkiestrator aktualizacji grafu rozbity na czytelne kroki."""
+
+        # 1. Pobierz listę słów, które TERAZ mają prawo być w Core
+        desired_core_words = [item["lemma"] for item in core_data]
+
+        # 2. NAJPIERW usuń stare sąsiedztwo, które już nie mieści się w core przy obecnej lambdzie
+        self._prune_center_neighbors(center_word, desired_core_words)
+
+        # 3. DOPIERO POTEM dodaj nowe krawędzie i węzły Core
+        self._update_core_topology(center_word, core_data, parent)
+        self._update_core_layout()
+
+        # 4. Zaktualizuj tło korzystając z posortowanej listy po nałożeniu kary Lambda!
+        self._update_halo_candidates_from_data(center_word, halo_data)
+
+        self._cleanup_halo()  # Usuwa węzły, które ewentualnie awansowały z Halo do Core
+        self._update_halo_positions()
+
+    def _update_halo_candidates_from_data(self, center_word, halo_data):
+        """Popula tło semantyczne kandydatami wyliczonymi zgodnie z aktualnym rygorem (lambda)."""
+        for item in halo_data:
+            n_word = item["lemma"]
+            # Estetyczna siła grawitacji tła nadal korzysta z obiektywnego podobieństwa
+            sim = item.get("base_similarity", 0.35)
+
+            if sim >= 0.35:
+                if n_word not in self.halo_nodes or sim > self.halo_nodes[n_word].get('sim', 0):
+                    self.halo_nodes[n_word] = {'anchor': center_word, 'sim': sim}
+
+    def _update_core_topology(self, center_word, neighbors_data, parent=None):
+        """Zarządza dodawaniem węzłów i krawędzi (Core)."""
+
+        def add_or_update_edge(u, v, w):
+            if self.G.has_edge(u, v):
+                self.G[u][v]['weight'] = max(self.G[u][v].get('weight', 0), w)
+            else:
+                self.G.add_edge(u, v, weight=w)
+
+        # --- POPRAWKA 2: Wymuszenie statusu centrum ---
+
+        if not self.G.has_node(center_word):
+            self.G.add_node(center_word, type='center', freq=1, terminal=False)
+        else:
+            self.G.nodes[center_word]['type'] = 'center'
+            self.G.nodes[center_word]['terminal'] = False
+
+        # Gwarancja połączenia dla rzadkich słów
+        if parent and self.G.has_node(parent) and parent != center_word:
+            p_vec = self.engine.get_representation_vector(parent)
+            c_vec = self.engine.get_representation_vector(center_word)
+            sim = self.engine._cos(p_vec, c_vec) if p_vec is not None and c_vec is not None else 0.5
+            add_or_update_edge(center_word, parent, max(0.3, sim))
+
+        # Dodawanie sąsiadów
+        for item in neighbors_data:
+            n_word = item["lemma"]
+
+            # --- ZMIANA: Pobieramy wagę dla krawędzi (bez kary za hubowość) ---
+            # Jeśli graph_weight nie istnieje (dla bezpieczeństwa wstecznego), używamy score
+            edge_weight = item.get("graph_weight", item["score"])
+
+            n_freq = item["freq"]
+            sense_id = item["sense_id"]
+
+            if not self.G.has_node(n_word):
+                self.G.add_node(n_word, type='neighbor', freq=n_freq, sense_id=sense_id, parent=center_word,
+                                root=self.current_root)
+            else:
+                self.G.nodes[n_word]["sense_id"] = sense_id
+
+            self.node_sense_id[n_word] = sense_id
+
+            # --- ZMIANA: Używamy edge_weight zamiast ukaranego score ---
+            add_or_update_edge(center_word, n_word, edge_weight)
+
+        # --- PRZYWRÓCONY KOD MOZSTÓW Z POPRZEDNIEJ WERSJI ---
+        if getattr(self, 'draw_contextual_bridges', True):
+            self._add_contextual_bridges(neighbors_data)
+        elif getattr(self, 'draw_static_bridges', False):
+            min_bridge_sim = 0.55
+            for item in neighbors_data:
+                n_word = item["lemma"]
+                for nn_word, nn_score, nn_freq in self.engine.index.get(n_word, [])[:10]:
+                    if nn_score < min_bridge_sim: break
+                    if self.G.has_node(nn_word) and nn_word != n_word:
+                        if not self.engine.is_mutual_knn(n_word, nn_word): continue
+                        thr = self.engine.dynamic_bridge_threshold(
+                            self.G.nodes[n_word].get('freq', 0), self.G.nodes[nn_word].get('freq', 0),
+                            base=min_bridge_sim
+                        )
+                        if nn_score >= thr:
+                            add_or_update_edge(n_word, nn_word, nn_score)
+
+    def _add_terminal_core_node(self, center_word, parent=None):
+        """Dodaje węzeł do grafu jawnie jako ślepy zaułek (terminal node)."""
+
+        def add_or_update_edge(u, v, w):
+            if self.G.has_edge(u, v):
+                self.G[u][v]['weight'] = max(self.G[u][v].get('weight', 0), w)
+            else:
+                self.G.add_edge(u, v, weight=w)
+
+        # 1. Dodajemy węzeł ze specjalną flagą terminal=True
+        if not self.G.has_node(center_word):
+            self.G.add_node(center_word, type='center', freq=1, terminal=True)
+        else:
+            self.G.nodes[center_word]['type'] = 'center'
+            self.G.nodes[center_word]['terminal'] = True
+
+        # 2. Gwarancja połączenia z rodzicem (żeby nie latał w próżni)
+        if parent and self.G.has_node(parent) and parent != center_word:
+            p_vec = self.engine.get_representation_vector(parent)
+            c_vec = self.engine.get_representation_vector(center_word)
+            sim = self.engine._cos(p_vec, c_vec) if p_vec is not None and c_vec is not None else 0.5
+            add_or_update_edge(center_word, parent, max(0.3, sim))
+
+    def _update_core_layout(self):
+        """Przelicza fizykę ułożenia głównych węzłów."""
+        import math
+        num_nodes = len(self.G.nodes())
+
+        # Zwiększamy 'k', żeby graf miał więcej miejsca na odepchnięcie słabych słów
+        dynamic_k = min(1.5, max(0.3, 3.0 / math.sqrt(num_nodes) if num_nodes > 0 else 0.5))
+
+
+        # Manipulacja sprężynami dla fizyki układu
+        for u, v, d in self.G.edges(data=True):
+            w = d.get('weight', 0.5)
+            # Potęga 4 sprawi, że słabsze słowa zredukują się do ułamków, a silne zostaną mocne
+            d['physics_weight'] = w ** 4
+
+        raw_seed = self.layout_seed_var.get().strip()
+        try:
+            current_seed = int(raw_seed) if raw_seed else None
+        except ValueError:
+            current_seed = None  # Bezpieczny fallback, gdyby ktoś wpisał litery
+
+        # Wywołanie algorytmu z użyciem nowej wagi i większej liczby iteracji
+        self.pos = self.nx.spring_layout(
+            self.G,
+            pos=self.pos if self.pos else None,
+            k=dynamic_k,
+            iterations=50,  # Więcej iteracji, żeby węzły zdążyły odlecieć
+            weight='physics_weight',  # <--- KLUCZOWE: Mówimy algorytmowi, by użył zmanipulowanej wagi
+            seed = current_seed  # <--- Podpięcie zmiennej
+        )
+
+    def _update_halo_candidates(self, center_word):
+        """Pobiera nowych kandydatów do tła korzystając z czystego API z engine'u."""
+        candidates = self.engine.get_halo_candidates(center_word, top_n=150, min_sim=0.35)
+
+        for n_word, sim in candidates:
+            if not self.G.has_node(n_word):
+                # Usunięto zbędny hasattr, bo halo_nodes jest gwarantowane w __init__
+                if n_word not in self.halo_nodes or sim > self.halo_nodes[n_word].get('sim', 0):
+                    self.halo_nodes[n_word] = {'anchor': center_word, 'sim': sim}
+
+    def _update_halo_positions(self):
+        """Układa kropki tła za pomocą barycentrum grawitacyjnego i stabilnego hashowania."""
+        import math
+        core_vectors = {}
+        for n in self.G.nodes():
+            vec = self.engine.get_representation_vector(n, self.node_sense_id.get(n))
+            if vec is not None:
+                core_vectors[n] = vec
+
+        for word, data in list(self.halo_nodes.items()):
+            w_vec = self.engine.get_representation_vector(word)
+            anchor = data.get('anchor')
+
+            if w_vec is None or not core_vectors or anchor not in self.pos:
+                ax, ay = self.pos.get(anchor, (0, 0))
+                # Tutaj też powiększamy dystans awaryjny
+                distance = 2.0 + (1.0 - data.get('sim', 0.5)) * 3.0
+                angle = self._get_stable_angle(anchor, word)
+                data['pos'] = (ax + distance * math.cos(angle), ay + distance * math.sin(angle))
+                continue
+
+            sum_x, sum_y, sum_weights = 0.0, 0.0, 0.0
+
+            for core_node, c_vec in core_vectors.items():
+                if core_node in self.pos:
+                    sim = self.engine._cos(w_vec, c_vec)
+                    if sim > 0.1:
+                        weight = sim ** 3
+                        sum_x += self.pos[core_node][0] * weight
+                        sum_y += self.pos[core_node][1] * weight
+                        sum_weights += weight
+
+            if sum_weights > 0:
+                base_x = sum_x / sum_weights
+                base_y = sum_y / sum_weights
+
+                jitter_angle = self._get_stable_angle(word, "jitter")
+                max_sim_to_anchor = data.get('sim', 0.5)
+
+                # --- NOWOŚĆ: WYPYCHANIE TŁA (HALO) POZA GRAF ---
+                # 1.5 to "twarda tarcza" (minimalna odległość wypchnięcia poza rdzeń)
+                # 3.0 to współczynnik rozpraszania chmury (im słabsze słowo, tym dalej leci)
+                distance_push = 1.5 + (1.0 - max_sim_to_anchor) * 3.0
+
+                data['pos'] = (base_x + distance_push * math.cos(jitter_angle),
+                               base_y + distance_push * math.sin(jitter_angle))
+            else:
+                del self.halo_nodes[word]
+
+    def _cleanup_halo(self):
+        """Gwarantuje, że węzeł nigdy nie występuje jednocześnie w grafie i w tle."""
+        keys_to_delete = [w for w in self.halo_nodes if self.G.has_node(w)]
+        for w in keys_to_delete:
+            del self.halo_nodes[w]
+
+    def _render_neighbors_list(self):
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
+
+        res = self.last_neighbors or []
+        if not res:
+            return
+
+        members = self.selected_members or set()
+
+        def sort_key(item):
+            n_word = item["lemma"]
+            in_sense = (n_word in members) if members else False
+            return (1 if in_sense else 0, float(item["score"]), int(item["freq"]))
+
+        res_sorted = sorted(res, key=sort_key, reverse=True)
+
+        for item in res_sorted:
+            n_word = item["lemma"]
+            n_freq = item["freq"]
+            n_score = item.get("score", 0.0)
+            n_base_sim = item.get("base_similarity", 0.0)
+
+            has_network = (
+                    (n_word in self.engine.index)
+                    or (n_word.lower() in self.engine.index)
+                    or (n_word.capitalize() in self.engine.index)
+            )
+            btn_state = "normal" if has_network else "disabled"
+
+            t_color = "gray50" if (members and n_word not in members) else self.theme["label_text"]
+            cmd = (lambda w=n_word, p=self.current_center: self.explore_node(w, parent=p)) if has_network else None
+
+            row = ctk.CTkFrame(self.results_frame, fg_color="transparent")
+            row.pack(fill="x", pady=2, padx=2)
+
+            # Kolumny: lemma | score | sim | freq | +
+            row.grid_columnconfigure(0, weight=1, minsize=140)
+            row.grid_columnconfigure(1, weight=0)
+            row.grid_columnconfigure(2, weight=0)
+            row.grid_columnconfigure(3, weight=0)
+            row.grid_columnconfigure(4, weight=0)
+
+            # 1. Lemma
+            ctk.CTkButton(
+                row,
+                text=n_word,
+                anchor="w",
+                fg_color="transparent",
+                text_color=t_color,
+                state=btn_state,
+                command=cmd,
+                height=28
+            ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+            # 2. Score (krótszy napis, żeby się mieścił)
+            ctk.CTkLabel(
+                row,
+                text=f"sc {n_score:.2f}",
+                text_color="#1982C4",
+                font=("Verdana", 9, "bold"),
+                width=52
+            ).grid(row=0, column=1, padx=2)
+
+            # 3. Base similarity
+            ctk.CTkLabel(
+                row,
+                text=f"sim {n_base_sim:.2f}",
+                text_color="#8A9AAB",
+                font=("Verdana", 8),
+                width=50
+            ).grid(row=0, column=2, padx=2)
+
+            # 4. Frekwencja
+            ctk.CTkLabel(
+                row,
+                text=f"f {n_freq:,}".replace(",", " "),
+                text_color="gray60",
+                font=("Verdana", 8),
+                width=48
+            ).grid(row=0, column=3, padx=2)
+
+            # 5. Plus
+            ctk.CTkButton(
+                row,
+                text="+",
+                width=26,
+                height=24,
+                command=lambda w=n_word: self.on_insert_query(w)
+            ).grid(row=0, column=4, padx=(4, 0))
+
+
+    def on_wsd_select(self, choice: str):
+        if choice == "Wszystkie ramy":
+            self.selected_sense_id = None
+            self.selected_members = set()
+            self.node_sense_id[self.current_center] = None
+        else:
+            sid = None
+            try:
+                # Obsługa nowych etykiet:
+                # "Rama semantyczna 0: ..."
+                # "Rama kontekstowa 1: ..."
+                if choice.startswith("Rama semantyczna"):
+                    sid = int(choice.split("Rama semantyczna", 1)[1].split(":", 1)[0].strip())
+                elif choice.startswith("Rama kontekstowa"):
+                    sid = int(choice.split("Rama kontekstowa", 1)[1].split(":", 1)[0].strip())
+                else:
+                    # fallback kompatybilności ze starymi etykietami
+                    clean_choice = (
+                        choice
+                        .replace("Sens", "Rama")
+                        .replace("Profil", "Rama")
+                    )
+                    sid = int(clean_choice.split("Rama", 1)[1].split(":", 1)[0].strip())
+            except Exception as e:
+                import logging
+                logging.warning(f"Nie udało się sparsować wyboru ramy '{choice}': {e}")
+                sid = None
+
+            self.selected_sense_id = sid
+            self.node_sense_id[self.current_center] = sid
+
+            if sid is not None and 0 <= sid < len(self.current_senses):
+                self.selected_members = set(self.current_senses[sid].get("members", []) or [])
+            else:
+                self.selected_members = set()
+
+        for step in reversed(self.expanded_centers_history):
+            if step.get("word") == self.current_center and step.get("parent") == self.node_parent.get(
+                    self.current_center):
+                step["sense_id"] = self.selected_sense_id
+                break
+
+        self.render_graph()
+        self._render_neighbors_list()
+
+class TopicEngine:
+    def __init__(self, parquet_path):
+        self.parquet_path = parquet_path
+        self.model = None
+        self.topics = None
+        self.probs = None
+        self.docs = []
+        self.timestamps = []
+
+        # Wybór modelu (Sentence Transformer).
+        self.embedding_model_name = "sdadas/st-polish-paraphrase-from-mpnet"
+
+    def load_data(self):
+        """Wczytuje teksty i daty z pliku parquet wygenerowanego przez creator.py"""
+        logging.info(f"Wczytywanie danych z {self.parquet_path}...")
+        try:
+            df = pd.read_parquet(self.parquet_path)
+
+            # Wymagane kolumny: Treść i Data publikacji
+            if "Treść" not in df.columns:
+                raise ValueError("Brak kolumny 'Treść' w pliku parquet.")
+
+            # Odsiewamy puste teksty
+            df = df.dropna(subset=['Treść'])
+            df = df[df['Treść'].str.strip() != ""]
+
+            self.docs = df['Treść'].tolist()
+
+            # Pobieranie dat, jeśli istnieją
+            if "Data publikacji" in df.columns:
+                self.timestamps = df['Data publikacji'].tolist()
+            else:
+                self.timestamps = ["0000-00-00"] * len(self.docs)
+
+            logging.info(f"Wczytano {len(self.docs)} dokumentów do analizy tematycznej.")
+            return True
+        except Exception as e:
+            logging.error(f"Błąd ładowania danych: {e}")
+            return False
+
+    def train_model(self, nr_topics=None, force_retrain=False, use_stopwords=True, diversity=0.2):
+        """Trenuje model BERTopic lub ładuje gotowy z dysku."""
+        import os
+        from bertopic import BERTopic
+        from sentence_transformers import SentenceTransformer
+        from sklearn.feature_extraction.text import CountVectorizer
+
+        if not self.docs:
+            return False
+
+        model_save_path = self.parquet_path.replace(".parquet", ".bertopic")
+        models_dir = os.path.join(BASE_DIR_CORP, "models", "sentence_transformers")
+        os.makedirs(models_dir, exist_ok=True)
+        sentence_model = SentenceTransformer(self.embedding_model_name, cache_folder=models_dir)
+
+        if not force_retrain and os.path.exists(model_save_path):
+            logging.info(f"Znaleziono gotowy model tematyczny: {model_save_path}. Wczytywanie...")
+            self.model = BERTopic.load(model_save_path, embedding_model=sentence_model)
+            return True
+
+        # Słownik konfiguracji startowej
+        bertopic_config = {
+            "embedding_model": sentence_model,
+            "language": "polish",
+            "calculate_probabilities": False,
+            "nr_topics": nr_topics,
+            "verbose": True
+        }
+
+        # --- Warunkowe podłączenie MMR (Diversity) ---
+        if diversity > 0.0:
+            from bertopic.representation import MaximalMarginalRelevance
+            representation_model = MaximalMarginalRelevance(diversity=diversity)
+            bertopic_config["representation_model"] = representation_model
+            logging.info(f"Włączono algorytm MMR wymuszający różnorodność słów (diversity={diversity})")
+
+
+
+        # --- Warunkowe podłączenie stoplisty ---
+        if use_stopwords:
+            polish_stopwords = [
+                "a", "aby", "ach", "acz", "aczkolwiek", "aj", "albo", "ale", "alez", "ależ", "ani", "az", "aż",
+                "bardziej", "bardzo", "beda", "bedzie", "bez", "deda", "będą", "bede", "będę", "będzie", "bo",
+                "bowiem", "by", "byc", "być", "byl", "byla", "byli", "bylo", "byly", "był", "była", "było",
+                "były", "bynajmniej", "cala", "cali", "caly", "cała", "cały", "ci", "cie", "ciebie", "cię", "co",
+                "cokolwiek", "cos", "coś", "czasami", "czasem", "czemu", "czy", "czyli", "daleko", "dla",
+                "dlaczego", "dlatego", "do", "dobrze", "dokad", "dokąd", "dosc", "dość", "duzo", "dużo", "dwa",
+                "dwaj", "dwie", "dwoje", "dzis", "dzisiaj", "dziś", "gdy", "gdyby", "gdyz", "gdyż", "gdzie",
+                "gdziekolwiek", "gdzies", "gdzieś", "go", "i", "ich", "ile", "im", "inna", "inne", "inny",
+                "innych", "iz", "iż", "ja", "jak", "jakas", "jakaś", "jakby", "jaki", "jakichs", "jakichś",
+                "jakie", "jakis", "jakiś", "jakiz", "jakiż", "jakkolwiek", "jako", "jakos", "jakoś", "ją", "je",
+                "jeden", "jedna", "jednak", "jednakze", "jednakże", "jedno", "jego", "jej", "jemu", "jesli",
+                "jest", "jestem", "jeszcze", "jeśli", "jezeli", "jeżeli", "juz", "już", "kazdy", "każdy", "kiedy",
+                "kilka", "kims", "kimś", "kto", "ktokolwiek", "ktora", "ktore", "ktorego", "ktorej", "ktory",
+                "ktorych", "ktorym", "ktorzy", "ktos", "ktoś", "która", "które", "którego", "której", "który",
+                "których", "którym", "którzy", "ku", "lat", "lecz", "lub", "ma", "mają", "mało", "mam", "mi",
+                "miedzy", "między", "mimo", "mna", "mną", "mnie", "moga", "mogą", "moi", "moim", "moj", "moja",
+                "moje", "moze", "mozliwe", "mozna", "może", "możliwe", "można", "mój", "mu", "musi", "my", "na",
+                "nad", "nam", "nami", "nas", "nasi", "nasz", "nasza", "nasze", "naszego", "naszych", "natomiast",
+                "natychmiast", "nawet", "nia", "nią", "nic", "nich", "nie", "niech", "niego", "niej", "niemu",
+                "nigdy", "nim", "nimi", "niz", "niż", "no", "o", "obok", "od", "około", "on", "ona", "one",
+                "oni", "ono", "oraz", "oto", "owszem", "pan", "pana", "pani", "po", "pod", "podczas", "pomimo",
+                "ponad", "poniewaz", "ponieważ", "powinien", "powinna", "powinni", "powinno", "poza", "prawie",
+                "przeciez", "przecież", "przed", "przede", "przedtem", "przez", "przy", "roku", "rowniez",
+                "również", "sam", "sama", "są", "sie", "się", "skad", "skąd", "soba", "sobą", "sobie", "sposob",
+                "sposób", "swoje", "ta", "tak", "taka", "taki", "takie", "takze", "także", "tam", "te", "tego",
+                "tej", "ten", "teraz", "też", "to", "toba", "tobą", "tobie", "totez", "toteż", "tobą", "trzeba",
+                "tu", "tutaj", "twoi", "twoim", "twoj", "twoja", "twoje", "twój", "twym", "ty", "tych", "tylko",
+                "tym", "u", "w", "wam", "wami", "was", "wasz", "wasza", "wasze", "we", "według", "wiele", "wielu",
+                "więc", "więcej", "wlasnie", "właśnie", "wszyscy", "wszystkich", "wszystkie", "wszystkim",
+                "wszystko", "wtedy", "wy", "z", "za", "zaden", "zadna", "zadne", "zadnych", "zapewne", "zawsze",
+                "ze", "zeby", "znowu", "zł", "znow", "znowu", "znów", "zostal", "został", "żaden", "żadna",
+                "żadne", "żadnych", "że", "żeby"
+            ]
+            vectorizer_model = CountVectorizer(stop_words=polish_stopwords)
+            bertopic_config["vectorizer_model"] = vectorizer_model
+            logging.info("Dołączono własną listę stop-words do wektoryzatora.")
+
+        logging.info(f"Rozpoczynam trening od zera z parametrem nr_topics={nr_topics}...")
+
+        self.model = BERTopic(**bertopic_config)
+        self.topics, self.probs = self.model.fit_transform(self.docs)
+
+        logging.info(f"Trening zakończony. Zapisuję model do: {model_save_path}")
+        self.model.save(model_save_path)
+
+        return True
+
+    def get_topic_info(self):
+        """Zwraca DataFrame z informacjami o tematach (ID, Liczba tekstów, Słowa kluczowe)."""
+        if self.model:
+            return self.model.get_topic_info()
+        return None
+
+    def calculate_topics_over_time(self):
+        """Generuje trendy bez ryzyka asynchronizacji danych po wczytaniu z cache."""
+        if not self.model:
+            return None
+
+        # Przekazujemy absolutnie wszystkie dokumenty i daty, bez wycinania 0000-00-00.
+        # Puste daty pojawią się po prostu jako pierwszy punkt na lewo od wykresu.
+        try:
+            topics_over_time = self.model.topics_over_time(
+                self.docs,
+                self.timestamps,
+                nr_bins=20
+            )
+            return topics_over_time
+        except Exception as e:
+            logging.info(f"Błąd podczas obliczania trendów w czasie: {e}")
+            return None
+
+    def visualize_dynamic_topics(self, topics_over_time, top_n_topics=15):
+        """Zwraca interaktywny wykres Plotly obrazujący trendy w czasie."""
+        if self.model and topics_over_time is not None:
+            return self.model.visualize_topics_over_time(topics_over_time, top_n_topics=top_n_topics)
+        return None
+
+    def visualize_topic_map(self):
+        """Zwraca interaktywną mapę (UMAP) pokazującą jak tematy leżą względem siebie."""
+        if self.model:
+            return self.model.visualize_topics()
+        return None
+
+    def visualize_word_scores(self, top_n_topics=10):
+        """Generuje wykres słupkowy Word scores (c-TF-IDF) dla top tematów."""
+        if self.model:
+            # Pokazuje najważniejsze słowa i ich wagi dla wybranych tematów
+            return self.model.visualize_barchart(top_n_topics=top_n_topics, n_words=10)
+        return None
+
+
+
+
+# ==========================================
+# KOMPATYBILNE WRAPPERY DLA RESZTY PROGRAMU
+# ==========================================
+semantic_engine = SemanticEngine()
+
+
+def on_training_success():
+    notify_status("Sieć semantyczna wygenerowana! Ładowanie danych...")
+    smart_show_semantic_network()
+
+
+def load_semantic_neighbors():
+    current_corpus_name = corpus_var.get()
+    current_corpus_path = files.get(current_corpus_name)
+    semantic_engine.load_neighbors(current_corpus_path)
+
+
+def get_semantic_neighbors(word, top_n=25):
+    return semantic_engine.get_neighbors(word, top_n)
+
+
+def is_mutual_knn(u: str, v: str) -> bool:
+    return semantic_engine.is_mutual_knn(u, v)
+
+
+def dynamic_bridge_threshold(freq_u: int, freq_v: int, base: float = 0.55) -> float:
+    return SemanticEngine.dynamic_bridge_threshold(freq_u, freq_v, base)
+
+
+def smart_show_semantic_network():
+    """Inteligentna funkcja łącząca w sobie logikę pytania o budowanie sieci i uruchamiania widoku."""
+    current_corpus_name = corpus_var.get()
+    current_corpus_path = files.get(current_corpus_name)
+
+    if not current_corpus_path:
+        messagebox.showwarning("Brak danych", "Najpierw wybierz korpus z menu po lewej stronie!")
+        return
+
+    # Jeśli nie ma na dysku plików sieci semantycznej
+    if not semantic_engine.network_exists(current_corpus_path):
+        ans = messagebox.askyesno(
+            "Brak sieci semantycznej",
+            f"Dla korpusu '{current_corpus_name}' nie wygenerowano jeszcze sieci semantycznej.\n\nCzy chcesz ją teraz zbudować?"
+        )
+        if ans:
+            theme = THEMES[motyw.get()]
+            semantic_engine.open_training_setup(app, current_corpus_name, current_corpus_path, theme,
+                                                on_training_success)
+        return
+
+    # Jeśli sieć semantyczna istnieje, ładujemy ją i wyświetlamy
+    if semantic_engine.index is None:
+        load_semantic_neighbors()
+
+    theme = THEMES[motyw.get()]
+
+    def insert_to_query(w):
+        current_q = entry_query.get("1.0", tk.END).strip()
+        if 'Podaj zapytanie' in current_q: current_q = ""
+        entry_query.delete("1.0", tk.END)
+        entry_query.insert("1.0", current_q + (" || " if current_q else "") + f'[base="{w}"]')
+        highlight_entry()
+
+    SemanticNetworkViewer(app, semantic_engine, theme, insert_to_query)
+
 # ==========================================
 # LAZY LOADERY (Wczytywanie na żądanie)
 # ==========================================
 _creator_module = None
-_creator_module = None
-
-
 def get_creator_module():
     global _creator_module
     if _creator_module is None:
@@ -90,20 +2528,28 @@ def get_fiszki_module():
     return _fiszki_module
 
 _plot_stack = None
+
+
 def get_plot_stack():
     global _plot_stack
     if _plot_stack is None:
         import matplotlib
-        matplotlib.use("Agg")
+        matplotlib.use("TkAgg")
         import matplotlib.pyplot as plt
         from matplotlib.figure import Figure
+        # Potrzebujemy obu backendów - jednego do interfejsu (Tezaurus), drugiego do plików (Wykresy)
+        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         import matplotlib.cm as cm
+        import networkx as nx
+
         _plot_stack = {
             "plt": plt,
             "Figure": Figure,
-            "FigureCanvasAgg": FigureCanvasAgg,
-            "cm": cm
+            "FigureCanvasTkAgg": FigureCanvasTkAgg,
+            "FigureCanvasAgg": FigureCanvasAgg, # Odzyskany silnik!
+            "cm": cm,
+            "nx": nx
         }
     return _plot_stack
 # ==========================================
@@ -137,6 +2583,12 @@ class SearchState:
     s_lemma_global_tfidf: list = field(default_factory=list)
     unique_lemmas: set = field(default_factory=set)
     has_dates: bool = False
+    colloc_data: list = field(default_factory=list)
+    current_profile_dict: dict = field(default_factory=dict)
+    profile_target_lemma: str = ""
+    profile_data: list = field(default_factory=list)
+    profile_rel_options: list = field(default_factory=list)
+    profile_selected_rel: str = ""
 
 current_state = SearchState()
 state_lock = threading.Lock()
@@ -155,10 +2607,7 @@ global monthly_freq_for_use, true_monthly_totals
 monthly_freq_for_use = {}
 true_monthly_totals = {}
 styl_wykresow = None  # set in UI
-
 wykres_sort = None  # set in UI
-
-
 
 # Determine the base directory for the fonts
 if getattr(sys, 'frozen', False):  # If running as a PyInstaller .exe
@@ -178,7 +2627,8 @@ DEFAULT_SETTINGS = {
     'styl_wykresow': 'ciemny',
     'motyw': 'ciemny',
     'plotting': 'Tak',
-    'kontekst': 250
+    'kontekst': 250,
+    'min_tokens_threshold': 0
 }
 
 # Load or initialize config at startup
@@ -192,8 +2642,6 @@ else:
     config = DEFAULT_SETTINGS.copy()
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
-
-
 
 
 LOG_PATH = os.path.join(BASE_DIR_CORP, "korpusuj.log")
@@ -309,7 +2757,32 @@ FEAT_MAPPING = {
     "xxx": {},
     "ign": {}
 }
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tw = None
+        self.widget.bind("<Enter>", self.enter)
+        self.widget.bind("<Leave>", self.leave)
 
+    def enter(self, event=None):
+        x = self.widget.winfo_rootx() + 25
+        y = self.widget.winfo_rooty() + 25
+        # Tworzymy pływające okienko bez ramek
+        self.tw = tk.Toplevel(self.widget)
+        self.tw.wm_overrideredirect(True)
+        self.tw.wm_geometry(f"+{x}+{y}")
+        # Rysujemy chmurkę (zawsze w czytelnym, ciemnym motywie z ramką)
+        label = tk.Label(self.tw, text=self.text, justify='left',
+                         background="#1F2328", foreground="#FFFFFF",
+                         relief='solid', borderwidth=1,
+                         font=("Verdana", 10))
+        label.pack(ipadx=10, ipady=10)
+
+    def leave(self, event=None):
+        if self.tw:
+            self.tw.destroy()
+            self.tw = None
 
 def calc_z_score(val, mean_val, std_val):
     """Zwraca Z-score lub None w przypadku braku wariancji."""
@@ -693,7 +3166,7 @@ def extract_square_brackets(s: str):
     quote_char = None
 
     def flush_naked():
-        import re
+
         naked = "".join(current).strip()
         # 1. Usuwamy nawiasy okrągłe, bo służą do grupowania logicznego, a nie wyszukiwania
         naked = naked.replace("(", "").replace(")", "")
@@ -833,13 +3306,11 @@ def parse_frequency_base_attribute(query):
 # --- Main Function: find_lemma_context ---
 
 def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_context_size=10, warnings_list=None):
+    t_find_start = time.perf_counter()
     if warnings_list is None:
         warnings_list = []
 
     global search_status
-
-
-
 
     # Wymuszenie odświeżenia UI (pokazanie ekranu ładowania)
     text_result.after(0, lambda: display_page(query, selected_corpus))
@@ -847,6 +3318,10 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
     # Pobranie opcji frekwencyjnych z zapytania
     freq_opts = parse_frequency_attributes(query, "frequency_orth")
     freq_base_opts = parse_frequency_attributes(query, "frequency_base")
+
+    # NAPRAWA: Usunięcie tagów frekwencyjnych z zapytania po ich wczytaniu
+    query = re.sub(r'<frequency_orth\s+[^>]+>', '', query, flags=re.IGNORECASE).strip()
+    query = re.sub(r'<frequency_base\s+[^>]+>', '', query, flags=re.IGNORECASE).strip()
 
     def extract_filters(q, tag):
 
@@ -1032,184 +3507,229 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 
         return final_valid_rows
 
-    # --- Vectorized pre-filtering using token-level conditions only ---
-    for token_query_conditions, s_ordered, sentence_query_conditions in parsed_query_groups:
-        # 1. Use the inverted index to instantly throw away irrelevant rows!
-        valid_row_ids = get_prefiltered_rows(
-            parsed_query_groups,
-            selected_corpus,
-            df.index
-        )
+    # --- PREFILTER: liczony raz per grupa, a maska metadanych raz globalnie ---
+    group_jobs = []
+    all_valid_row_ids = set()
 
-        # 2. Filter the dataframe down immediately
-        filtered_df = df.loc[list(valid_row_ids)].copy()
+    for group_tuple in parsed_query_groups:
+        # Używamy prefiltru tylko dla tej konkretnej grupy
+        group_row_ids = get_prefiltered_rows([group_tuple], selected_corpus, df.index)
+        group_jobs.append((*group_tuple, group_row_ids))
+        if group_row_ids:
+            all_valid_row_ids.update(group_row_ids)
 
-        # 3. Create the mask for the REMAINING rows for author/date filters
-        mask = pd.Series(True, index=filtered_df.index)
+    if not all_valid_row_ids:
+        return []
 
+    # 1) Jeden wspólny koszyk kandydatów dla wszystkich grup
+    filtered_df_base = df.loc[list(all_valid_row_ids)].copy()
 
-        # Apply author/title/date/metadata filters using `mask` here
+    # 2) Jedna maska metadanych liczona tylko raz
+    mask = pd.Series(True, index=filtered_df_base.index)
 
-        filtered_df = filtered_df[mask]
-
-        # --- Author filters ---
-        if author_filters:
-            if 'Autor' not in filtered_df.columns:
-                add_warning(warnings_list, 'Filtr "autor" został pominięty: w korpusie brak kolumny "Autor".')
-            else:
-                author_series = filtered_df['Autor'].astype(str).str.lower()
-                for op, value, match_type in author_filters:
-                    val = value.lower()
-                    if match_type == "exact":
-                        submask = author_series == val
-                    else:
-                        submask = author_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
-                    if op == "!=":
-                        submask = ~submask
-                    mask &= submask
-
-        # --- Title filters ---
-        if title_filters:
-            if 'Tytuł' not in filtered_df.columns:
-                add_warning(warnings_list, 'Filtr "tytuł" został pominięty: w korpusie brak kolumny "Tytuł".')
-            else:
-                title_series = filtered_df['Tytuł'].astype(str).str.lower()
-                for op, value, match_type in title_filters:
-                    val = value.lower()
-                    if match_type == "exact":
-                        submask = title_series == val
-                    else:
-                        submask = title_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
-                    if op == "!=":
-                        submask = ~submask
-                    mask &= submask
-
-        # --- Date filters ---
-        if date_filters:
-            if 'Data publikacji' not in filtered_df.columns:
-                add_warning(warnings_list, 'Filtr "data" został pominięty: w korpusie brak kolumny "Data publikacji".')
-            else:
-                date_series = filtered_df['Data publikacji'].astype(str).str[:10]
-                for op, value, match_type in date_filters:
-                    if op == '<':
-                        submask = date_series < value
-                    elif op == '<=':
-                        submask = date_series <= value
-                    elif op == '>':
-                        submask = date_series > value
-                    elif op == '>=':
-                        submask = date_series >= value
-                    else:
-                        if match_type == "exact":
-                            submask = date_series == value
-                        else:
-                            submask = date_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
-                    if op == "!=":
-                        submask = ~submask
-                    mask &= submask
-
-        # --- Metadata filters ---
-
-        if metadata_filters:
-            for column, op, value, match_type in metadata_filters:
-                if column not in filtered_df.columns:
-                    add_warning(warnings_list, f'Filtr metadanych został pominięty: brak kolumny "{column}".')
-                    continue
-
-                series = filtered_df[column].astype(str).str.lower()
+    # --- Author filters ---
+    if author_filters:
+        if 'Autor' not in filtered_df_base.columns:
+            add_warning(warnings_list, 'Filtr "autor" został pominięty: w korpusie brak kolumny "Autor".')
+        else:
+            author_series = filtered_df_base['Autor'].astype(str).str.lower()
+            for op, value, match_type in author_filters:
                 val = value.lower()
-
-                if op in ("<", "<=", ">", ">="):
-                    if op == "<":
-                        submask = series < val
-                    elif op == "<=":
-                        submask = series <= val
-                    elif op == ">":
-                        submask = series > val
-                    else:
-                        submask = series >= val
+                if match_type == "exact":
+                    submask = author_series == val
                 else:
-                    if match_type == "exact":
-                        submask = series == val
-                    elif match_type == "regex":
-                        submask = series.apply(lambda x: bool(re.fullmatch(value, x, flags=re.IGNORECASE)))
-                    else:
-                        submask = series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
-
+                    submask = author_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
                 if op == "!=":
                     submask = ~submask
-
                 mask &= submask
 
-        # ✅ Apply all filters at once
-        filtered_df = filtered_df[mask]
+    # --- Title filters ---
+    if title_filters:
+        if 'Tytuł' not in filtered_df_base.columns:
+            add_warning(warnings_list, 'Filtr "tytuł" został pominięty: w korpusie brak kolumny "Tytuł".')
+        else:
+            title_series = filtered_df_base['Tytuł'].astype(str).str.lower()
+            for op, value, match_type in title_filters:
+                val = value.lower()
+                if match_type == "exact":
+                    submask = title_series == val
+                else:
+                    submask = title_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
+                if op == "!=":
+                    submask = ~submask
+                mask &= submask
 
+    # --- Date filters ---
+    if date_filters:
+        if 'Data publikacji' not in filtered_df_base.columns:
+            add_warning(warnings_list, 'Filtr "data" został pominięty: w korpusie brak kolumny "Data publikacji".')
+        else:
+            date_series = filtered_df_base['Data publikacji'].astype(str).str[:10]
+            for op, value, match_type in date_filters:
+                if op == '<':
+                    submask = date_series < value
+                elif op == '<=':
+                    submask = date_series <= value
+                elif op == '>':
+                    submask = date_series > value
+                elif op == '>=':
+                    submask = date_series >= value
+                else:
+                    if match_type == "exact":
+                        submask = date_series == value
+                    else:
+                        submask = date_series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
+                if op == "!=":
+                    submask = ~submask
+                mask &= submask
 
+    # --- Metadata filters ---
+    if metadata_filters:
+        for column, op, value, match_type in metadata_filters:
+            if column not in filtered_df_base.columns:
+                add_warning(warnings_list, f'Filtr metadanych został pominięty: brak kolumny "{column}".')
+                continue
+            series = filtered_df_base[column].astype(str).str.lower()
+            val = value.lower()
+            if op in ("<", "<=", ">", ">="):
+                if op == "<":
+                    submask = series < val
+                elif op == "<=":
+                    submask = series <= val
+                elif op == ">":
+                    submask = series > val
+                else:
+                    submask = series >= val
+            else:
+                if match_type == "exact":
+                    submask = series == val
+                elif match_type == "regex":
+                    submask = series.apply(lambda x: bool(re.fullmatch(value, x, flags=re.IGNORECASE)))
+                else:
+                    submask = series.str.contains(value, regex=True, flags=re.IGNORECASE, na=False)
+            if op == "!=":
+                submask = ~submask
+            mask &= submask
 
-        # Tworzymy szybkie słowniki dla kolumn metadanych przed pętlą
-        dates_dict = df["Data publikacji"].to_dict() if "Data publikacji" in df.columns else {}
-        titles_dict = df["Tytuł"].to_dict() if "Tytuł" in df.columns else {}
-        authors_dict = df["Autor"].to_dict() if "Autor" in df.columns else {}
+    # ✅ Apply all metadata filters once
+    filtered_df_base = filtered_df_base[mask]
 
-        # Z góry definiujemy kolumny do zignorowania w additional_metadata
-        exclude_cols = {
-            "Data publikacji", "Tytuł", "Autor", "tags", "Treść", "token_counts",
-            "tokens", "lemmas", "deprels", "postags", "full_postags",
-            "word_ids", "sentence_ids", "head_ids", "start_ids", "end_ids", "ners", "upostags",
-            "corefs"
-        }
+    # 3) Słowniki metadanych budujemy też tylko raz, na odfiltrowanym koszyku
+    dates_dict = filtered_df_base[
+        "Data publikacji"].to_dict() if "Data publikacji" in filtered_df_base.columns else {}
+    titles_dict = filtered_df_base["Tytuł"].to_dict() if "Tytuł" in filtered_df_base.columns else {}
+    authors_dict = filtered_df_base["Autor"].to_dict() if "Autor" in filtered_df_base.columns else {}
 
-        # Słownik słowników dla reszty metadanych
-        meta_columns = [col for col in df.columns if col not in exclude_cols]
-        meta_dicts = {col: df[col].to_dict() for col in meta_columns}
-        # -----------------------------------------------------------------------
+    exclude_cols = {
+        "Data publikacji", "Tytuł", "Autor", "tags", "Treść", "token_counts",
+        "tokens", "lemmas", "deprels", "postags", "full_postags",
+        "word_ids", "sentence_ids", "head_ids", "start_ids", "end_ids", "ners", "upostags",
+        "corefs"
+    }
+    meta_columns = [col for col in filtered_df_base.columns if col not in exclude_cols]
+    meta_dicts = {col: filtered_df_base[col].to_dict() for col in meta_columns}
+
+    t_prefilter = time.perf_counter()
+
+    # 4) Pętla po poszczególnych zapytaniach (grupach ||)
+    for token_query_conditions, s_ordered, sentence_query_conditions, group_row_ids in group_jobs:
+        if not group_row_ids:
+            continue
+
+        # Bierzemy tylko te wiersze z koszyka, które pasują do danej grupy
+        group_index = filtered_df_base.index.intersection(group_row_ids)
+        if len(group_index) == 0:
+            continue
+
+        filtered_df = filtered_df_base.loc[group_index]
 
         for row in filtered_df.itertuples(index=True):
             original_row_index = row.Index
 
-            # ✅ use pre-parsed lists directly
-            tokens = row.tokens
-            lemmas = row.lemmas
-            deprels = row.deprels
-            postags = row.postags
+            # --- 1. SZYBKIE LISTY PYTHONOWE ---
+            tokens = row.tokens.tolist() if hasattr(row.tokens, "tolist") else row.tokens
+            lemmas = row.lemmas.tolist() if hasattr(row.lemmas, "tolist") else row.lemmas
+            deprels = row.deprels.tolist() if hasattr(row.deprels, "tolist") else row.deprels
+            postags = row.postags.tolist() if hasattr(row.postags, "tolist") else row.postags
+
             upostags = getattr(row, "upostags", None)
-            full_postags = row.full_postags
-            word_ids = row.word_ids
-            sentence_ids = row.sentence_ids
-            head_ids = row.head_ids
-            start_ids = row.start_ids
-            end_ids = row.end_ids
-            ners = row.ners
-            # Pobieramy corefs, z zabezpieczeniem dla starych korpusów
+            if upostags is not None: upostags = upostags.tolist() if hasattr(upostags, "tolist") else upostags
+
+            full_postags = row.full_postags.tolist() if hasattr(row.full_postags, "tolist") else row.full_postags
+            word_ids = row.word_ids.tolist() if hasattr(row.word_ids, "tolist") else row.word_ids
+            sentence_ids = row.sentence_ids.tolist() if hasattr(row.sentence_ids, "tolist") else row.sentence_ids
+            head_ids = row.head_ids.tolist() if hasattr(row.head_ids, "tolist") else row.head_ids
+            start_ids = row.start_ids.tolist() if hasattr(row.start_ids, "tolist") else row.start_ids
+            end_ids = row.end_ids.tolist() if hasattr(row.end_ids, "tolist") else row.end_ids
+            ners = row.ners.tolist() if hasattr(row.ners, "tolist") else row.ners
+
             corefs = getattr(row, "corefs", None)
-            # --- Pre-kompilacja klastrów koreferencji dla danego wiersza ---
-            coref_lemma_clusters = {}
-            if corefs is not None:
-                for idx, c_tags in enumerate(corefs):
-                    if c_tags is None: continue
-                    if isinstance(c_tags, str): c_tags = [c_tags]  # Bezpiecznik dla bardzo starych plików
-
-                    for c_tag in c_tags:
-                        if c_tag in ("0", "O", "_", None): continue
-
-                        parts = c_tag.split("-", 1)
-                        c_id_str = parts[1] if len(parts) > 1 else c_tag
-
-                        if c_id_str not in coref_lemma_clusters:
-                            coref_lemma_clusters[c_id_str] = set()
-
-                        coref_lemma_clusters[c_id_str].add(str(lemmas[idx]).lower())
-                        coref_lemma_clusters[c_id_str].add(str(tokens[idx]).lower())
-            # ------------------------------------------------------------------------
+            if corefs is not None: corefs = corefs.tolist() if hasattr(corefs, "tolist") else corefs
+            # -------------------------------------------------------------------------
 
             num_tokens = len(tokens)
             if num_tokens == 0:
                 continue
 
+            # --- 2. LENIWE ŁADOWANIE (Drzewa/klastry TYLKO gdy są potrzebne) ---
+            _deps_cache = None
 
-            parent_idx, children_lookup = build_dependency_maps(
-                sentence_ids, word_ids, head_ids
-            )
+            def get_deps():
+                nonlocal _deps_cache
+                if _deps_cache is None:
+                    _deps_cache = build_dependency_maps(sentence_ids, word_ids, head_ids)
+                return _deps_cache
+
+            _coref_cache = None
+
+            def get_coref_clusters():
+                nonlocal _coref_cache
+                if _coref_cache is None:
+                    _coref_cache = {}
+                    if corefs is not None:
+                        for c_idx, c_tags in enumerate(corefs):
+                            if c_tags is None: continue
+                            if isinstance(c_tags, str): c_tags = [c_tags]
+                            for c_tag in c_tags:
+                                if c_tag in ("0", "O", "_", None): continue
+                                parts = c_tag.split("-", 1)
+                                c_id_str = parts[1] if len(parts) > 1 else c_tag
+                                if c_id_str not in _coref_cache:
+                                    _coref_cache[c_id_str] = set()
+                                _coref_cache[c_id_str].add(str(lemmas[c_idx]).lower())
+                                _coref_cache[c_id_str].add(str(tokens[c_idx]).lower())
+                return _coref_cache
+
+            # ----------------------------------------------------------------------
+
+            # --- 3. METADANE I DATY POBIERAMY RAZ NA CAŁY DOKUMENT! ---
+            if "Data publikacji" in df.columns:
+                raw_date = dates_dict.get(original_row_index, "")
+            else:
+                raw_date = ""
+            publication_date = raw_date.split(" ")[0] if isinstance(raw_date, str) else "Brak danych"
+
+            try:
+                if publication_date and publication_date != "Brak danych":
+                    parts = publication_date.split("-")
+                    if len(parts) == 2:
+                        year, month = parts
+                    elif len(parts) == 1:
+                        year, month = parts[0], "1"
+                    else:
+                        year, month, _ = parts
+                    month_key = f"{year}-{month}"
+                else:
+                    month_key = "Unknown"
+            except Exception:
+                month_key = "Unknown"
+
+            title = titles_dict.get(original_row_index, " ")
+            author = authors_dict.get(original_row_index, " ")
+            additional_metadata = {col: meta_dicts[col].get(original_row_index, " ") for col in meta_dicts}
+
+
+            # ----------------------------------------------------------------------
 
 
             def match_conditions(token_idx, conditions):
@@ -1258,7 +3778,7 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                                 if required_role and token_role != required_role:
                                     continue
 
-                                cluster_words = coref_lemma_clusters.get(c_id, set())
+                                cluster_words = get_coref_clusters().get(c_id, set())
 
                                 for val in values:
                                     val_lower = val.lower()
@@ -1301,7 +3821,8 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                                 return False
                     elif key.startswith("head") or key.startswith("head.group"):
                         # 'children' in your existing code checks the *parent* of token_idx, keep that behaviour.
-                        parent = parent_idx[token_idx]
+                        p_idx_map, _ = get_deps()
+                        parent = p_idx_map[token_idx]
 
                         # If there's no parent: "=" must fail, "!=" should pass (nothing to forbid)
                         if parent is None or parent < 0:
@@ -1380,7 +3901,8 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                     elif key.startswith("dependent"):
                         # Combined parent + parent_dist logic with correct nested semantics.
                         # children_lookup[token_idx] are the token_idx's children (original code's semantics).
-                        children = children_lookup[token_idx]
+                        _, c_lookup_map = get_deps()
+                        children = c_lookup_map[token_idx]
                         if not children:
                             # If looking for existence and there are no children -> fail.
                             # If it's a negation (operator !=), absence of children satisfies the condition.
@@ -1744,9 +4266,56 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 
 
             # --- End children.group processing ---
+            # --- NOWOŚĆ: Wyciąganie "Kotwicy" do szybkiego przeskakiwania ---
+            # Sprawdzamy, czy pierwszy segment zapytania wymaga konkretnego słowa (orth) lub lematu (base)
+            anchor_type = None
+            anchor_values = set()
+
+            if token_query_conditions and len(token_query_conditions) > 0:
+                first_cond_group = token_query_conditions[0]
+                first_conds = first_cond_group if isinstance(first_cond_group, list) else [first_cond_group]
+
+                # Szukamy, czy jest wymóg dokładnego dopasowania tekstowego
+                for cond in first_conds:
+                    if cond and len(cond) >= 5:
+                        key, values, operator, is_nested, match_type = cond
+                        if operator == "=" and match_type == "exact" and not is_nested:
+                            if key in ("orth", "base"):
+                                anchor_type = key
+                                # Pobieramy wartości, upewniając się, że to stringi i na małe litery (jeśli ignorujesz wielkość)
+                                anchor_values = set(v for v in values if isinstance(v, str))
+                                break  # Znalazłem kotwicę, kończymy szukanie
+
+            # Tworzymy szybką mapę pozycji dla tego rzędu, jeśli mamy kotwicę
+            anchor_indices = []
+            if anchor_type == "orth":
+                # Używamy enumerate na liście tokens - to działa z prędkością C, a nie czystego Pythona
+                anchor_indices = [idx for idx, t in enumerate(tokens) if t in anchor_values]
+            elif anchor_type == "base":
+                anchor_indices = [idx for idx, l in enumerate(lemmas) if l in anchor_values]
+
+            # ---------------------------------------------------------------
 
             i = 0
+            # Jeśli znaleźliśmy precyzyjne indeksy kotwicy, i w ogóle one istnieją w tym zdaniu
+            anchor_pointer = 0
+            i = 0
             while i < num_tokens:
+
+                # --- NOWOŚĆ: Błyskawiczny przeskok (Fast-Forward) ---
+                if anchor_type and anchor_values:
+                    # Przesuwamy wskaźnik do najbliższej znalezionej pozycji kotwicy
+                    while anchor_pointer < len(anchor_indices) and anchor_indices[anchor_pointer] < i:
+                        anchor_pointer += 1
+
+                    if anchor_pointer < len(anchor_indices):
+                        # Przeskakujemy od razu do właściwego słowa!
+                        i = anchor_indices[anchor_pointer]
+                    else:
+                        # Brak więcej wystąpień kotwicy w tym dokumencie -> kończymy sprawdzanie dokumentu
+                        break
+                        # -----------------------------------------------------
+
                 if s_ordered or sentence_query_conditions:
                     sent_start = i
                     while sent_start > 0 and sentence_ids[sent_start - 1] == sentence_ids[i]:
@@ -1755,130 +4324,109 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                     while sent_end < len(sentence_ids) and sentence_ids[sent_end] == sentence_ids[i]:
                         sent_end += 1
 
-                    # check that the sentence also contains the `<s>` conditions
                     if sentence_query_conditions:
                         if s_ordered:
                             if not sentence_contains_conditions(sent_start, sent_end, sentence_query_conditions):
-                                i += 1
+                                i = sent_end  # Przeskok na koniec zdania (optymalizacja!)
                                 continue
                         else:
                             if not sentence_matches(sent_start, sent_end, sentence_query_conditions):
-                                i += 1
+                                i = sent_end  # Przeskok na koniec zdania
                                 continue
 
                     end_idx = match_pattern_in_range(i, token_query_conditions, sent_end)
                 else:
-                    # no sentence restriction
                     end_idx = match_pattern(i, token_query_conditions)
 
                 if end_idx is not None and end_idx > i:
-
-                    left_context = row.Treść[
-                        max(0, start_ids[max(0, i - left_context_size)]): start_ids[i]
-                    ] if i > 0 else ""
-
-                    matched_text = row.Treść[start_ids[i]: end_ids[end_idx - 1] + 1]
-
-                    right_context = row.Treść[
-                        end_ids[end_idx - 1] + 1: start_ids[
-                            min(len(start_ids) - 1, end_idx - 1 + right_context_size + 1)]
-                    ]
-
-                    matched_lemmas = " ".join(lemmas[i:end_idx])
-
-                    context = [left_context, matched_text, right_context]
-
-                    full_left_context = row.Treść[
-                        max(0, start_ids[max(0, i - kontekst)]): start_ids[i]
-                    ] if i > 0 else ""
-                    full_left_context = full_left_context[
-                        :-len(left_context)] if left_context else full_left_context
-
-                    full_right_context = row.Treść[
-                        end_ids[end_idx - 1] + 1: start_ids[min(len(start_ids) - 1, end_idx - 1 + kontekst)]
-                    ]
-                    full_right_context = full_right_context[
-                        len(right_context):] if right_context else full_right_context
-
-                    full_text_with_markers = [full_left_context, matched_text, full_right_context]
+                    # Wyciągamy same słowa z listy (dużo szybsze niż cięcie długich stringów)
+                    matched_text = " ".join(tokens[i:end_idx]) if end_idx - i > 1 else str(tokens[i])
+                    matched_lemmas = " ".join(lemmas[i:end_idx]) if end_idx - i > 1 else str(lemmas[i])
 
                     token_counter[matched_text] += 1
                     lemma_counter[matched_lemmas] += 1
 
-                    # --- ZMIANA NR 3: Korzystamy ze słowników (O(1)) zamiast .loc ---
-                    if "Data publikacji" in df.columns:
-                        raw_date = dates_dict.get(original_row_index, "")
-                    else:
-                        raw_date = ""
-                    publication_date = raw_date.split(" ")[0] if isinstance(raw_date, str) else "Brak danych"
+                    # Zapisujemy w pamięci same lekkie "namiary" na dopasowanie
+                    temp_results.append((
+                        matched_text, matched_lemmas, row.Index, i, end_idx,
+                        publication_date, month_key, title, author, additional_metadata
+                    ))
 
-                    try:
-                        if publication_date and publication_date != "Brak danych":
-                            parts = publication_date.split("-")
-                            if len(parts) == 2:
-                                year, month = parts
-                            elif len(parts) == 1:
-                                year, month = parts[0], "1"  # tylko rok → wpiszmy styczeń
-                            else:
-                                year, month, _ = parts
-                            month_key = f"{year}-{month}"
-                        else:
-                            month_key = "Unknown"
-                    except Exception:
-                        month_key = "Unknown"
-
-                    title = titles_dict.get(original_row_index, " ")
-                    author = authors_dict.get(original_row_index, " ")
-
-                    # Szybkie pobranie additional_metadata z wcześniej przygotowanego meta_dicts
-                    additional_metadata = {
-                        col: meta_dicts[col].get(original_row_index, " ")
-                        for col in meta_dicts
-                    }
-
-                    temp_results.append(((matched_text, matched_lemmas),
-                                         (publication_date, context, full_text_with_markers,
-                                          matched_text, matched_lemmas,
-                                          month_key, title, author, additional_metadata, left_context,
-                                          right_context, row.Index, i, end_idx)))  # <-- Dodane 3 parametry
-
-                    # --- SKOK ZA DOPASOWANIE ---
                     i = end_idx
                 else:
-                    # --- PRZESUNIĘCIE O 1, JEŚLI NIC NIE ZNALEZIONO ---
-                    i += 1
+                    i += 1  # Jeśli się nie udało, idziemy oczko dalej (lub do kolejnej kotwicy w następnym obrocie)
 
-        final_results = []
-        # Filtering based on frequency_base options (lemma frequency)
+
+        # --- 1. SZYBKIE FILTROWANIE SUROWYCH WYNIKÓW ---
+        filtered_raw_results = []
         if freq_base_opts:
-            # If "top" is provided, get the top lemmas; otherwise consider all lemmas.
             if "top" in freq_base_opts:
                 top_lemmas = {lemma for lemma, _ in lemma_counter.most_common(freq_base_opts["top"])}
             else:
                 top_lemmas = set(lemma_counter.keys())
-            for (token_key, lemma_key), detailed_result in temp_results:
-                count = lemma_counter[lemma_key]
-                if (lemma_key in top_lemmas and
+            for item in temp_results:
+                matched_text, matched_lemmas = item[0], item[1]
+                count = lemma_counter[matched_lemmas]
+                if (matched_lemmas in top_lemmas and
                         ("min" not in freq_base_opts or count >= freq_base_opts["min"]) and
                         ("max" not in freq_base_opts or count <= freq_base_opts["max"])):
-                    final_results.append(detailed_result)
-        # Else if only frequency (token) filtering is used.
+                    filtered_raw_results.append(item)
         elif freq_opts:
             if "top" in freq_opts:
                 top_tokens = {token for token, _ in token_counter.most_common(freq_opts["top"])}
             else:
                 top_tokens = set(token_counter.keys())
-            for (token_key, lemma_key), detailed_result in temp_results:
-                count = token_counter[token_key]
-                if (token_key in top_tokens and
+            for item in temp_results:
+                matched_text, matched_lemmas = item[0], item[1]
+                count = token_counter[matched_text]
+                if (matched_text in top_tokens and
                         ("min" not in freq_opts or count >= freq_opts["min"]) and
                         ("max" not in freq_opts or count <= freq_opts["max"])):
-                    final_results.append(detailed_result)
+                    filtered_raw_results.append(item)
         else:
-            # No frequency filtering, return all results.
-            final_results = [detailed for _, detailed in temp_results]
+            filtered_raw_results = temp_results
 
-    return final_results
+        # --- 2. LENIWE BUDOWANIE KONTEKSTÓW (TYLKO DLA ZAAKCEPTOWANYCH) ---
+        final_results = []
+        for (matched_text_real, matched_lemmas, row_idx, i, end_idx,
+             pub_date, m_key, title, author, add_meta) in filtered_raw_results:
+            row = filtered_df_base.loc[row_idx]
+            start_ids = row.start_ids.tolist() if hasattr(row.start_ids, "tolist") else row.start_ids
+            end_ids = row.end_ids.tolist() if hasattr(row.end_ids, "tolist") else row.end_ids
+            tresc = row.Treść
+
+            left_context = tresc[max(0, start_ids[max(0, i - left_context_size)]): start_ids[i]] if i > 0 else ""
+
+            # Właściwy tekst dopasowania z oryginalnymi znakami
+            matched_text_actual = tresc[start_ids[i]: end_ids[end_idx - 1] + 1]
+
+            right_limit = start_ids[min(len(start_ids) - 1, end_idx - 1 + right_context_size + 1)]
+            right_context = tresc[end_ids[end_idx - 1] + 1: right_limit]
+
+            context = [left_context, matched_text_actual, right_context]
+
+            # Pełny kontekst
+            global kontekst
+            full_left = tresc[max(0, start_ids[max(0, i - kontekst)]): start_ids[i]] if i > 0 else ""
+            full_left = full_left[:-len(left_context)] if left_context else full_left
+
+            full_right_limit = start_ids[min(len(start_ids) - 1, end_idx - 1 + kontekst)]
+            full_right = tresc[end_ids[end_idx - 1] + 1: full_right_limit]
+            full_right = full_right[len(right_context):] if right_context else full_right
+
+            full_text_with_markers = [full_left, matched_text_actual, full_right]
+
+            final_results.append((
+                pub_date, context, full_text_with_markers,
+                matched_text_actual, matched_lemmas,
+                m_key, title, author, add_meta,
+                left_context, right_context, row_idx, i, end_idx
+            ))
+
+        t_find_end = time.perf_counter()
+        print(
+            f"   -> [Wewnątrz find_lemma] Prefiltr indeksu: {t_prefilter - t_find_start:.4f}s | Pętla po tokenach: {t_find_end - t_prefilter:.4f}s")
+        return final_results
 
 selected_tag = None
 original_colors = {}
@@ -1955,9 +4503,12 @@ def restore_from_history(state: SearchState):
 
     # 3. Natychmiastowe Renderowanie Paginacji Wyników (Z głównej tabeli)
     search_status = 0
+    global current_page
+    current_page = 0
     liczba = len(full_results_sorted)
     label_results_count.configure(text=f"Znaleziono trafień: {liczba:,}".replace(',', ' '))
     display_page(global_query, global_selected_corpus)
+
 
     # 4. Natychmiastowe Renderowanie Statystyk (Jeśli mają daty)
     if getattr(state, "has_dates", False):
@@ -2090,6 +4641,75 @@ def restore_from_history(state: SearchState):
         wykres_sort_mode.trace_add("write", toggle_listboxes)
         toggle_listboxes()
 
+        # ==========================================
+        # --- NATYCHMIASTOWE PRZYWRACANIE KOLOKACJI ---
+        # ==========================================
+        paginator_colloc["data"] = list(state.colloc_data)
+        paginator_colloc["current_page"][0] = 0
+        update_table(paginator_colloc)
+
+        # ==========================================
+        # --- NATYCHMIASTOWE PRZYWRACANIE PROFILU ---
+        # ==========================================
+        global current_profile_dict, current_profile_target_lemma
+        current_profile_dict = dict(state.current_profile_dict)
+        current_profile_target_lemma = state.profile_target_lemma
+
+        if current_profile_dict and state.profile_data:
+            profile_rel_menu_btn.configure(state="normal")
+
+            # Odtwarzamy logikę wybierania relacji po cofnięciu w historii
+            display_to_key = {opt: opt.rsplit(" (", 1)[0] for opt in state.profile_rel_options}
+
+            def on_rel_select_history(selected_display_name):
+                profile_rel_var.set(selected_display_name)
+
+                # LOGIKA 1: Widok z lotu ptaka w Historii
+                if selected_display_name == "★ Podsumowanie profilu":
+                    pagination_profile_frame.pack_forget()
+                    profile_table.pack_forget()
+                    profile_dashboard_frame.pack(fill="both", expand=True)
+                    render_profile_dashboard(on_rel_select_history)
+                    return
+
+                # LOGIKA 2: Standardowa tabela w Historii
+                profile_dashboard_frame.pack_forget()
+                pagination_profile_frame.pack(fill="x", pady=(0, 5))
+                profile_table.pack(fill="both", expand=True)
+
+                actual_key = display_to_key.get(selected_display_name)
+                if not actual_key: return
+
+                rows = current_profile_dict[actual_key]
+                table_rows = []
+                for i, row_obj in enumerate(rows):
+                    display_colloc = row_obj.collocate
+                    if getattr(row_obj, "collocate_upos", ""):
+                        display_colloc = f"{display_colloc} [{row_obj.collocate_upos}]"
+                    table_rows.append([
+                        i + 1, display_colloc, row_obj.cooc_freq, row_obj.doc_freq,
+                        row_obj.global_freq, row_obj.ll_score, row_obj.mi_score,
+                        row_obj.t_score, row_obj.log_dice
+                    ])
+                paginator_profile["data"] = table_rows
+                paginator_profile["current_page"][0] = 0
+                update_table(paginator_profile)
+                profile_rel_var.set(selected_display_name)
+
+            # Odbudowanie drzewa nawigacyjnego
+            build_profile_tree_menu(state.profile_rel_options, display_to_key, on_rel_select_history)
+
+            profile_rel_var.set(state.profile_selected_rel)
+
+            paginator_profile["data"] = list(state.profile_data)
+            paginator_profile["current_page"][0] = 0
+            update_table(paginator_profile)
+        else:
+            profile_rel_menu_btn.configure(state="disabled")
+            profile_rel_var.set("Brak wyników")
+            paginator_profile["data"] = []
+            update_table(paginator_profile)
+
         # Odbudowanie wykresów z uwzględnieniem danych ze zbuforowanego stanu!
         force_recalculate_plot()
     else:
@@ -2097,6 +4717,95 @@ def restore_from_history(state: SearchState):
         for child in checkboxes_frame.winfo_children():
             child.destroy()
 
+
+# --- HISTORIA NAWIGACJI (ZAKŁADKI + WYNIKI) ---
+nav_history = []
+nav_index = -1
+is_navigating = False  # Blokada chroniąca przed zapętleniem podczas cofania
+
+
+def push_nav_state(*args):
+    """Zapisuje obecny stan aplikacji do historii nawigacji."""
+    global nav_history, nav_index, is_navigating
+
+    # Jeśli właśnie trwają zautomatyzowane zmiany (bo kliknęliśmy Wstecz), nic nie zapisuj
+    if is_navigating:
+        return
+
+    # Nie zapisuj pustych stanów (przed pierwszym wyszukiwaniem)
+    if not current_state or not current_state.query:
+        return
+
+        # Budujemy "migawkę" obecnego stanu GUI
+    state = {
+        "search_state": current_state,
+        "main_tab": tabview.get(),
+        "sub_tab": selected_table.get() if 'selected_table' in globals() else ""
+    }
+
+    # Nie duplikuj, jeśli użytkownik np. kliknął dwa razy w tę samą zakładkę
+    if nav_history and nav_history[nav_index] == state:
+        return
+
+    # Jeśli użytkownik cofnął się, a potem kliknął coś nowego -> ucinamy przyszłość (jak w przeglądarce)
+    if nav_index < len(nav_history) - 1:
+        nav_history = nav_history[:nav_index + 1]
+
+    nav_history.append(state)
+    nav_index += 1
+
+    # Ogranicznik pamięci, żeby historia nie rosła w nieskończoność (opcjonalnie)
+    if len(nav_history) > 50:
+        nav_history.pop(0)
+        nav_index -= 1
+
+    update_nav_buttons()
+
+
+def go_back():
+    global nav_index
+    if nav_index > 0:
+        nav_index -= 1
+        restore_nav_state(nav_history[nav_index])
+
+
+def go_forward():
+    global nav_index
+    if nav_index < len(nav_history) - 1:
+        nav_index += 1
+        restore_nav_state(nav_history[nav_index])
+
+
+def restore_nav_state(state):
+    """Fizycznie zmienia widoki i ładuje dane na podstawie zapisanej 'migawki'."""
+    global is_navigating
+    is_navigating = True  # ZAMYKAMY nasłuchiwanie na zmiany!
+
+    try:
+        # 1. Przywróć wyniki wyszukiwania (jeśli dotyczyły innego zapytania)
+        if current_state != state["search_state"]:
+            restore_from_history(state["search_state"])
+
+        # 2. Przełącz główną zakładkę (Wyniki / Statystyki / Trendy)
+        if tabview.get() != state["main_tab"]:
+            tabview.set(state["main_tab"])
+
+        # 3. Przełącz pod-zakładkę (Tylko jeśli jesteśmy w "Statystyki")
+        if state["main_tab"] == "Statystyki" and state["sub_tab"]:
+            if selected_table.get() != state["sub_tab"]:
+                selected_table.set(state["sub_tab"])
+                show_table(state["sub_tab"])
+    finally:
+        is_navigating = False  # OTWIERAMY nasłuchiwanie ponownie
+        update_nav_buttons()
+
+
+def update_nav_buttons():
+    """Włącza/Wyłącza przyciski w zależności od miejsca w historii."""
+    if 'btn_nav_back' not in globals(): return
+
+    btn_nav_back.configure(state="normal" if nav_index > 0 else "disabled")
+    btn_nav_forward.configure(state="normal" if nav_index < len(nav_history) - 1 else "disabled")
 
 def log_exception(context: str, exc: Exception, user_message: str = None):
     logging.error("%s: %s\n%s", context, exc, traceback.format_exc())
@@ -2251,8 +4960,160 @@ def validate_query_for_ui(query: str):
             raise QueryValidationError(f"Nie udało się przeanalizować grupy {idx}: {e}")
 
 
-# Funkcja obsługująca wyszukiwanie
+# --- ZMIENNE GLOBALNE DLA FILTRU WSD ---
+current_wsd_lemma = None
+unfiltered_wsd_results = None  # Tu będziemy trzymać kopię wyników przed filtrowaniem
 
+
+def filter_by_selected_sense(choice):
+    """Odfiltrowuje tablicę wyników pozostawiając tylko wybraną ramę."""
+    global full_results_sorted, current_page, unfiltered_wsd_results
+
+    # Zabezpieczenie oryginalnych wyników przed pierwszym filtrowaniem
+    if unfiltered_wsd_results is None:
+        unfiltered_wsd_results = list(full_results_sorted)
+
+    if choice == "Wszystkie ramy":
+        # Powrót do pełnych wyników w ułamku sekundy
+        full_results_sorted = list(unfiltered_wsd_results)
+        unfiltered_wsd_results = None
+        current_page = 0
+        label_results_count.configure(text=f"Znaleziono: {len(full_results_sorted)}")
+        display_page(global_query, global_selected_corpus)
+        return
+
+    # Wyciągamy ID ramy z tekstu wyboru, np.:
+    # "Rama semantyczna 1: UE, unia..." -> 1
+    # "Rama kontekstowa 2: mówić, powiedzieć..." -> 2
+    # Zostawiamy też fallback kompatybilności dla starych etykiet typu "Sens 1: ..."
+    try:
+        frame_id = None
+
+        if choice.startswith("Rama semantyczna"):
+            frame_id = int(choice.split("Rama semantyczna", 1)[1].split(":", 1)[0].strip())
+        elif choice.startswith("Rama kontekstowa"):
+            frame_id = int(choice.split("Rama kontekstowa", 1)[1].split(":", 1)[0].strip())
+        elif choice.startswith("Profil"):
+            frame_id = int(choice.split("Profil", 1)[1].split(":", 1)[0].strip())
+        elif choice.startswith("Sens"):
+            frame_id = int(choice.split("Sens", 1)[1].split(":", 1)[0].strip())
+        else:
+            return
+    except ValueError:
+        return
+
+    loading_win = ctk.CTkToplevel(app)
+    loading_win.title("Filtrowanie ram")
+    loading_win.geometry("360x120")
+    loading_win.attributes("-topmost", True)
+    x = app.winfo_x() + (app.winfo_width() // 2) - 180
+    y = app.winfo_y() + (app.winfo_height() // 2) - 60
+    loading_win.geometry(f"+{x}+{y}")
+    ctk.CTkLabel(
+        loading_win,
+        text=f"Filtrowanie {len(unfiltered_wsd_results)} wyników...\nTo może chwilę potrwać.",
+        font=("Verdana", 12)
+    ).pack(expand=True)
+    loading_win.update()
+
+    try:
+        filtered = []
+        df = dataframes[global_selected_corpus]
+
+        # Zawsze filtrujemy z "pełnej" puli zapytania, żeby móc przeskakiwać między ramami
+        for res in unfiltered_wsd_results:
+            r_idx = res[11]
+            match_start = res[12]
+            match_end = res[13] if len(res) > 13 else match_start
+
+            row_data = df.loc[r_idx]
+            tokens = row_data.tokens
+            lemmas = row_data.lemmas
+            sentence_ids = row_data.sentence_ids
+
+            # Szukamy, pod którym indeksem w dopasowanym fragmencie ukrywa się nasz wyraz
+            target_idx = match_start
+            for i in range(match_start, match_end + 1):
+                if lemmas[i].lower() == current_wsd_lemma.lower():
+                    target_idx = i
+                    break
+
+            sent_id = sentence_ids[target_idx]
+            sent_start = target_idx
+            while sent_start > 0 and sentence_ids[sent_start - 1] == sent_id:
+                sent_start -= 1
+            sent_end = target_idx
+            while sent_end < len(sentence_ids) and sentence_ids[sent_end] == sent_id:
+                sent_end += 1
+
+            sentence_tokens = [
+                {"lemma": lemmas[i], "form": tokens[i]}
+                for i in range(sent_start, sent_end)
+            ]
+            local_target_idx = target_idx - sent_start
+
+            # Właściwa weryfikacja: silnik nadal zwraca ID ramy przez stare pole/ścieżkę sense_id
+            sid = semantic_engine.disambiguate_instance(
+                sentence_tokens,
+                local_target_idx,
+                current_wsd_lemma
+            )
+            if sid == frame_id:
+                filtered.append(res)
+
+        full_results_sorted = filtered
+        current_page = 0
+        label_results_count.configure(
+            text=f"Rama {frame_id}: {len(filtered)} z {len(unfiltered_wsd_results)}"
+        )
+        display_page(global_query, global_selected_corpus)
+
+    finally:
+        loading_win.destroy()
+
+
+def resort_results(choice):
+    global full_results_sorted, current_page, global_query, global_selected_corpus
+
+    # Jeśli nie ma wyników do sortowania, nic nie rób
+    if not full_results_sorted:
+        return
+
+    # Pomocnicze funkcje do sortowania po kontekście
+    import string
+    def first_real_token(text):
+        if not text: return ""
+        for tok in text.split():
+            cleaned = tok.strip(string.punctuation).lower()
+            if cleaned: return cleaned
+        return ""
+
+    def last_real_token(text):
+        if not text: return ""
+        for tok in reversed(text.split()):
+            cleaned = tok.strip(string.punctuation).lower()
+            if cleaned: return cleaned
+        return ""
+
+    # Błyskawiczne sortowanie w miejscu (in-place)
+    if choice == "Data publikacji":
+        full_results_sorted.sort(key=lambda x: str(x[0]) if x[0] else "")
+    elif choice == "Tytuł":
+        full_results_sorted.sort(key=lambda x: str(x[6]) if x[6] else "")
+    elif choice == "Autor":
+        full_results_sorted.sort(key=lambda x: str(x[7]) if x[7] else "")
+    elif choice == "Alfabetycznie":
+        full_results_sorted.sort(key=lambda x: str(x[3]) if x[3] else "")
+    elif choice == "Prawy kontekst":
+        full_results_sorted.sort(key=lambda x: first_real_token(x[10]))
+    elif choice == "Lewy kontekst":
+        full_results_sorted.sort(key=lambda x: last_real_token(x[9]))
+
+    # Resetujemy na pierwszą stronę i natychmiast odświeżamy tabelę
+    current_page = 0
+    display_page(global_query, global_selected_corpus)
+
+# Funkcja obsługująca wyszukiwanie
 def search():
     theme = THEMES[motyw.get()]
     global search_status, precalculated_bins
@@ -2304,12 +5165,26 @@ def search():
         paginator_colloc["current_page"][0] = 0
         update_table(paginator_colloc)
 
+    if 'paginator_profile' in globals():
+        paginator_profile["data"] = []
+        paginator_profile["current_page"][0] = 0
+        update_table(paginator_profile)
+        # Zmiana: podmieniamy na nowy przycisk i blokujemy go
+        profile_rel_menu_btn.configure(state="disabled")
+        profile_rel_var.set("Brak danych")
+
+        profile_node_menu.configure(values=["Token 1"])
+        profile_node_var.set("Token 1")
+        current_profile_dict.clear()
+        global current_profile_target_lemma
+        current_profile_target_lemma = ""
+
     # Wstrzykujemy stan GUI jako drugi argument do funkcji
     def search_thread(search_token, ui_state):
 
         try:
             logging.info("Search started in thread: %s [token=%s]", threading.current_thread().name, search_token)
-
+            t_start = time.perf_counter()
             # Wyciągamy wartości BEZPIECZNIE ze słownika, zamiast z GUI!
             query = ui_state["query"]
             validate_query_for_ui(query)
@@ -2327,6 +5202,7 @@ def search():
             local_state = SearchState()
             local_state.query = query
             local_state.corpus = selected_corpus
+            t_parsed = time.perf_counter()
             # Przekazujemy selected_corpus zgodnie z nową definicją z Kroku 2!
             results = find_lemma_context(
                 query,
@@ -2336,6 +5212,7 @@ def search():
                 right_context_size,
                 warnings_list=warnings_list
             )
+            t_matched = time.perf_counter()
 
             # Jeśli to już nie jest aktualne wyszukiwanie, niczego nie nadpisuj.
             if search_token != active_search_token:
@@ -2381,21 +5258,25 @@ def search():
             # Pobranie opcji przed rozpoczęciem tła
             sort_option = ui_state["sort_option"]
 
-            # --- SORTOWANIE (WYKONUJE SIĘ W TLE) ---
+
+            # --- SORTOWANIE W MIEJSCU (WYKONUJE SIĘ W TLE) ---
             if sort_option == "Data publikacji":
-                results_sorted = sorted(results, key=lambda x: x[0])
+                results.sort(key=lambda x: str(x[0]) if x[0] else "")
             elif sort_option == "Tytuł":
-                results_sorted = sorted(results, key=lambda x: x[6])
+                results.sort(key=lambda x: str(x[6]) if x[6] else "")
             elif sort_option == "Autor":
-                results_sorted = sorted(results, key=lambda x: x[7])
+                results.sort(key=lambda x: str(x[7]) if x[7] else "")
             elif sort_option == "Alfabetycznie":
-                results_sorted = sorted(results, key=lambda x: x[3])
+                results.sort(key=lambda x: str(x[3]) if x[3] else "")
             elif sort_option == "Prawy kontekst":
-                results_sorted = sorted(results, key=lambda x: first_real_token(x[10]))
+                results.sort(key=lambda x: first_real_token(x[10]))
             elif sort_option == "Lewy kontekst":
-                results_sorted = sorted(results, key=lambda x: last_real_token(x[9]))
-            else:
-                results_sorted = results
+                results.sort(key=lambda x: last_real_token(x[9]))
+
+            # Przypisujemy posortowaną (lub nie) listę do zmiennej używanej dalej
+            results_sorted = results
+
+            t_sorted = time.perf_counter()
 
             if results_sorted:
                 # wyniki najpierw w lokalnym stanie:
@@ -2411,7 +5292,22 @@ def search():
 
                 auto_fill_dates(results_sorted)
                 search_status = 0
-                text_result.after(300, lambda: display_page(local_state.query, local_state.corpus))
+
+                # ==========================================================
+                # --- NOWOŚĆ: BŁYSKAWICZNE WYŚWIETLENIE PIERWSZEJ STRONY ---
+                liczba_trafien = len(results_sorted)
+
+                def show_first_results():
+                    global current_page
+                    current_page = 0
+                    # Pokazujemy liczbę trafień od razu, dając znać, że statystyki jeszcze się liczą
+                    label_results_count.configure(
+                        text=f"Znaleziono trafień: {liczba_trafien:,} (Ładowanie statystyk...)".replace(',', ' '))
+                    display_page(local_state.query, local_state.corpus)
+
+                # Zlecamy odświeżenie GUI do głównego wątku NATYCHMIAST
+                app.after(0, show_first_results)
+                # ==========================================================
 
                 # --- AGREGACJA STATYSTYK (WYKONUJE SIĘ W TLE) ---
                 if "Data publikacji" in df.columns:
@@ -2478,7 +5374,7 @@ def search():
 
                     # Teraz pobieramy dane z całego korpusu (indeksu), więc TF-IDF będzie rzetelny
                     lemma_df_cache = {
-                        lemma: len(inverted_indexes[global_selected_corpus]["base"].get(lemma, set()))
+                        lemma: len(inverted_indexes[global_selected_corpus]["base"].get(lemma, set())) or 1
                         for lemma in unique_lemmas
                     }
 
@@ -2573,7 +5469,7 @@ def search():
                             raw = raw_counts[lemma]
                             norm = norm_counts.get(lemma, 0.0)
                             tfidf = monthly_tfidf_for_use[month_key].get(lemma, 0.0)
-                            zscore = monthly_zscore_for_use[month_key].get(lemma, 0.0)
+                            zscore = monthly_zscore_for_use[month_key].get(lemma) or 0.0
                             fq_data_month.append([
                                 int(year_str),
                                 int(month_str),
@@ -2638,7 +5534,22 @@ def search():
                         os.makedirs('temp', exist_ok=True)
                         canvas = FigureCanvasAgg(fig)
                         fig.savefig('temp/temp_plot.png', bbox_inches='tight')
+                t_stats = time.perf_counter()  # <--- CZAS PO STATYSTYKACH
 
+                # ZAPIS DO LOGA I KONSOLI:
+                t_stats = time.perf_counter()  # <--- CZAS PO STATYSTYKACH (wstaw tuż przed def update_gui(): )
+
+                # ZAPIS DO LOGA I KONSOLI:
+                profiling_msg = (
+                    f"⏱ [PROFILING] Token: {search_token} | "
+                    f"Walidacja: {t_parsed - t_start:.4f}s | "
+                    f"Skanowanie (find_lemma): {t_matched - t_parsed:.4f}s | "
+                    f"Sortowanie: {t_sorted - t_matched:.4f}s | "
+                    f"Statystyki+Wykres: {t_stats - t_sorted:.4f}s || "
+                    f"CAŁOŚĆ: {t_stats - t_start:.4f}s"
+                )
+                logging.info(profiling_msg)
+                print(profiling_msg)
                 # =========================================================================
                 # --- AKTUALIZACJA GUI (WYKONUJE SIĘ BEZPIECZNIE W GŁÓWNYM WĄTKU) ---
                 # =========================================================================
@@ -2843,6 +5754,8 @@ def search():
                 # --- NOWE: ZAPIS DO HISTORII CAŁEGO STANU NA SAM KONIEC ---
                 app.after(0, lambda: add_to_history(local_state))
 
+                app.after(100, push_nav_state)
+
                 # Delegowanie pracy z UI do głównego wątku
                 app.after(0, update_gui)
 
@@ -2850,9 +5763,10 @@ def search():
             else:
                 # Brak wyników
                 def update_no_results():
-                    global search_status, full_results_sorted
+                    global search_status, full_results_sorted, current_page  # <--- DODANO current_page
                     full_results_sorted = []
                     search_status = 0
+                    current_page = 0
                     label_results_count.configure(text="Znaleziono trafień: 0")
                     display_page(query, selected_corpus)
 
@@ -3112,12 +6026,13 @@ def update_plot_images():
         target_label._image_ref = final_img
 
     except Exception as e:
-        print(f"Error loading image: {e}")
+        logging.info(f"Error loading image: {e}")
 
 
 def update_plot():
     global full_results_sorted, true_monthly_totals, lemma_vars, merge_entry_vars, lemma_df_cache, global_selected_corpus
     global precalculated_bins, precalculated_bin_totals, precalculated_lemma_counts
+    global min_tokens_threshold
 
     plot_stack = get_plot_stack()
     Figure = plot_stack["Figure"]
@@ -3214,25 +6129,73 @@ def update_plot():
 
     colors = cm.tab20.colors  # Paleta kolorów uratowana z kopii 4!
 
+    # --- DYNAMICZNY PRÓG (AUTO) Z MEDIANĄ I DOLNYM ZABEZPIECZENIEM ---
+    valid_totals = [t for t in precalculated_bin_totals if t > 0]
+
+    if min_tokens_threshold == 0 and valid_totals:
+        # Mediana jest odporniejsza na skrajne wartości niż średnia
+        median_bin_size = np.median(valid_totals)
+        # Ustawiamy próg na 10% mediany, ale nie mniej niż 50 tokenów (ochrona mikro-korpusów)
+        dynamic_threshold = max(50, median_bin_size * 0.1)
+    else:
+        dynamic_threshold = min_tokens_threshold
+
+
+    # --------------------------------------
+
+    # GŁÓWNA PĘTLA RYSOWANIA WYKRESÓW
     for idx, (g_name, raw_values) in enumerate(plot_data_raw.items()):
-        pmw_values = [(v / (precalculated_bin_totals[i] / 1e6)) if precalculated_bin_totals[i] > 0 else 0 for i, v in
-                      enumerate(raw_values)]
+        pmw_values = []
+        tfidf_values = []
+        raw_filtered_values = []  # <--- NOWOŚĆ: Lista na bezpieczne surowe dane
+
+        total_idf = sum(math.log10(total_docs / (lemma_df_cache.get(l, 1) or 1)) for l in groups[g_name])
+        avg_idf = total_idf / len(groups[g_name]) if groups[g_name] else 0
+
+        for i, v in enumerate(raw_values):
+            total_in_bin = precalculated_bin_totals[i]
+
+            # Używamy globalnej zmiennej z ustawień (min_tokens_threshold) zamiast sztywnej wartości
+            if total_in_bin >= dynamic_threshold:
+                pmw = v / (total_in_bin / 1e6)
+                tf = v / total_in_bin
+                tfidf = tf * avg_idf * 100000
+
+                pmw_values.append(pmw)
+                tfidf_values.append(tfidf)
+                raw_filtered_values.append(v)  # <--- Zostawiamy surową wartość
+            else:
+                pmw_values.append(np.nan)
+                tfidf_values.append(np.nan)
+                raw_filtered_values.append(np.nan)  # <--- PRZERYWAMY WYKRES RÓWNIEŻ TUTAJ
 
         if mode == "Częstość względna":
             final_vals = pmw_values
+
         elif mode == "TF-IDF":
-            total_idf = sum(math.log10(total_docs / lemma_df_cache.get(l, 1)) for l in groups[g_name])
-            avg_idf = total_idf / len(groups[g_name]) if groups[g_name] else 0
-            final_vals = []
-            for i, v in enumerate(raw_values):
-                tf = (v / precalculated_bin_totals[i]) if precalculated_bin_totals[i] > 0 else 0
-                final_vals.append(tf * avg_idf * 100000)
+            final_vals = tfidf_values
+
         elif mode == "Z-score":
-            mean_v = np.mean(pmw_values)
-            std_v = np.std(pmw_values)
-            final_vals = [(v - mean_v) / std_v if std_v > 0 else 0 for v in pmw_values]
+            valid_vals = np.array(pmw_values, dtype=float)
+            valid_count = np.sum(~np.isnan(valid_vals))
+
+            if valid_count >= 2:
+                mean_v = np.nanmean(valid_vals)
+                std_v = np.nanstd(valid_vals)
+
+                if std_v > 0:
+                    final_vals = [
+                        (v - mean_v) / std_v if not np.isnan(v) else np.nan
+                        for v in valid_vals
+                    ]
+                else:
+                    final_vals = [np.nan if np.isnan(v) else 0.0 for v in valid_vals]
+            else:
+                final_vals = [np.nan] * len(valid_vals)
+
         else:
-            final_vals = raw_values
+            # Surowa liczba wystąpień - teraz uwzględnia bezpieczne przerwy!
+            final_vals = raw_filtered_values
 
         ax.plot(x_indices, final_vals, marker='o', label=g_name, color=colors[idx % len(colors)])
 
@@ -3256,6 +6219,21 @@ def update_plot():
     ax.tick_params(axis='x', labelsize=9)
     ax.set_ylabel(ylabel)
     ax.grid(True, which='major', axis='both', linestyle='--', linewidth=0.5, alpha=0.2)
+
+    if scale_mode_var.get() == "Ręczne":
+        try:
+            y_limit_str = entry_y_limit.get().strip()
+            if y_limit_str.replace('.', '', 1).isdigit():
+                y_limit_val = float(y_limit_str)
+
+                # Zabezpieczenie przed wpisaniem zera lub minusa (poza Z-score)
+                if y_limit_val > 0 or mode == "Z-score":
+                    if mode in ["Częstość względna", "Liczba wystąpień", "TF-IDF"]:
+                        ax.set_ylim(bottom=0, top=y_limit_val)
+                    else:
+                        ax.set_ylim(top=y_limit_val)
+        except ValueError:
+            pass  # Jeśli błąd parsowania, zostaje domyślne Auto z Matplotlib
 
     # Przeniesione idealne układanie legendy z kopii 4
     ax.legend(ncol=6, loc='upper center', bbox_to_anchor=(0.5, 1.32), frameon=False, labelcolor=text_color)
@@ -3514,15 +6492,18 @@ def show_dependency_graph():
     # Sprzątanie pamięci
     plt.close(fig)
 
-    # Mouse wheel binding (opcjonalnie do przewijania pionowego/poziomego myszką)
+    # Mouse wheel binding (zabezpieczone przed martwym widgetem)
     def _on_mousewheel(event):
-        canvas_tk.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        if canvas_tk.winfo_exists():
+            canvas_tk.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _on_shiftmouse(event):
-        canvas_tk.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        if canvas_tk.winfo_exists():
+            canvas_tk.xview_scroll(int(-1 * (event.delta / 120)), "units")
 
-    canvas_tk.bind_all("<MouseWheel>", _on_mousewheel)
-    canvas_tk.bind_all("<Shift-MouseWheel>", _on_shiftmouse)
+    # Używamy bind na konkretnym oknie, a nie bind_all globalnie
+    graph_win.bind("<MouseWheel>", _on_mousewheel)
+    graph_win.bind("<Shift-MouseWheel>", _on_shiftmouse)
 
 
 # --- NOWE ZMIENNE GLOBALNE DLA HIGHLIGHTINGU ---
@@ -3632,6 +6613,8 @@ def update_highlights():
                         underline=True
                     )
 
+
+
 def display_full_text(full_text, result, publication_date, title, author, additional_metadata, row_idx=None, start_idx=None):
     global current_graph_row_idx, current_graph_start_idx
     global current_display_row_idx, current_display_start_idx, current_body_start_mark
@@ -3678,6 +6661,7 @@ def display_full_text(full_text, result, publication_date, title, author, additi
     button_draw_graph.configure(state="normal")
     button_toggle_ner.configure(state="normal")
     button_toggle_coref.configure(state="normal")
+
 
     # Odświeżenie kolorów na nowym tekście
     update_highlights()
@@ -3860,46 +6844,104 @@ POS_NKJP_DICT = [
     "xxx (obce/nieznane)", "ign (ignorowany)"
 ]
 
-# Drzewiasta struktura depreli (Ujednolicona terminologia)
-DEPREL_TREE = [
-    "Wszystkie",
-    "root - głowa drzewa",
-    "nsubj - podmiot rzeczowny",
-    "  ├─ nsubj:pass - podmiot (str. bierna)",
-    "csubj - podmiot zdaniowy",
-    "  ├─ csubj:pass - podmiot zdaniowy (str. bierna)",
-    "obj - dopełnienie bliższe",
-    "ioobj - dopełnienie dalsze",
-    "xcomp - dopełnienie otwarte / orzecznik",
-    "  ├─ xcomp:pred - dopełnienie orzecznikowe",
-    "  ├─ xcomp:obj - dopełnienie bezokolicznikowe",
-    "  ├─ xcomp:subj - podmiot bezokolicznikowy",
-    "ccomp - dopełnienie zdaniowe",
-    "  ├─ ccomp:obj - dopełnienie zdaniowe czasownika",
-    "amod - modyfikator przymiotnikowy",
-    "  ├─ amod:flat - przymiotnikowa nazwa własna",
-    "nmod - modyfikator rzeczowny",
-    "  ├─ nmod:arg - wymagany zależnik rzeczowny",
-    "  ├─ nmod:poss - modyfikator dzierżawczy",
-    "nummod - modyfikator liczebnikowy",
-    "  ├─ nummod:gov - liczebnik (rządzący)",
-    "det - określnik",
-    "acl - modyfikator zdaniowy (klauza)",
-    "  ├─ acl:relcl - zdanie względne",
-    "advmod - modyfikator przysłówkowy",
-    "  ├─ advmod:emph - partykuła wzmacniająca",
-    "  ├─ advmod:neg - partykuła przecząca",
-    "advcl - zdanie okolicznikowe",
-    "obl - argument ukośny (przyimkowy)",
-    "  ├─ obl:arg - argument przyimkowy czasownika",
-    "aux - czasownik posiłkowy",
-    "  ├─ aux:pass - czasownik posiłkowy (str. bierna)",
-    "cop - łącznik",
-    "case - wskaźnik przypadka (przyimek)",
-    "mark - wskaźnik zespolenia",
-    "cc - spójnik współrzędny",
-    "conj - element dołączony spójnikiem"
-]
+
+# Drzewiasta struktura depreli (Pełna specyfikacja Polish UD)
+DEPREL_TREE_DICT = {
+    "Wszystkie": [],
+    "root - głowa drzewa": [],
+
+    "nsubj - podmiot nominalny": [
+        "nsubj:pass - podmiot nominalny (strona bierna)"
+    ],
+    "csubj - podmiot zdaniowy": [
+        "csubj:pass - podmiot zdaniowy (strona bierna)"
+    ],
+
+    "obj - argument syntetyczny (Acc / Gen)": [],
+    "iobj - argument syntetyczny (Dat / Ins)": [],
+
+    "ccomp - argument zdaniowy": [
+        "ccomp:obj - argument zdaniowy czasownika",
+        "ccomp:cleft - zdanie podrzędne zależne od zaimka 'to'"
+    ],
+    "xcomp - argument zdaniowy / bezokolicznikowy": [
+        "xcomp:pred - argument orzecznikowy (dla czasowników innych niż cop)",
+        "xcomp:obj - argument bezokolicznikowy (dopełnienie)",
+        "xcomp:subj - argument bezokolicznikowy (podmiotowy)",
+        "xcomp:cleft - argument bezokolicznikowy zależny od zaimka 'to'"
+    ],
+
+    "obl - modyfikator analityczny (okolicznik/dopełnienie)": [
+        "obl:arg - argument przyimkowy czasownika",
+        "obl:agent - sprawca w stronie biernej",
+        "obl:cmpr - fraza porównawcza",
+        "obl:orphan - argument z elipsą rzeczownika"
+    ],
+    "advmod - modyfikator przysłówkowy": [
+        "advmod:arg - argument przysłówkowy czasownika",
+        "advmod:emph - partykuła wzmacniająca / intensyfikator",
+        "advmod:neg - partykuła przecząca"
+    ],
+    "advcl - modyfikator zdaniowy (zdanie okolicznikowe)": [
+        "advcl:relcl - zdanie względne określające inne zdanie",
+        "advcl:cmpr - zdanie okolicznikowe porównawcze"
+    ],
+
+    "amod - modyfikator przymiotnikowy": [
+        "amod:flat - człon przymiotnikowy nazwy własnej"
+    ],
+    "nmod - modyfikator rzeczowny / przyimkowy": [
+        "nmod:arg - argument rzeczowny",
+        "nmod:poss - modyfikator dzierżawczy (np. zaimki)",
+        "nmod:flat - nominalny człon nazwy własnej",
+        "nmod:pred - wyrażenie orzecznikowe zależne od imiesłowu (bycia)"
+    ],
+    "nummod - modyfikator liczebnikowy": [
+        "nummod:gov - liczebnik rządzący przypadkiem rzeczownika",
+        "nummod:flat - liczebnikowy człon nazwy własnej"
+    ],
+    "det - określnik": [
+        "det:nummod - zaimki ilościowe uzgadniające przypadek",
+        "det:numgov - zaimki ilościowe rządzące przypadkiem"
+    ],
+    "acl - zdanie przydawkowe": [
+        "acl:relcl - zdanie przydawkowe względne"
+    ],
+
+    "aux - czasownik posiłkowy": [
+        "aux:pass - czasownik posiłkowy (strona bierna)",
+        "aux:cnd - czasownik posiłkowy (tryb przypuszczający)",
+        "aux:imp - czasownik posiłkowy (tryb rozkazujący)",
+        "aux:clitic - aglutynacyjny formant ruchomy (np. -śmy)"
+    ],
+    "cop - łącznik": [
+        "cop:locat - łącznik w funkcji lokatywnej"
+    ],
+    "case - wskaźnik przypadka / przyimek": [],
+    "mark - wskaźnik zespolenia (spójnik podrzędny)": [],
+
+    "cc - spójnik współrzędny": [
+        "cc:preconj - spójnik wprowadzający (np. 'zarówno')"
+    ],
+    "conj - połączenie współrzędne / szereg": [],
+
+    "expl - zaimek zwrotny / egzpletywny": [
+        "expl:pv - właściwy zaimek zwrotny 'się'",
+        "expl:impers - bezosobowe użycie 'się'"
+    ],
+    "discourse - element dyskursu": [
+        "discourse:intj - wykrzyknik",
+        "discourse:emo - emotikon / emoji"
+    ],
+    "parataxis - parataksa / wtrącenie": [
+        "parataxis:insert - wtrącenie / komentarz",
+        "parataxis:obj - mowa niezależna"
+    ],
+    "flat - struktura płaska": [
+        "flat:foreign - słowo obcojęzyczne"
+    ]
+}
+
 
 # --- Słowniki jednostek nazwanych (NER) ---
 NER_PREFIXES = [
@@ -4409,6 +7451,68 @@ class MetaBlock(ctk.CTkFrame):
             return "<s>"
         return ""
 
+
+# --- Klasa do rozwijanych paneli opcji (Akordeon) ---
+settings_cards = []
+
+
+class SettingsCard(ctk.CTkFrame):
+    def __init__(self, parent, title, expanded=False, expand_card=False):
+        theme = THEMES[motyw.get()]
+        super().__init__(parent, fg_color=theme["subframe_fg"], corner_radius=8, border_width=1, border_color="#3E3F42")
+
+        self.expand_card = expand_card
+
+        # anchor="nw" (North-West) gwarantuje dociśnięcie do lewej strony
+        if self.expand_card:
+            self.pack(fill="both", expand=True, pady=(0, 8), padx=0, anchor="nw")
+        else:
+            self.pack(fill="x", pady=(0, 8), padx=0, anchor="nw")
+
+        self.title_text = title
+        self.is_expanded = expanded
+
+        self.btn_header = ctk.CTkButton(
+            self,
+            text=f"  {'▼' if expanded else '▶'}  {title}",  # Dodane spacje dla ładnego wcięcia
+            command=self.toggle,
+            fg_color="transparent",
+            hover_color=theme.get("button_hover", "#404040"),
+            anchor="w",
+            font=("Verdana", 12, "bold"),
+            text_color=theme["label_text"],
+            height=32,
+            corner_radius=8
+        )
+        self.btn_header.pack(fill="x", padx=2, pady=2)
+
+        self.content = ctk.CTkFrame(self, fg_color="transparent")
+
+        if self.is_expanded:
+            self.pack_content()
+
+        settings_cards.append(self)
+
+    def pack_content(self):
+        if self.expand_card:
+            self.content.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        else:
+            self.content.pack(fill="x", padx=10, pady=(0, 10))
+
+    def toggle(self):
+        self.is_expanded = not self.is_expanded
+
+        if self.is_expanded:
+            self.btn_header.configure(text=f"  ▼  {self.title_text}")
+            self.pack_content()
+        else:
+            self.btn_header.configure(text=f"  ▶  {self.title_text}")
+            self.content.pack_forget()
+
+    def update_theme(self, theme):
+        self.configure(fg_color=theme["subframe_fg"])
+        self.btn_header.configure(text_color=theme["label_text"], hover_color=theme.get("button_hover", "#404040"))
+
 class QueryBuilderWindow(ctk.CTkToplevel):
     def __init__(self, parent, target_textbox, theme):
         super().__init__(parent)
@@ -4557,6 +7661,267 @@ class QueryBuilderWindow(ctk.CTkToplevel):
         self.destroy()
 
 
+def export_subcorpus_by_metadata():
+    global dataframes, corpus_options
+
+    if not dataframes:
+        messagebox.showinfo("Brak danych", "Najpierw załaduj korpus bazowy.")
+        return
+
+    # Okienko konfiguracji
+    win = ctk.CTkToplevel(app)
+    win.title("Utwórz podkorpus z metadanych")
+    win.geometry("450x450")
+    win.transient(app)
+    win.grab_set()
+
+    theme = THEMES[motyw.get()]
+    win.configure(fg_color=theme["app_bg"])
+
+    frame = ctk.CTkFrame(win, fg_color=theme["subframe_fg"], corner_radius=12)
+    frame.pack(fill="both", expand=True, padx=15, pady=15)
+
+    ctk.CTkLabel(frame, text="Korpus bazowy:", font=("Verdana", 12, "bold"), text_color=theme["label_text"]).pack(
+        pady=(10, 0))
+    combo_corpus = ctk.CTkOptionMenu(frame, values=corpus_options, fg_color=theme["button_fg"],
+                                     text_color=theme["button_text"])
+    combo_corpus.pack(pady=(0, 10))
+
+    ctk.CTkLabel(frame, text="Data od (np. 2024-01-01):", text_color=theme["label_text"]).pack()
+    entry_dstart = ctk.CTkEntry(frame, fg_color=theme["frame_fg"])
+    entry_dstart.pack(pady=(0, 10))
+
+    ctk.CTkLabel(frame, text="Data do (np. 2024-12-31):", text_color=theme["label_text"]).pack()
+    entry_dend = ctk.CTkEntry(frame, fg_color=theme["frame_fg"])
+    entry_dend.pack(pady=(0, 10))
+
+    ctk.CTkLabel(frame, text="Autor (zawiera):", text_color=theme["label_text"]).pack()
+    entry_author = ctk.CTkEntry(frame, fg_color=theme["frame_fg"])
+    entry_author.pack(pady=(0, 10))
+
+    ctk.CTkLabel(frame, text="Tytuł (zawiera):", text_color=theme["label_text"]).pack()
+    entry_title = ctk.CTkEntry(frame, fg_color=theme["frame_fg"])
+    entry_title.pack(pady=(0, 15))
+
+    def on_generate():
+        base_corp = combo_corpus.get()
+        d_start = entry_dstart.get().strip()
+        d_end = entry_dend.get().strip()
+        author = entry_author.get().strip()
+        title = entry_title.get().strip()
+
+        df = dataframes[base_corp]
+        mask = pd.Series(True, index=df.index)
+
+        # Błyskawiczne filtrowanie maską booleanową
+        if "Data publikacji" in df.columns:
+            if d_start: mask &= df["Data publikacji"].astype(str) >= d_start
+            if d_end: mask &= df["Data publikacji"].astype(str) <= d_end
+        if "Autor" in df.columns and author:
+            mask &= df["Autor"].astype(str).str.contains(author, case=False, na=False)
+        if "Tytuł" in df.columns and title:
+            mask &= df["Tytuł"].astype(str).str.contains(title, case=False, na=False)
+
+        sub_df = df[mask].copy()
+
+        if sub_df.empty:
+            messagebox.showwarning("Brak wyników", "Żadne teksty nie spełniają podanych kryteriów.")
+            return
+
+        corpus_dir = BASE_DIR_CORP if 'BASE_DIR_CORP' in globals() else os.path.expanduser("~")
+        file_path = filedialog.asksaveasfilename(
+            title="Zapisz podkorpus jako",
+            defaultextension=".parquet",
+            filetypes=[("Pliki Parquet", "*.parquet")],
+            initialdir=corpus_dir
+        )
+
+        if not file_path:
+            return
+
+        win.destroy()
+
+        # Ekran ładowania (jak w poprzedniej funkcji)
+        loading_win = ctk.CTkToplevel(app)
+        loading_win.title("Tworzenie podkorpusu")
+        loading_win.geometry(f"350x120+{app.winfo_x() + 100}+{app.winfo_y() + 100}")
+        loading_win.transient(app)
+        loading_win.grab_set()
+        ctk.CTkLabel(loading_win, text=f"Przeliczanie {len(sub_df)} tekstów...\nProszę czekać.",
+                     font=("Verdana", 12)).pack(expand=True)
+        loading_win.update()
+
+        def worker():
+            try:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+
+
+
+                base_tf = Counter()
+                orth_tf = Counter()
+                total_tokens = 0
+                monthly_token_counts = {}
+
+                for row in sub_df.itertuples():
+                    tokens = row.tokens.tolist() if hasattr(row.tokens, "tolist") else row.tokens
+                    lemmas = row.lemmas.tolist() if hasattr(row.lemmas, "tolist") else row.lemmas
+
+                    orth_tf.update(tokens)
+                    base_tf.update(lemmas)
+                    total_tokens += len(tokens)
+
+                    if "Data publikacji" in sub_df.columns:
+                        pub_date = str(getattr(row, "_4", getattr(row, "Data publikacji", "0000-00-00"))).strip()
+                        parts = pub_date.split('-')
+                        y = parts[0] if len(parts) > 0 else "0000"
+                        m = parts[1] if len(parts) > 1 else "00"
+
+                        monthly_token_counts.setdefault(y, {}).setdefault(m, 0)
+                        monthly_token_counts[y][m] += len(tokens)
+
+                metadata_export = {
+                    "base_tf": dict(base_tf),
+                    "orth_tf": dict(orth_tf),
+                    "total_tokens": total_tokens,
+                    "monthly_token_counts": monthly_token_counts
+                }
+                meta_json_bytes = json.dumps(metadata_export, ensure_ascii=False).encode('utf-8')
+
+                table_pa = pa.Table.from_pandas(sub_df)
+                existing_meta = table_pa.schema.metadata or {}
+                merged_meta = {**existing_meta, b"korpus_meta": meta_json_bytes}
+                table_pa = table_pa.replace_schema_metadata(merged_meta)
+
+                pq.write_table(table_pa, file_path, compression='snappy')
+
+                def update_ui():
+                    loading_win.destroy()
+                    messagebox.showinfo("Sukces", f"Zapisano podkorpus z {len(sub_df)} dokumentami.")
+
+                app.after(0, update_ui)
+
+            except Exception as e:
+                logging.exception("Błąd tworzenia podkorpusu")
+                app.after(0, lambda: loading_win.destroy())
+                app.after(0,
+                          lambda msg=str(e): messagebox.showerror("Błąd", f"Nie udało się utworzyć podkorpusu.\n{msg}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    ctk.CTkButton(frame, text="Generuj", font=("Verdana", 12, "bold"), fg_color=theme["button_fg"],
+                  text_color=theme["button_text"], hover_color=theme["button_hover"], command=on_generate).pack(pady=10)
+
+def export_to_subcorpus():
+    global full_results_sorted, dataframes, global_selected_corpus, corpus_options, files, inverted_indexes
+
+    if not full_results_sorted:
+        messagebox.showinfo("Brak wyników", "Najpierw wyszukaj frazę, aby utworzyć podkorpus na bazie tych wyników.")
+        return
+
+    # Pobierz domyślny folder z korpusami
+    corpus_dir = BASE_DIR_CORP if 'BASE_DIR_CORP' in globals() else os.path.expanduser("~")
+
+    file_path = filedialog.asksaveasfilename(
+        title="Zapisz podkorpus jako",
+        defaultextension=".parquet",
+        filetypes=[("Pliki Parquet", "*.parquet")],
+        initialdir=corpus_dir
+    )
+
+    if not file_path:
+        return
+
+    # Tworzenie ekranu ładowania
+    loading_win = ctk.CTkToplevel(app)
+    loading_win.title("Tworzenie podkorpusu")
+
+    # Wyśrodkowanie okienka
+    app.update_idletasks()
+    x = app.winfo_x() + (app.winfo_width() // 2) - 175
+    y = app.winfo_y() + (app.winfo_height() // 2) - 60
+    loading_win.geometry(f"350x120+{x}+{y}")
+    loading_win.transient(app)
+    loading_win.grab_set()
+
+    ctk.CTkLabel(loading_win, text="Generowanie pliku Parquet...\nPrzeliczanie metadanych, proszę czekać.",
+                 font=("Verdana", 12)).pack(expand=True)
+    loading_win.update()
+
+    def worker():
+        try:
+            # 1. Pobranie unikalnych indeksów wierszy z wyników wyszukiwania (indeks 11 w krotce wyników)
+            unique_row_indices = list(set([res[11] for res in full_results_sorted]))
+
+            # 2. Wycięcie podkorpusu z oryginalnego DataFrame
+            df = dataframes[global_selected_corpus]
+            sub_df = df.loc[unique_row_indices].copy()
+
+            # 3. Inicjalizacja nowych liczników dla metadanych
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            base_tf = Counter()
+            orth_tf = Counter()
+            total_tokens = 0
+            monthly_token_counts = {}
+
+            # 4. Przeliczanie statystyk frekwencyjnych na nowo
+            for row in sub_df.itertuples():
+                tokens = row.tokens.tolist() if hasattr(row.tokens, "tolist") else row.tokens
+                lemmas = row.lemmas.tolist() if hasattr(row.lemmas, "tolist") else row.lemmas
+
+                orth_tf.update(tokens)
+                base_tf.update(lemmas)
+                total_tokens += len(tokens)
+
+                # Zbieranie rozkładu w czasie (jeśli istnieje)
+                if "Data publikacji" in sub_df.columns:
+                    pub_date = str(getattr(row, "_4", getattr(row, "Data publikacji", "0000-00-00"))).strip()
+                    parts = pub_date.split('-')
+                    y = parts[0] if len(parts) > 0 else "0000"
+                    m = parts[1] if len(parts) > 1 else "00"
+
+                    if y not in monthly_token_counts:
+                        monthly_token_counts[y] = {}
+                    if m not in monthly_token_counts[y]:
+                        monthly_token_counts[y][m] = 0
+                    monthly_token_counts[y][m] += len(tokens)
+
+            # 5. Przygotowanie metadanych JSON
+            metadata_export = {
+                "base_tf": dict(base_tf),
+                "orth_tf": dict(orth_tf),
+                "total_tokens": total_tokens,
+                "monthly_token_counts": monthly_token_counts
+            }
+            meta_json_bytes = json.dumps(metadata_export, ensure_ascii=False).encode('utf-8')
+
+            # 6. Zapisywanie pliku Parquet z dołączonymi metadanymi
+            table_pa = pa.Table.from_pandas(sub_df)
+            existing_meta = table_pa.schema.metadata or {}
+            merged_meta = {**existing_meta, b"korpus_meta": meta_json_bytes}
+            table_pa = table_pa.replace_schema_metadata(merged_meta)
+
+            pq.write_table(table_pa, file_path, compression='snappy')
+
+            def update_ui():
+                loading_win.destroy()
+                corpus_name = os.path.basename(file_path).replace(".parquet", "")
+                messagebox.showinfo("Sukces", f"Zapisano podkorpus:\n{corpus_name}")
+
+            app.after(0, update_ui)
+
+
+        except Exception as e:
+            logging.exception("Błąd tworzenia podkorpusu")
+            app.after(0, lambda: loading_win.destroy())
+            app.after(0, lambda msg=str(e): messagebox.showerror("Błąd", f"Nie udało się utworzyć podkorpusu.\n{msg}"))
+
+    # Uruchomienie przeliczania i zapisu w tle
+    threading.Thread(target=worker, daemon=True).start()
+
+
 def export_data():
     try:
         all_columns = [
@@ -4587,8 +7952,21 @@ def export_data():
         # Ensure folder exists
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
+        # --- NAPRAWA: Zbroja przeciwko błędom Excela ---
+        def clean_for_excel(df):
+            df_cleaned = df.replace(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', regex=True)
+            for col in df_cleaned.select_dtypes(include=['object']).columns:
+                df_cleaned[col] = df_cleaned[col].apply(
+                    lambda x: f"'{x}" if isinstance(x, str) and str(x).startswith(('=', '-', '+', '@')) else x
+                )
+            return df_cleaned
+
+        # Czyszczenie głównej tabeli
+        df_export_slice = clean_for_excel(df_export_slice)
+
         # Export to Excel with multiple sheets
         if file_path.lower().endswith(".xlsx"):
+
             with pd.ExcelWriter(file_path, engine='openpyxl') as writer:
                 # Sheet 1: main export
                 df_export_slice.to_excel(writer, sheet_name="Wyniki wyszukiwania", index=False)
@@ -4596,35 +7974,65 @@ def export_data():
                 # Sheet 2: paginator_fq['data']
                 if 'data' in paginator_fq and paginator_fq['data']:
                     data_rows = paginator_fq['data']
-                    headers = ["Nr", "Forma podstawowa (base)", "Liczba wystąpień", "Częstość względna"]
+                    headers = ["Nr", "Forma podstawowa (base)", "Liczba wystąpień", "Częstość względna",
+                               "Rozproszenie (DF)", "Ogólne TF-IDF"]
                     df_data = pd.DataFrame(data_rows, columns=headers)
-                    df_data.to_excel(writer, sheet_name="Częstość lematów", index=False)
+                    clean_for_excel(df_data).to_excel(writer, sheet_name="Częstość lematów", index=False)
 
                 # Sheet 3: paginator_token['data']
                 if 'data' in paginator_token and paginator_token['data']:
                     data_rows = paginator_token['data']
-                    headers = ["Nr", "Forma tekstowa (orth)", "Liczba wystąpień", "Częstość względna"]
+                    headers = ["Nr", "Forma tekstowa (orth)", "Liczba wystąpień", "Częstość względna",
+                               "Rozproszenie (DF)", "Ogólne TF-IDF"]
                     df_data = pd.DataFrame(data_rows, columns=headers)
-                    df_data.to_excel(writer, sheet_name="Częstość tokenów", index=False)
+                    clean_for_excel(df_data).to_excel(writer, sheet_name="Częstość tokenów", index=False)
 
                 # Sheet 4: paginator_month['data']
                 if 'data' in paginator_month and paginator_month['data']:
                     data_rows = paginator_month['data']
-                    headers = ["Rok", "Miesiąc", "Forma podstawowa", "Liczba wystąpień", "Częstość względna"]
+                    headers = ["Rok", "Miesiąc", "Forma podstawowa", "Liczba wystąpień", "Częstość względna", "TF-IDF",
+                               "Z-score"]
                     df_data = pd.DataFrame(data_rows, columns=headers)
-                    df_data.to_excel(writer, sheet_name="Częstość w czasie", index=False)
+                    clean_for_excel(df_data).to_excel(writer, sheet_name="Częstość w czasie", index=False)
 
-                # --- NOWOŚĆ: Sheet 5: Kolokacje ---
-                # --- NOWOŚĆ: Sheet 5: Kolokacje ---
+                # Sheet 5: Kolokacje
                 if 'paginator_colloc' in globals() and 'data' in paginator_colloc and paginator_colloc['data']:
                     data_rows = paginator_colloc['data']
                     headers = ["Nr", "Kolokat", "f(nc)", "f(c)", "Log-Likelihood", "MI Score", "T-score",
                                "Log-Dice"]
                     df_data = pd.DataFrame(data_rows, columns=headers)
-                    df_data.to_excel(writer, sheet_name="Kolokacje", index=False)
+                    clean_for_excel(df_data).to_excel(writer, sheet_name="Kolokacje", index=False)
+
+                # --- NOWOŚĆ: Sheet 6: Profil Kolokacyjny (zrzut CAŁOŚCI z pamięci) ---
+                if 'current_profile_dict' in globals() and current_profile_dict:
+                    all_merged_rows = []
+                    # Wyciągnięcie absolutnie wszystkich kolokatów ze wszystkich relacji
+                    for rel_name, rows in current_profile_dict.items():
+                        all_merged_rows.extend(rows)
+
+                    # Posortowanie globalne (najpierw najlepszy Log-Dice)
+                    all_merged_rows.sort(key=lambda r: (r.log_dice, r.cooc_freq), reverse=True)
+
+                    table_rows = []
+                    for i, row_obj in enumerate(all_merged_rows):
+                        display_colloc = row_obj.collocate
+                        if getattr(row_obj, "collocate_upos", ""):
+                            display_colloc = f"{display_colloc} [{row_obj.collocate_upos}]"
+
+                        # Pakujemy wszystko do prostej listy, gotowej dla Excela
+                        table_rows.append([
+                            i + 1, display_colloc, row_obj.relation, row_obj.cooc_freq, row_obj.doc_freq,
+                            row_obj.global_freq, row_obj.ll_score, row_obj.mi_score,
+                            row_obj.t_score, row_obj.log_dice
+                        ])
+
+                    headers = ["Nr", "Kolokat", "Relacja składniowa", "Współwyst.", "Zasięg (Dok.)", "Freq. Glob.",
+                               "Log-Likelihood", "MI Score", "T-score", "Log-Dice"]
+                    df_data = pd.DataFrame(table_rows, columns=headers)
+                    clean_for_excel(df_data).to_excel(writer, sheet_name="Profil kolokacyjny", index=False)
 
         else:
-            # fallback CSV export (single sheet - tylko główne wyniki)
+            # fallback CSV export
             df_export_slice.to_csv(file_path, index=False)
 
     except Exception as e:
@@ -4703,7 +8111,8 @@ def save_config():
         'styl_wykresow': styl_wykresow.get(),
         'motyw': motyw.get(),
         'plotting': plotting.get(),
-        'kontekst': kontekst
+        'kontekst': kontekst,
+        'min_tokens_threshold': min_tokens_threshold
 
     }
     with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
@@ -4712,12 +8121,12 @@ def save_config():
 
 # Settings window
 def settings_window():
-    global settings_popup, fontsize, font_family, plotting, kontekst
+    global settings_popup, fontsize, font_family, plotting, kontekst, min_tokens_threshold
     theme = THEMES[motyw.get()]
 
     # Callbacks
     def restore_defaults():
-        global settings_popup, fontsize, font_family, kontekst, plotting
+        global settings_popup, fontsize, font_family, kontekst, plotting, min_tokens_threshold
         font_family.set(DEFAULT_SETTINGS['font_family'])
         styl_wykresow.set(DEFAULT_SETTINGS['styl_wykresow'])
         motyw.set(DEFAULT_SETTINGS['motyw'])
@@ -4728,13 +8137,16 @@ def settings_window():
         kontekst_entry.delete(0, 'end')
         kontekst_entry.insert(0, str(DEFAULT_SETTINGS['kontekst']))
         kontekst = DEFAULT_SETTINGS['kontekst']
+        threshold_entry.delete(0, 'end')
+        threshold_entry.insert(0, str(DEFAULT_SETTINGS['min_tokens_threshold']))
+        min_tokens_threshold = DEFAULT_SETTINGS['min_tokens_threshold']
         apply_theme()
         save_config()
         settings_popup.destroy()
         settings_popup = None
 
     def on_save():
-        global settings_popup, fontsize, font_family, kontekst
+        global settings_popup, fontsize, font_family, kontekst, min_tokens_threshold
         try:
             fontsize = int(fontsize_entry.get())
         except ValueError:
@@ -4743,6 +8155,11 @@ def settings_window():
             kontekst = int(kontekst_entry.get())
         except ValueError:
             kontekst = DEFAULT_SETTINGS['kontekst']
+
+        try:
+            min_tokens_threshold = int(threshold_entry.get())
+        except ValueError:
+            min_tokens_threshold = DEFAULT_SETTINGS['min_tokens_threshold']
         apply_theme()
         save_config()
         try:
@@ -4761,12 +8178,12 @@ def settings_window():
 
     settings_popup = ctk.CTkToplevel(app)
     settings_popup.title('Ustawienia')
-    settings_popup.geometry('420x660')
+    settings_popup.geometry('420x750')
     settings_popup.grab_set()
     settings_popup.configure(fg_color=theme["app_bg"])  # use theme
 
     # Frame for all settings
-    settings_frame = ctk.CTkFrame(settings_popup, fg_color=theme["subframe_fg"], corner_radius=15)
+    settings_frame = ctk.CTkScrollableFrame(settings_popup, fg_color=theme["subframe_fg"], corner_radius=15)
     settings_frame.pack(fill="both", expand=True, padx=15, pady=15)
 
     entry_height = 35  # consistent with rest of app
@@ -4815,6 +8232,13 @@ def settings_window():
                                   fg_color=theme["frame_fg"], corner_radius=8)
     kontekst_entry.insert(0, str(kontekst))
     kontekst_entry.pack(pady=5)
+
+    ctk.CTkLabel(settings_frame, text='Minimalny próg tokenów (koszyk wykresu):', font=("Verdana", 12, "bold"),
+                 text_color=theme["label_text"]).pack(pady=(10, 5))
+    threshold_entry = ctk.CTkEntry(settings_frame, width=150, height=entry_height, font=("Verdana", 12),
+                                   fg_color=theme["frame_fg"], corner_radius=8)
+    threshold_entry.insert(0, str(min_tokens_threshold))
+    threshold_entry.pack(pady=5)
 
     # Buttons frame
     button_frame = ctk.CTkFrame(settings_frame, fg_color=theme["subframe_fg"], corner_radius=12)
@@ -4906,50 +8330,67 @@ def get_txt_files():
 webview_thread = None  # Global variable to track the thread
 
 
-# Zmieniona funkcja przyjmująca nazwę pliku jako argument
-def open_webview_window(file_name):
-    global webview_thread
+webview_process = None
 
-    if webview_thread and webview_thread.is_alive():
-        print("Webview is already running.")
-        return webview_thread
+def open_webview_window(file_name: str):
+    import os
+    import sys
+    import subprocess
+    from pathlib import Path
 
-    def worker():
-        import webview
-        # Używamy przekazanej nazwy pliku
-        file_path = os.path.join(BASE_DIR, f"temp/{file_name}")
-        window = webview.create_window(
-            "Pomoc Korpusuj",
-            url=f"file://{file_path}",
-            width=1200,
-            height=800,
-            resizable=True,
-            text_select=True,
-        )
-        webview.start(debug=False)
+    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
-    webview_thread = threading.Thread(target=worker, name="MainThread")
-    webview_thread.start()
-    return webview_thread
+    # Dla plików pomocy / instrukcji:
+    # przekazujemy nazwę lub ścieżkę tak, żeby blok --run-webview sam ją poprawnie rozwiązał.
+    safe_target = str(file_name).strip()
+
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--run-webview", safe_target]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__), "--run-webview", safe_target]
+
+    logging.info(f"open_webview_window -> {safe_target}")
+    subprocess.Popen(cmd, creationflags=creationflags)
+
+
+
+webview_thread = None
+
+fiszki_process = None
 
 def fiszki_load_file_content(value):
-    """Uruchamia load_file_content w osobnym wątku (jeden na raz)."""
-    global webview_thread
+    """Uruchamia load_file_content. Na macOS jako osobny proces, na Windows w wątku."""
+    global webview_thread, fiszki_process
 
-    # sprawdzamy czy już działa
-    if webview_thread is not None and webview_thread.is_alive():
-        print("Loader already running.")
+    if sys.platform == "darwin":
+        # MACOS: Odpalamy proces używając naszego nowego routera
+        if fiszki_process is not None and fiszki_process.poll() is None:
+            print("Fiszki już działają.")
+            return
+
+        if getattr(sys, 'frozen', False):
+            cmd = [sys.executable, "--run-fiszki", str(value)]
+        else:
+            cmd = [sys.executable, os.path.abspath(__file__), "--run-fiszki", str(value)]
+
+        try:
+            fiszki_process = subprocess.Popen(cmd)
+        except Exception as e:
+            logging.error(f"Nie udało się uruchomić fiszek na macOS: {e}")
+    else:
+        # WINDOWS / LINUX: Tutaj zostaw swój dotychczasowy kod oparty o threading.Thread
+        if webview_thread is not None and webview_thread.is_alive():
+            print("Loader already running.")
+            return webview_thread
+
+        def worker():
+            get_fiszki_module().load_file_content(value)
+
+        # inicjalizacja nowego wątku
+        webview_thread = threading.Thread(target=worker, name="MainThread", daemon=True)
+        webview_thread.start()
+
         return webview_thread
-
-    def worker():
-        get_fiszki_module().load_file_content(value)
-
-
-    # inicjalizacja nowego wątku
-    webview_thread = threading.Thread(target=worker, name="MainThread", daemon=True)
-    webview_thread.start()
-
-    return webview_thread
 
 def flash_button(button, color):
     original_color = button.cget("fg_color")  # Store original color
@@ -5079,6 +8520,103 @@ def load_data_on_startup(loading_label=None):
             messagebox.showerror("Błąd ładowania korpusu",
                                  f"Nie udało się wczytać pliku {name}.\nPlik może być uszkodzony.\nSzczegóły: {e}")
 
+
+def show_corpus_info():
+    global dataframes, inverted_indexes, corpus_var
+
+    selected = corpus_var.get()
+    if not selected or selected not in dataframes:
+        messagebox.showinfo("Brak danych", "Najpierw załaduj lub wybierz korpus.")
+        return
+
+    df = dataframes[selected]
+    inv_idx = inverted_indexes[selected]
+
+    # --- ZBIERANIE STATYSTYK ---
+    total_docs = len(df)
+    total_tokens = inv_idx.get("total_tokens", 0)
+    unique_lemmas = len(inv_idx.get("base", {}))
+    unique_orths = len(inv_idx.get("orth", {}))
+
+    # --- ZAKRES CZASOWY I TOKENY NA MIESIĄC ---
+    date_range = "Brak danych o dacie"
+    monthly_counts = inv_idx.get("monthly_token_counts", {})
+    monthly_stats_str = ""
+
+    if monthly_counts:
+        dates = []
+        monthly_stats_list = []  # Pomocnicza lista do zbudowania ładnego stringa
+
+        # Sortujemy lata
+        for y in sorted(monthly_counts.keys(), key=int):
+            # Sortujemy miesiące w obrębie roku
+            for m in sorted(monthly_counts[y].keys(), key=int):
+                dates.append((int(y), int(m)))
+                count = monthly_counts[y][m]
+                monthly_stats_list.append(f"  • {int(m):02d}.{y}: {count:,} tokenów")
+
+        if dates:
+            min_d = min(dates)
+            max_d = max(dates)
+            date_range = f"{min_d[1]:02d}.{min_d[0]} - {max_d[1]:02d}.{max_d[0]}"
+
+        if monthly_stats_list:
+            monthly_stats_str = "LICZBA TOKENÓW NA MIESIĄC:\n" + "\n".join(monthly_stats_list)
+
+    # --- DOSTĘPNE METADANE ---
+    exclude_cols = {
+        "Oryginalna_nazwa_pliku", "Treść", "token_counts", "tokens", "lemmas",
+        "deprels", "postags", "full_postags", "word_ids", "sentence_ids",
+        "head_ids", "start_ids", "end_ids", "ners", "upostags", "corefs"
+    }
+    meta_cols = [c for c in df.columns if c not in exclude_cols]
+    meta_str = "\n  • ".join(meta_cols) if meta_cols else "  Brak dodatkowych metadanych"
+
+    # --- TWORZENIE OKIENKA UI ---
+    info_win = ctk.CTkToplevel(app)
+    info_win.title(f"Informacje o korpusie: {selected}")
+    info_win.geometry("500x550")  # Lekko powiększyłem okno
+    info_win.transient(app)
+    info_win.grab_set()
+
+    theme = THEMES[motyw.get()]
+    info_win.configure(fg_color=theme["app_bg"])
+
+    frame = ctk.CTkFrame(info_win, fg_color=theme["subframe_fg"], corner_radius=12)
+    frame.pack(fill="both", expand=True, padx=15, pady=15)
+
+    # Budujemy cały tekst i podmieniamy przecinki z {count:,} na spacje
+    info_text = (
+        f"ROZMIAR KORPUSU:\n"
+        f"  • Liczba tekstów: {total_docs:,}\n"
+        f"  • Całkowita liczba tokenów: {total_tokens:,}\n"
+        f"  • Unikalne lematy: {unique_lemmas:,}\n"
+        f"  • Unikalne formy ortograficzne: {unique_orths:,}\n\n"
+        f"ZAKRES CZASOWY:\n"
+        f"  • {date_range}\n\n"
+        f"DOSTĘPNE METADANE:\n  • {meta_str}\n\n"
+        f"{monthly_stats_str}"
+    ).replace(',', ' ')
+
+    # --- ZMIANA: Zamiast Label używamy Textboxa, żeby był suwak (scrollbar) ---
+    textbox = ctk.CTkTextbox(
+        frame,
+        font=("Verdana", 13),
+        text_color=theme["label_text"],
+        fg_color="transparent",
+        wrap="word"
+    )
+    textbox.insert("1.0", info_text)
+    textbox.configure(state="disabled")  # Blokujemy edycję
+    textbox.pack(padx=10, pady=10, fill="both", expand=True)
+
+    btn_close = ctk.CTkButton(
+        frame, text="Zamknij", command=info_win.destroy,
+        font=("Verdana", 12, "bold"), fg_color=theme["button_fg"],
+        hover_color=theme["button_hover"], text_color=theme["button_text"]
+    )
+    btn_close.pack(pady=10)
+
 def load_corpora():
     global files, corpus_options, corpus_var, dataframes
     # Use BASE_DIR to locate corpus_files folder
@@ -5110,6 +8648,8 @@ def load_corpora():
     # Update dropdown
     option_corpus.configure(values=corpus_options, variable=corpus_var)
 
+    load_semantic_neighbors()
+
     # Close loading window
     loading_screen.destroy()
     print("Korpusy załadowane.")
@@ -5130,7 +8670,7 @@ THEMES = {
         "row_colors": ("#2C2F33", "#33373D"),
         "text_colors": ["#FFFFFF", "#FFFFFF", "#65A46F", "#FFFFFF"],
         "text_colors_month": ["white", "white", "white", "#65a46f", "white"],
-        "text_colors_colloc": ["#FFFFFF", "#65A46F", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"], # <--- NOWE
+        "text_colors_colloc": ["#FFFFFF", "#65A46F", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"],
         "selected_row": "#3A75C4",
         "canvas_bg": "#2C2F33",
 
@@ -5160,7 +8700,7 @@ THEMES = {
         "row_colors": ("#E6E8E8", "#F2F4F4"),
         "text_colors": ["black", "black", "#000DFF", "black"],
         "text_colors_month": ["black", "black", "black", "#000DFF", "black"],
-        "text_colors_colloc": ["black", "#000DFF", "black", "black", "black", "black", "black", "black"], # <--- NOWE
+        "text_colors_colloc": ["black", "#000DFF", "black", "black", "black", "black", "black", "black", "black"],
         "selected_row": "#A3C9F1",
         "canvas_bg": "#E6E8E8",
 
@@ -5217,15 +8757,25 @@ def apply_theme():
     orth_frame.configure(fg_color=theme["frame_fg"])
     result_frame.configure(fg_color=theme["frame_fg"])
     colloc_frame.configure(fg_color=theme["frame_fg"])
+    if 'profile_frame' in globals(): profile_frame.configure(fg_color=theme["frame_fg"])
     tabview.configure(fg_color=theme["frame_fg"])
 
     # Subframes (Widoczne, zaokrąglone kafelki z zawartością)
     for frame in [
         pagination_frame, entry_button_frame, pagination_lemma_frame, pagination_orth_frame,
-        pagination_month_frame, plot_options_frame, saveplot_button_frame, checkboxes_frame,
-        colloc_controls, pagination_colloc_frame, date_settings_frame
+        pagination_month_frame, pagination_colloc_frame,
+        pagination_profile_frame
     ]:
         frame.configure(fg_color=theme["subframe_fg"], border_color=theme["subframe_fg"])
+
+    # Nowe kontenery opcji bocznych stają się tłem
+    plot_options_frame.configure(fg_color=theme["frame_fg"])
+    colloc_options_frame.configure(fg_color=theme["frame_fg"])
+    profile_options_frame.configure(fg_color=theme["frame_fg"])
+
+    # Zaktualizuj wszystkie nowo stworzone Karty ustawień na Wykresach
+    for card in settings_cards:
+        card.update_theme(theme)
 
     # Kontenery strukturalne (MUSZĄ być przezroczyste, by było widać między nimi tło okna)
     for frame in [left_pane, right_pane, right_subframe, buttons_action_frame]:
@@ -5235,6 +8785,8 @@ def apply_theme():
     def update_frame_children(parent_frame):
         for child in parent_frame.winfo_children():
             if isinstance(child, ctk.CTkLabel):
+                if child.cget("text") == "❓":
+                    continue
                 child.configure(text_color=theme["label_text"])
             elif isinstance(child, ctk.CTkOptionMenu):
                 child.configure(
@@ -5247,8 +8799,8 @@ def apply_theme():
             elif isinstance(child, ctk.CTkFrame):
                 update_frame_children(child)  # Zmiana dla dzieci w zagnieżdżonych ramkach
 
-    update_frame_children(colloc_controls)
-    update_frame_children(date_settings_frame) # <--- DODANO magiczne kolorowanie dat i interwałów!
+    update_frame_children(colloc_options_frame)
+    update_frame_children(date_settings_frame)
 
     # --- Buttons ---
     for button in [
@@ -5258,7 +8810,9 @@ def apply_theme():
         button_first_month, button_prev_month, button_next_month, button_last_month,
         button_save_plot, save_selection_button,
         button_first_colloc, button_prev_colloc, button_next_colloc, button_last_colloc, btn_calc_colloc,
-        btn_refresh_plot # <--- DODANO nowy przycisk odświeżania
+        btn_refresh_plot,
+        button_first_profile, button_prev_profile, button_next_profile, button_last_profile, btn_calc_profile,
+        btn_nav_back, btn_nav_forward
     ]:
         button.configure(
             fg_color=theme["button_fg"],
@@ -5354,6 +8908,13 @@ def apply_theme():
     colloc_table.set_selected_row_color(theme["selected_row"])
     colloc_table.set_canvas_background(theme["canvas_bg"])
 
+    profile_table.set_header_font(font_tuple)
+    profile_table.set_font(font_tuple)
+    profile_table.set_text_colors(theme["text_colors_colloc"])
+    profile_table.set_row_colors(*theme["row_colors"])
+    profile_table.set_selected_row_color(theme["selected_row"])
+    profile_table.set_canvas_background(theme["canvas_bg"])
+
     # Syntax highlighting
     highlight_color = theme["highlight"]
     highlight_keyword = theme["highlight_keyword"]
@@ -5364,11 +8925,14 @@ def apply_theme():
 
     register_text_widget(text_full)
 
+
 def show_table(choice):
     lemma_frame.grid_remove()
     orth_frame.grid_remove()
     month_frame.grid_remove()
     colloc_frame.grid_remove()
+    if 'profile_frame' in globals():
+        profile_frame.grid_remove()
 
     if choice == "Formy podstawowe (base)":
         lemma_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
@@ -5378,8 +8942,37 @@ def show_table(choice):
         month_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
     elif choice == "Kolokacje":
         colloc_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
+    elif choice == "Profil kolokacyjny":
+        profile_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
 
+        # --- DODANA LOGIKA: Dynamiczne opcje węzła ---
+        if full_results_sorted:
+            # Bierzemy pierwsze z brzegu trafienie, by sprawdzić jego długość
+            res = full_results_sorted[0]
+            start_i = res[12]
+            end_i = res[13]
+            match_len = end_i - start_i
 
+            # Pobieramy podgląd lematów (np. "wielki zamek")
+            lemmas = str(res[4]).split()
+
+            options = []
+            for i in range(match_len):
+                hint = lemmas[i] if i < len(lemmas) else "?"
+                options.append(f"Token {i + 1} ({hint})")
+
+            if not options: options = ["Token 1"]
+
+            # Wrzucamy opcje do menu. Jeśli są >1, podświetlamy na pomarańczowo, żeby zwrócić uwagę!
+            profile_node_menu.configure(values=options)
+            if match_len > 1:
+                profile_node_menu.configure(fg_color="#D9A04F", button_color="#D9A04F")
+            else:
+                profile_node_menu.configure(fg_color="#4B6CB7", button_color="#4B6CB7")
+
+            if profile_node_var.get() not in options:
+                profile_node_var.set(options[0])
+    push_nav_state()
 
 class Menu:
     """
@@ -5454,6 +9047,11 @@ def calculate_collocs():
     ignore_case = colloc_ignore_case_var.get()
     use_sentence_bound = sentence_boundary_var.get()
     sort_mode = colloc_sort_var.get()
+    active_feat_filters = {
+        feat: var.get().split(" ")[0]
+        for feat, var in dynamic_feat_vars.items()
+        if var.get() != "Wszystkie"
+    }
 
     try:
         min_freq = int(entry_min_freq.get() or "1")
@@ -5473,11 +9071,39 @@ def calculate_collocs():
 
     def worker():
         try:
+
+            def check_match(idx, row_upostags, row_postags, row_full_postags):
+                # 1. Najpierw sprawdzamy ogólne POS/UPOS
+                u_match = (upos_filter == "Wszystkie") if row_upostags is None else (
+                            upos_filter == "Wszystkie" or row_upostags[idx] == upos_filter)
+                p_match = (pos_filter == "Wszystkie" or row_postags[idx] == pos_filter)
+
+                if not (u_match and p_match):
+                    return False
+
+                # 2. Następnie weryfikujemy dokładne cechy z full_postags, jeśli filtry są włączone
+                if active_feat_filters and row_full_postags is not None:
+                    full_tag = str(row_full_postags[idx])
+                    tag_parts = full_tag.split(":")
+                    tag_pos = tag_parts[0] if tag_parts else ""
+                    tag_feats = tag_parts[1:] if len(tag_parts) > 1 else []
+
+                    mapping = FEAT_MAPPING.get(tag_pos, {})
+                    for feat, req_val in active_feat_filters.items():
+                        if feat in mapping:
+                            f_idx = mapping[feat]
+                            # Sprawdzamy, czy cecha istnieje i pasuje
+                            if f_idx < len(tag_feats) and tag_feats[f_idx] == req_val:
+                                continue
+                        return False  # Jeśli nie pasuje, odrzuć kolokat
+                return True
+
             colloc_counter = Counter()
             colloc_doc_tracker = {}
             df = dataframes[global_selected_corpus]
             total_actual_slots = 0
             seen_slots = set()
+
 
             # --- NOWOŚĆ: KULOODPORNY FILTR KOLOKACJI ---
             def get_clean_colloc(word):
@@ -5524,15 +9150,14 @@ def calculate_collocs():
                             continue
                         seen_slots.add((row_idx, i))
 
-                        is_punct = (upostags[i] == "PUNCT") if upostags is not None else (tokens[i] in string.punctuation)
+                        is_punct = (upostags[i] == "PUNCT") if upostags is not None else (
+                                    tokens[i] in string.punctuation)
                         total_actual_slots += 1
 
                         if not is_punct:
-                            u_match = (upos_filter == "Wszystkie") if upostags is None else (
-                                        upos_filter == "Wszystkie" or upostags[i] == upos_filter)
-                            p_match = (pos_filter == "Wszystkie" or postags[i] == pos_filter)
-
-                            if u_match and p_match:
+                            # Zastępujemy u_match i p_match nową funkcją weryfikującą wszystkie cechy
+                            full_postags = getattr(row_data, "full_postags", None)
+                            if check_match(i, upostags, postags, full_postags):
                                 clean_w = get_clean_colloc(form_array[i])
                                 if clean_w:
                                     colloc = clean_w.lower() if ignore_case else clean_w
@@ -5555,15 +9180,15 @@ def calculate_collocs():
                                         continue
                                     seen_slots.add((row_idx, j))
 
-                                    if deprel_filter == "Wszystkie" or deprels[i] == deprel_filter:
+                                    if deprel_filter == "Wszystkie" or deprels[i] == deprel_filter:  # lub deprels[j]
                                         is_punct = (upostags[j] == "PUNCT") if upostags is not None else (
-                                                    tokens[j] in string.punctuation)
+                                                tokens[j] in string.punctuation)
                                         if not is_punct:
                                             total_actual_slots += 1
-                                            u_match = (upos_filter == "Wszystkie") if upostags is None else (
-                                                        upos_filter == "Wszystkie" or upostags[j] == upos_filter)
-                                            p_match = (pos_filter == "Wszystkie" or postags[j] == pos_filter)
-                                            if u_match and p_match:
+
+                                            # Używamy nowej funkcji do weryfikacji:
+                                            if check_match(j, upostags, postags,
+                                                           getattr(row_data, "full_postags", None)):
                                                 clean_w = get_clean_colloc(form_array[j])
                                                 if clean_w:
                                                     colloc = clean_w.lower() if ignore_case else clean_w
@@ -5594,7 +9219,9 @@ def calculate_collocs():
             # --- 2. OBLICZANIE STATYSTYK ---
             inv_idx_data = inverted_indexes[global_selected_corpus]
             bg_tf_raw = inv_idx_data['base_tf'] if form_mode == "Lemat (base)" else inv_idx_data['orth_tf']
-            total_tokens = inv_idx_data['total_tokens']
+            total_tokens = inv_idx_data.get('total_tokens', 1)
+            if total_tokens == 0:
+                total_tokens = 1
 
             # Dynamiczne tworzenie małych liter dla frekwencji globalnej korpusu
             if ignore_case:
@@ -5652,14 +9279,18 @@ def calculate_collocs():
                 update_table(paginator_colloc)
                 btn_calc_colloc.configure(state="normal", text="Oblicz")
 
+                with state_lock:
+                    current_state.colloc_data = list(colloc_stats)
+
             app.after(0, update_ui)
 
         except Exception as e:
             logging.exception("Błąd kolokacji")
+            error_msg = str(e)
 
-            def on_error():
+            def on_error(msg=error_msg):
                 btn_calc_colloc.configure(state="normal", text="Oblicz")
-                messagebox.showerror("Błąd kolokacji", f"Nie udało się obliczyć kolokacji.\nSzczegóły: {e}")
+                messagebox.showerror("Błąd kolokacji", f"Nie udało się obliczyć kolokacji.\nSzczegóły: {msg}")
 
             app.after(0, on_error)
 
@@ -5667,9 +9298,238 @@ def calculate_collocs():
 
     threading.Thread(target=worker, daemon=True).start()
 
+
+current_profile_target_lemma = ""  # Deklaracja na poziomie modułu
+
+
+def search_from_table_profile(selected_word):
+    """Ekskluzywna funkcja wyszukująca dla Profilu Składniowego, używająca odwróconych drzew zależności."""
+    if not selected_word or not selected_word.strip(): return
+
+    global current_profile_target_lemma
+    if not current_profile_target_lemma:
+        messagebox.showinfo("Błąd", "Brak danych o badanym lemacie. Wygeneruj Profil ponownie.")
+        return
+
+    active_rel_str = profile_rel_var.get()
+    import re
+    # 1. Odcinamy liczbę na końcu, np. "Okoliczniki przyimkowe 'z' (15)" -> "Okoliczniki przyimkowe 'z'"
+    rel_name_with_marker = re.sub(r'\s*\(\d+\)$', '', active_rel_str).strip()
+
+    from word_profile import PROFILE_GRAMMARS
+    rule = None
+    marker_val = ""
+
+    # 2. Inteligentne dopasowanie nazwy relacji do reguły z uwzględnieniem szablonów (templates)
+    for pos, categories in PROFILE_GRAMMARS.items():
+        for cat_name, cat_rule in categories.items():
+            template = cat_rule.get("relation_name_template")
+            if template:
+                # np. "Porównanie '{marker}'"
+                regex_pattern = re.escape(template).replace(r"\{marker\}", r"(.*?)")
+                m = re.match(f"^{regex_pattern}$", rel_name_with_marker)
+                if m:
+                    extracted_marker = m.group(1)
+                    allowed_markers = cat_rule.get("capture_child_lemma_allow")
+
+                    # ROZWIĄZANIE BŁĘDU: Upewniamy się, że marker pasuje do tej konkretnej reguły.
+                    # Zapobiega to "kradzieży" markera 'niż' przez regułę dedykowaną dla 'od'.
+                    if allowed_markers and extracted_marker not in allowed_markers:
+                        continue
+
+                    rule = cat_rule
+                    marker_val = extracted_marker
+                    break
+            elif cat_rule.get("cascade_case"):
+                prefix = f"{cat_name} '"
+                if rel_name_with_marker.startswith(prefix) and rel_name_with_marker.endswith("'"):
+                    rule = cat_rule
+                    marker_val = rel_name_with_marker[len(prefix):-1]
+                    break
+            else:
+                if rel_name_with_marker == cat_name:
+                    rule = cat_rule
+                    break
+        if rule:
+            break
+
+    # --- NOWOŚĆ: Szukamy czystego lematu bezpośrednio w danych profilu ---
+    main_colloc = ""
+
+    # Przeszukujemy słownik, aby sparować kliknięty tekst z oryginalnym obiektem
+    for rel_key, rows in current_profile_dict.items():
+        for row_obj in rows:
+            # Odtwarzamy tekst dokładnie w takiej formie, w jakiej wyświetla się w tabeli
+            test_str = row_obj.display_collocate
+            if getattr(row_obj, "collocate_upos", ""):
+                test_str += f" [{row_obj.collocate_upos}]"
+
+            # Wersja dla widoku zbiorczego "★ POKAŻ WSZYSTKIE" (z tagiem relacji na końcu)
+            rel_match = re.search(r'\(([^)]+)\)', row_obj.relation)
+            test_str_with_rel = f"{test_str} [{rel_match.group(1)}]" if rel_match else test_str
+
+            if selected_word == test_str or selected_word == test_str_with_rel:
+                # ZNALEZIONO! Bierzemy IDEALNIE CZYSTY lemat schowany pod spodem
+                main_colloc = row_obj.collocate
+                break
+        if main_colloc:
+            break
+
+    # Fallback awaryjny (gdyby z jakiegoś powodu nie znalazło w słowniku)
+    if not main_colloc:
+        main_colloc_full = selected_word.split(" [")[0].strip()
+        # Bierzemy OSTATNIE słowo, aby z "z wschód" wziąć "wschód", a nie "z"
+        main_colloc = main_colloc_full.split()[-1]
+        # ------------------------------------------------------------------------
+
+    ignore_case = profile_ignore_case_var.get()
+
+    def format_val(val):
+        if ignore_case:
+            w_lower = val.lower()
+            w_upper = val.capitalize()
+            return f"{w_lower}|{w_upper}" if w_lower != w_upper else w_lower
+        return val
+
+    q_target = format_val(current_profile_target_lemma)
+    q_colloc = format_val(main_colloc)
+
+    if not rule:
+        # Ostateczny Fallback - liniowe szukanie, jeśli gramatyka jest nierozpoznana
+        new_query = f'[base="{q_target}"] [*][0,5] [base="{q_colloc}"] || [base="{q_colloc}"] [*][0,5] [base="{q_target}"]'
+    else:
+        target_is = rule["target_is"]
+        deprels = rule["deprels"]
+        deprel_str = "|".join(deprels)
+        req_case = rule.get("req_case", "")
+        req_upos = rule.get("req_upos", "")
+
+        # Główne warunki dla kolokatu
+        main_conds = [f'base="{q_colloc}"']
+
+        if req_case:
+            # Tłumaczymy przypadek z formatu Universal Dependencies (z Profilu)
+            # na format używany w tagsecie NKJP (wyszukiwarka)
+            case_to_nkjp = {
+                "Nom": "nom",
+                "Gen": "gen",
+                "Dat": "dat",
+                "Acc": "acc",
+                "Ins": "inst|ins",  # NKJP używa "inst", zabezpieczamy też "ins"
+                "Loc": "loc",
+                "Voc": "voc"
+            }
+            search_case = case_to_nkjp.get(req_case, req_case.lower())
+            main_conds.append(f'case="{search_case}"')
+
+        if req_upos:
+            main_conds.append(f'upos="{req_upos}"')
+
+        req_upos_in = rule.get("req_upos_in", [])
+        if req_upos_in:
+            upos_str = "|".join(req_upos_in)
+            main_conds.append(f'upos="{upos_str}"')
+
+        # Wymagania orzecznika (być) i jego polaryzacji (nie)
+        if rule.get("requires_copula"):
+            main_conds.append(f'dependent={{base="być|to" & deprel="cop"}}')
+            polarity = rule.get("copula_polarity", "positive")
+            if polarity == "negative":
+                main_conds.append(f'dependent={{base="nie"}}')
+            elif polarity == "positive":
+                main_conds.append(f'dependent!={{base="nie"}}')
+
+        # Marker wydobyty z nazwy (np. przyimek 'z', 'od', spójnik 'jak', 'niż')
+        if marker_val:
+            q_marker = format_val(marker_val)
+            # Pobieramy poprawne relacje, domyślnie 'case'
+            allowed_deps = rule.get("capture_child_lemma_from_deprels", ["case"])
+            dep_str = "|".join(allowed_deps)
+            main_conds.append(f'dependent={{base="{q_marker}" & deprel="{dep_str}"}}')
+
+        # Uzupełnienie o inne wykluczenia i wymogi
+        if "req_lemma" in rule:
+            r_lem = "|".join([format_val(x) for x in rule["req_lemma"]])
+            main_conds.append(f'base="{r_lem}"')
+
+        if "exclude_lemma" in rule:
+            e_lem = "|".join([format_val(x) for x in rule["exclude_lemma"]])
+            main_conds.append(f'base!="{e_lem}"')
+
+        if "requires_child_lemma" in rule:
+            rc_lem = "|".join([format_val(x) for x in rule["requires_child_lemma"]])
+            main_conds.append(f'dependent={{base="{rc_lem}"}}')
+
+        if "requires_child_deprel" in rule:
+            rc_dep = "|".join(rule["requires_child_deprel"])
+            main_conds.append(f'dependent={{deprel="{rc_dep}"}}')
+
+        if "exclude_child_lemma" in rule:
+            ec_lem = "|".join([format_val(x) for x in rule["exclude_child_lemma"]])
+            main_conds.append(f'dependent!={{base="{ec_lem}"}}')
+
+        if "exclude_child_deprel" in rule:
+            ec_dep = "|".join(rule["exclude_child_deprel"])
+            main_conds.append(f'dependent!={{deprel="{ec_dep}"}}')
+
+        # --- NOWOŚĆ: Tłumaczenie reguł nadrzędnika (head) z poprzednich kroków na zapytania ---
+        if "req_head_upos" in rule:
+            h_upos = "|".join(rule["req_head_upos"])
+            main_conds.append(f'head={{upos="{h_upos}"}}')
+
+        if rule.get("req_head_feature") == "Degree=Cmp":
+            # Mapowanie stopnia wyższego z UD na wewnętrzne tagi NKJP, których używa Twoja wyszukiwarka
+            main_conds.append(f'head={{degree="com|sup"}}')
+
+        if "exclude_shared_head_child_deprel" in rule:
+            bad_deps = "|".join(rule["exclude_shared_head_child_deprel"])
+            main_conds.append(f'head={{dependent!={{deprel="{bad_deps}"}}}}')
+        # --------------------------------------------------------------------------------------
+
+        # Budowa zapytań docelowych na podstawie archtektury powiązań "target_is"
+        if target_is == "head":
+            main_conds.append(f'deprel="{deprel_str}"')
+            main_conds.append(f'head={{base="{q_target}"}}')
+            new_query = f"[{' & '.join(main_conds)}]"
+
+        elif target_is == "child":
+            main_conds.append(f'dependent={{base="{q_target}" & deprel="{deprel_str}"}}')
+            new_query = f"[{' & '.join(main_conds)}]"
+
+        elif target_is == "symmetric":
+            conds1 = list(main_conds)
+            conds1.append(f'deprel="{deprel_str}"')
+            conds1.append(f'head={{base="{q_target}"}}')
+            q1 = f"[{' & '.join(conds1)}]"
+
+            conds2 = list(main_conds)
+            conds2.append(f'dependent={{base="{q_target}" & deprel="{deprel_str}"}}')
+            q2 = f"[{' & '.join(conds2)}]"
+
+            new_query = f"{q1} || {q2}"
+
+        elif target_is == "sibling":
+            main_conds.append(f'deprel="{deprel_str}"')
+            target_deps = rule.get("target_deprels", [])
+            target_dep_str = "|".join(target_deps) if target_deps else ""
+
+            if target_dep_str:
+                main_conds.append(f'head={{dependent={{base="{q_target}" & deprel="{target_dep_str}"}}}}')
+            else:
+                main_conds.append(f'head={{dependent={{base="{q_target}"}}}}')
+
+            new_query = f"[{' & '.join(main_conds)}]"
+
+    print(f"⏱ [PROFIL KOLOKACYJNY] Odpalam zapytanie strukturalne: {new_query}")
+    tabview.set("Wyniki wyszukiwania")
+    entry_query.delete("1.0", ctk.END)
+    entry_query.insert("1.0", new_query)
+    search()
+
 def search_from_table(selected_word):
     if not selected_word or not selected_word.strip():
         return
+    t_prep_start = time.perf_counter()
 
     selected_word = selected_word.strip()
 
@@ -5686,10 +9546,15 @@ def search_from_table(selected_word):
 
     # --- NOWOŚĆ: Wstrzykiwanie regexa (Case-Insensitive) ---
     if ignore_case:
-        import re
-        # Używamy flagi (?i) do ignorowania wielkości liter.
-        # Escapujemy też samo słowo, żeby ew. znaki (np. myślnik) nie zepsuły wzorca.
-        query_val = f"(?i){re.escape(selected_word)}"
+        # Tworzymy dokładne dopasowania oddzielone "|", co parser potraktuje jako "exact",
+        # a nie "regex", ratując naszą optymalizację kotwicy!
+        w_lower = selected_word.lower()
+        w_upper = selected_word.capitalize()
+        # Zabezpieczenie, żeby nie robić "powinien|powinien" jeśli słowo nie ma liter
+        if w_lower != w_upper:
+            query_val = f"{w_lower}|{w_upper}"
+        else:
+            query_val = w_lower
     else:
         query_val = selected_word
 
@@ -5756,12 +9621,439 @@ def search_from_table(selected_word):
     new_query = " || ".join(new_query_groups)
 
     if new_query:
+        t_prep_end = time.perf_counter()
+
+        # Logujemy czas przygotowania
+        prep_time = t_prep_end - t_prep_start
+        print(f"⏱ [KOLOKACJE] Zbudowanie zapytania zajęło: {prep_time:.6f}s")
+        print(f"   -> Odpalam zapytanie: {new_query}")
         # Przełączenie zakładki, aktualizacja pola tekstowego i wymuszenie wyszukiwania
         tabview.set("Wyniki wyszukiwania")
         entry_query.delete("1.0", ctk.END)
         entry_query.insert("1.0", new_query)
         search()
 
+def show_wsd_dialog():
+    """Otwiera okno wyboru ram semantycznych/dyskursywnych dla aktualnego zapytania."""
+    global current_wsd_lemma, unfiltered_wsd_results
+
+    if not full_results_sorted:
+        messagebox.showinfo("Brak wyników", "Najpierw wykonaj wyszukiwanie, aby móc analizować ramy.")
+        return
+
+    if semantic_engine.vectors is None:
+        messagebox.showwarning(
+            "Brak danych",
+            "Sieć semantyczna nie jest załadowana lub nie zawiera wektorów (analiza ram niedostępna)."
+        )
+        return
+
+    import re
+    bases = re.findall(r'\[base="([^"]+)"\]', global_query)
+    lemma = bases[-1] if bases else global_query.strip().split()[-1] if global_query.strip() else None
+
+    if not lemma:
+        messagebox.showwarning("Błąd", "Nie udało się określić słowa do analizy ram.")
+        return
+
+    senses = semantic_engine.get_or_create_senses(lemma)
+    if not senses:
+        messagebox.showinfo("Ramy", f"Słowo '{lemma}' nie ma wyodrębnionych ram w tym korpusie.")
+        return
+
+    current_wsd_lemma = lemma
+
+    # -------------------------
+    # Helper do czyszczenia etykiety
+    # -------------------------
+    def clean_frame_label(sense: dict) -> str:
+        label = (sense.get("label") or "").strip()
+        anchors = sense.get("anchors", []) or []
+        members = sense.get("members", []) or []
+
+        # Usuń ewentualne prefixy z dawnych wersji inducera
+        prefixes = [
+            "rama semantyczna:",
+            "Rama semantyczna:",
+            "Rama kontekstowa:",
+            "Rama kontekstowa:",
+            "profil wokół:",
+            "Profil wokół:",
+            "rama użycia:",
+            "Rama użycia:",
+        ]
+
+        clean = label
+        for p in prefixes:
+            if clean.startswith(p):
+                clean = clean[len(p):].strip()
+                break
+
+        if clean:
+            return clean
+
+        preview = ", ".join((anchors or members)[:5])
+        if len(anchors or members) > 5:
+            preview += ", ..."
+        return preview if preview else "nieokreślona"
+
+    # Tworzenie okienka dialogowego
+    wsd_win = ctk.CTkToplevel(app)
+    wsd_win.title(f"Ramy semantyczne: {lemma}")
+    wsd_win.geometry("540x340")
+    wsd_win.attributes("-topmost", True)
+    wsd_win.configure(fg_color=THEMES[motyw.get()]["app_bg"])
+
+    ctk.CTkLabel(
+        wsd_win,
+        text=f"Wybierz ramę dla słowa: {lemma}",
+        font=("Verdana", 13, "bold")
+    ).pack(pady=15)
+
+    dropdown_values = ["Wszystkie ramy"]
+    for s in senses:
+        frame_id = s.get("frame_id", s.get("sense_id", "?"))
+        frame_type = s.get("frame_type", s.get("profile_type", "semantic"))
+        clean_preview = clean_frame_label(s)
+
+        if frame_type == "contextual":
+            dropdown_values.append(f"Rama kontekstowa {frame_id}: {clean_preview}")
+        else:
+            dropdown_values.append(f"Rama semantyczna {frame_id}: {clean_preview}")
+
+    selection_var = ctk.StringVar(value="Wszystkie ramy")
+
+    def on_apply():
+        choice = selection_var.get()
+        wsd_win.destroy()
+        filter_by_selected_sense(choice)
+
+    combo = ctk.CTkOptionMenu(
+        wsd_win,
+        variable=selection_var,
+        values=dropdown_values,
+        width=440,
+        height=35
+    )
+    combo.pack(pady=20)
+
+    btn_apply = ctk.CTkButton(
+        wsd_win,
+        text="Filtruj wyniki",
+        command=on_apply,
+        fg_color="#4E8752",
+        hover_color="#57965C"
+    )
+    btn_apply.pack(pady=20)
+
+
+def open_topic_modeling():
+    # 1. Pobieramy nazwę korpusu bezpośrednio z aktualnego wyboru w UI
+    current_corpus_name = corpus_var.get()
+    current_corpus_path = files.get(current_corpus_name)
+
+    if not current_corpus_path:
+        messagebox.showinfo("Brak korpusu", "Najpierw załaduj i wybierz korpus z menu po lewej stronie.")
+        return
+
+    parquet_path = str(Path(current_corpus_path).resolve())
+
+    if not os.path.exists(parquet_path):
+        messagebox.showerror("Błąd", f"Nie znaleziono pliku korpusu w lokalizacji:\n{parquet_path}")
+        return
+
+    html_path = parquet_path.replace(".parquet", "_raport_tematyczny.html")
+
+    if os.path.exists(html_path):
+        ans = messagebox.askyesnocancel(
+            "Raport istnieje",
+            "Znaleziono gotowy raport tematyczny dla tego korpusu.\n\n"
+            "Czy chcesz wygenerować nowy (wymaga ponownych obliczeń i nadpisze stary)?\n\n"
+            "Tak - Generuj nowy od zera\n"
+            "Nie - Otwórz istniejący raport"
+        )
+        if ans is None:
+            return
+        if not ans:
+            launch_webview(html_path)
+            return
+
+    # --- OKIENKO KONFIGURACJI ---
+    setup_win = ctk.CTkToplevel(app)
+    setup_win.title("Ustawienia Modelowania")
+    setup_win.geometry("450x450")  # POWIĘKSZONE OKNO na nowe opcje
+    setup_win.attributes("-topmost", True)
+
+    x = app.winfo_x() + (app.winfo_width() // 2) - 225
+    y = app.winfo_y() + (app.winfo_height() // 2) - 225
+    setup_win.geometry(f"+{x}+{y}")
+
+    ctk.CTkLabel(setup_win, text="Wybierz liczbę tematów do wygenerowania:", font=("Verdana", 12, "bold")).pack(
+        pady=(20, 5))
+
+    mode_var = ctk.StringVar(value="Domyślnie (Brak limitu)")
+
+    def on_mode_change(*args):
+        if mode_var.get() == "Ręczna liczba":
+            entry_topics.configure(state="normal")
+        else:
+            entry_topics.configure(state="disabled")
+
+    mode_var.trace_add("write", on_mode_change)
+
+    rb_default = ctk.CTkRadioButton(setup_win, text="Domyślnie (Brak limitu)", variable=mode_var,
+                                    value="Domyślnie (Brak limitu)")
+    rb_default.pack(anchor="w", padx=40, pady=5)
+
+    rb_auto = ctk.CTkRadioButton(setup_win, text="Auto (Automatyczna redukcja - 'auto')", variable=mode_var,
+                                 value="Auto")
+    rb_auto.pack(anchor="w", padx=40, pady=5)
+
+    rb_manual = ctk.CTkRadioButton(setup_win, text="Ręczna liczba", variable=mode_var, value="Ręczna liczba")
+    rb_manual.pack(anchor="w", padx=40, pady=5)
+
+    entry_topics = ctk.CTkEntry(setup_win, placeholder_text="np. 20", state="disabled")
+    entry_topics.pack(fill="x", padx=60, pady=5)
+
+    # --- ZAAWANSOWANE OPCJE ---
+    ctk.CTkLabel(setup_win, text="Opcje zaawansowane:", font=("Verdana", 12, "bold")).pack(pady=(15, 5))
+
+    use_stopwords_var = ctk.BooleanVar(value=True)
+    cb_stopwords = ctk.CTkCheckBox(setup_win, text="Filtruj polskie stop-words (zalecane)",
+                                   variable=use_stopwords_var)
+    cb_stopwords.pack(anchor="w", padx=40, pady=5)
+
+    # --- NOWE: SUWAK MMR (Różnorodność) ---
+    ctk.CTkLabel(setup_win, text="Różnorodność słów (usuwanie synonimów):").pack(anchor="w", padx=40, pady=(10, 0))
+
+    diversity_var = ctk.DoubleVar(value=0.2)  # Domyślnie 0.2
+
+    div_frame = ctk.CTkFrame(setup_win, fg_color="transparent")
+    div_frame.pack(fill="x", padx=40, pady=5)
+
+    lbl_div_val = ctk.CTkLabel(div_frame, text="0.20", width=40)
+    lbl_div_val.pack(side="right")
+
+    def on_slider_move(val):
+        lbl_div_val.configure(text=f"{val:.2f}")
+
+    slider_div = ctk.CTkSlider(div_frame, from_=0.0, to=1.0, variable=diversity_var, command=on_slider_move)
+    slider_div.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+    ctk.CTkLabel(setup_win, text="0.0 = wyłączone | 1.0 = maks. różnorodność", font=("Verdana", 9),
+                 text_color="gray").pack(anchor="w", padx=40)
+
+    def start_process():
+        mode = mode_var.get()
+        nr_topics_val = None
+        if mode == "Auto":
+            nr_topics_val = "auto"
+        elif mode == "Ręczna liczba":
+            try:
+                nr_topics_val = int(entry_topics.get())
+                if nr_topics_val < 2:
+                    raise ValueError
+            except Exception:
+                messagebox.showerror("Błąd", "Podaj prawidłową liczbę całkowitą (większą od 1) dla tematów.")
+                return
+
+        use_stopwords = use_stopwords_var.get()
+        diversity_val = round(diversity_var.get(), 2)  # Pobieramy wartość z suwaka
+
+        setup_win.destroy()
+        # Przekazujemy parametr dalej
+        _run_modeling_process(nr_topics_val, use_stopwords, diversity_val)
+
+    ctk.CTkButton(setup_win, text="Rozpocznij analizę", command=start_process).pack(pady=20)
+
+    def _run_modeling_process(nr_topics_val, use_stopwords, diversity_val):
+        # 3. Tworzymy okienko ładowania
+        loading_win = ctk.CTkToplevel(app)
+        loading_win.title("Modelowanie Tematyczne")
+        loading_win.geometry("600x450")
+        loading_win.attributes("-topmost", True)
+        loading_win.configure(fg_color=THEMES[motyw.get()]["app_bg"])
+        loading_win.grab_set()
+
+        x = app.winfo_x() + (app.winfo_width() // 2) - 300
+        y = app.winfo_y() + (app.winfo_height() // 2) - 225
+        loading_win.geometry(f"+{x}+{y}")
+
+        lbl_status = ctk.CTkLabel(loading_win, text="Przygotowywanie modelu BERTopic...", font=("Verdana", 14, "bold"))
+        lbl_status.pack(pady=(20, 10))
+
+        progress = ctk.CTkProgressBar(loading_win, mode="indeterminate", width=400)
+        progress.pack(pady=5)
+        progress.start()
+
+        # Pole tekstowe na logi z terminala
+        log_box = ctk.CTkTextbox(loading_win, width=550, height=250, font=("Consolas", 11), state="disabled")
+        log_box.pack(pady=(15, 10), padx=20, fill="both", expand=True)
+
+        class TextRedirector:
+            def __init__(self, widget):
+                self.widget = widget
+
+            def write(self, text):
+                app.after(0, self._append_text, text)
+
+            def _append_text(self, text):
+                self.widget.configure(state="normal")
+                self.widget.insert("end", text)
+                self.widget.see("end")
+                self.widget.configure(state="disabled")
+
+            def flush(self):
+                pass
+
+        import sys
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = TextRedirector(log_box)
+        sys.stderr = TextRedirector(log_box)
+
+        def restore_stdout(event=None):
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+
+        loading_win.bind("<Destroy>", restore_stdout)
+
+        def worker():
+            try:
+                print("Inicjalizacja TopicEngine...")
+                engine = TopicEngine(parquet_path)
+
+                app.after(0, lambda: lbl_status.configure(text="Wczytywanie i filtrowanie tekstów..."))
+                if not engine.load_data():
+                    raise Exception("Plik korpusu nie posiada kolumny 'Treść' lub jest pusty.")
+
+                app.after(0, lambda: lbl_status.configure(text="Trenowanie modelu (może to potrwać)..."))
+                print("Rozpoczęto trenowanie modelu BERTopic...")
+
+                # --- NOWE: Przekazujemy nr_topics i wymuszamy nadpisanie ---
+                if not engine.train_model(nr_topics=nr_topics_val, force_retrain=True, use_stopwords=use_stopwords, diversity=diversity_val):
+                    raise Exception("Błąd podczas treningu modelu.")
+
+                freq_df = engine.model.get_topic_freq()
+                valid_topics = freq_df[freq_df['Topic'] != -1]
+
+                if valid_topics.empty:
+                    print("OSTRZEŻENIE: Zbyt mało danych. Model sklasyfikował wszystko jako szum (-1).")
+                    logging.warning("Zbyt mało danych. Model sklasyfikował wszystko jako szum (-1).")
+                    app.after(0, loading_win.destroy)
+                    app.after(0, lambda: messagebox.showwarning("Brak tematów",
+                                                                "Zbyt mało danych. Model nie odnalazł powiązań między dokumentami (tylko szum)."))
+                    return
+
+                print("Generowanie wizualizacji...")
+                fig_map = engine.visualize_topic_map()
+                tot = engine.calculate_topics_over_time()
+                fig_time = engine.visualize_dynamic_topics(tot, top_n_topics=15) if tot is not None else None
+                fig_words = engine.visualize_word_scores(top_n_topics=15)
+
+                print("Budowanie raportu HTML...")
+                html_content = """
+                            <!DOCTYPE html>
+                            <html>
+                            <head>
+                                <meta charset="utf-8">
+                                <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+                                <style>
+                                    body { font-family: 'Verdana', sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }
+                                    .chart-container { background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 30px; padding: 20px; }
+                                    h2 { color: #4B6CB7; text-align: center; border-bottom: 2px solid #4B6CB7; padding-bottom: 10px; margin-bottom: 20px; }
+                                    table { width: 100%; border-collapse: collapse; text-align: left; }
+                                    th, td { padding: 12px; border-bottom: 1px solid #ddd; }
+                                    th { background-color: #4B6CB7; color: white; }
+                                </style>
+                            </head>
+                            <body>
+                            """
+
+                if fig_time is not None:
+                    html_content += "<div class='chart-container'><h2>Ewolucja tematów w czasie</h2>"
+                    html_content += fig_time.to_html(full_html=False, include_plotlyjs='cdn')
+                    html_content += "</div>"
+
+                if fig_map is not None:
+                    html_content += "<div class='chart-container'><h2>Mapa tematów (Intertopic Distance)</h2>"
+                    html_content += fig_map.to_html(full_html=False, include_plotlyjs='cdn')
+                    html_content += "</div>"
+
+                if fig_words is not None:
+                    html_content += "<div class='chart-container'><h2>Ranking słów kluczowych (c-TF-IDF Scores)</h2>"
+                    html_content += fig_words.to_html(full_html=False, include_plotlyjs='cdn')
+                    html_content += "</div>"
+
+                try:
+                    topic_info = engine.get_topic_info()
+                    if topic_info is not None:
+                        html_content += "<div class='chart-container'><h2>Słowa kluczowe zidentyfikowanych tematów</h2>"
+                        html_content += "<table>"
+                        html_content += "<tr><th>ID Tematu</th><th>Liczba tekstów</th><th>Najważniejsze słowa (Współczynnik c-TF-IDF)</th></tr>"
+
+                        for _, row in topic_info.head(30).iterrows():
+                            topic_id = row['Topic']
+                            count = row['Count']
+                            words_with_scores = engine.model.get_topic(topic_id)
+
+                            if words_with_scores:
+                                formatted_words = ", ".join(
+                                    [f"{w} (<b>{s:.4f}</b>)" for w, s in words_with_scores[:10]])
+                            else:
+                                formatted_words = "Brak danych"
+
+                            if topic_id == -1:
+                                bg_color = "#f9ecec"
+                                topic_name = "-1 (Szum / Niesklasyfikowane)"
+                            else:
+                                bg_color = "#ffffff"
+                                topic_name = str(topic_id)
+
+                            html_content += f"<tr style='background-color: {bg_color};'>"
+                            html_content += f"<td style='font-weight: bold;'>{topic_name}</td>"
+                            html_content += f"<td>{count}</td>"
+                            html_content += f"<td>{formatted_words}</td>"
+                            html_content += "</tr>"
+
+                        html_content += "</table></div>"
+                except Exception as ex:
+                    print(f"Nie udało się wygenerować tabeli tematów: {ex}")
+                    logging.info(f"Nie udało się wygenerować tabeli tematów: {ex}")
+
+                html_content += "</body></html>"
+
+                try:
+                    print("Zapisywanie na dysku...")
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                        f.flush()
+                        os.fsync(f.fileno())
+
+                    if os.path.exists(html_path):
+                        logging.info(f"SUKCES: Plik HTML został utworzony: {html_path}")
+                        print("Zakończono sukcesem. Uruchamianie WebView...")
+                    else:
+                        raise Exception("System zgłosił sukces, ale plik nie pojawił się na dysku.")
+
+                except Exception as write_err:
+                    print(f"Błąd zapisu: {write_err}")
+                    logging.error(f"Błąd zapisu pliku HTML: {write_err}")
+                    app.after(0, loading_win.destroy)
+                    raise Exception(f"Błąd zapisu raportu. Sprawdź czy masz uprawnienia do folderu.\n{write_err}")
+
+                app.after(0, loading_win.destroy)
+                launch_webview(html_path)
+
+            except Exception as e:
+                err_msg = str(e)
+                print(f"BŁĄD KRYTYCZNY: {err_msg}")
+                logging.exception(f"Błąd podczas generowania modelu BERTopic: {err_msg}")
+                app.after(0, loading_win.destroy)
+                app.after(0, lambda msg=err_msg: messagebox.showerror("Błąd BERTopic", f"Szczegóły:\n{msg}"))
+
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
 
 # Tworzenie interfejsu GUI
@@ -5775,9 +10067,12 @@ menu = Menu(app)
 
 file_menu = menu.menu_bar(text="Plik", tearoff=0)
 file_menu.add_command(label="Nowy projekt", command=load_corpora)
+file_menu.add_command(label="Informacje o korpusie", command=show_corpus_info)
 file_menu.add_command(label="Eksportuj wyniki", command=export_data)
 file_menu.add_separator()
 file_menu.add_command(label="Utwórz korpus", command=lambda: get_creator_module().main(app))
+file_menu.add_command(label="Utwórz podkorpus z wyników", command=export_to_subcorpus)
+file_menu.add_command(label="Utwórz podkorpus po metadanych", command=export_subcorpus_by_metadata)
 file_menu.add_separator()
 file_menu.add_command(label="Zamknij", command=lambda: exit())
 file_menu = menu.menu_bar(text="Edytuj", tearoff=0)
@@ -5785,21 +10080,27 @@ file_menu.add_command(label="Cofnij", command=lambda: undo())
 file_menu.add_command(label="Ponów", command=lambda: redo())
 history_menu = menu.menu_bar(text="Historia", tearoff=0)
 update_history_menu()
+
+tools_menu = menu.menu_bar(text="Narzędzia", tearoff=0)
+tools_menu.add_command(label="Sieć semantyczna", command=smart_show_semantic_network)
+tools_menu.add_command(label="Filtrowanie wyników według ram", command=show_wsd_dialog)
+tools_menu.add_command(label="Modelowanie tematyczne (BERTopic)", command=open_topic_modeling)
+
 file_menu = menu.menu_bar(text="Ustawienia", tearoff=0)
 file_menu.add_command(label="Preferencje", command=settings_window)
 file_menu = menu.menu_bar(text="Pomoc", tearoff=0)
 # Przekazujemy konkretne nazwy plików do funkcji
 file_menu.add_command(label="Instrukcja użytkownika",
-                      command=lambda: open_webview_window("Instrukcja_uzytkownika.html"))
+                      command=lambda: open_webview_window("temp/Instrukcja_uzytkownika.html"))
 file_menu.add_command(label="Przewodnik po języku zapytań",
-                      command=lambda: open_webview_window("Przewodnik po języku zapytań.html"))
+                      command=lambda: open_webview_window("temp/Przewodnik_po_jezyku_zapytan.html"))
 
 app.title("Korpusuj")
 icon_path = os.path.join(BASE_DIR, "favicon.ico")
 try:
     app.iconbitmap(icon_path)
 except Exception as e:
-    print(f"Ostrzeżenie: Nie udało się załadować ikony: {e}")
+    logging.info(f"Ostrzeżenie: Nie udało się załadować ikony: {e}")
 
 
 # Global vars
@@ -5809,6 +10110,7 @@ styl_wykresow = ctk.StringVar(value=config['styl_wykresow'])
 motyw = ctk.StringVar(value=config['motyw'])
 plotting = ctk.StringVar(value=config.get('plotting', DEFAULT_SETTINGS['plotting']))
 kontekst = config.get('kontekst', DEFAULT_SETTINGS['kontekst'])
+min_tokens_threshold = config.get('min_tokens_threshold', DEFAULT_SETTINGS['min_tokens_threshold'])
 settings_popup = None
 
 
@@ -5828,6 +10130,23 @@ top_frame_container.grid_columnconfigure(5, weight=1)
 top_frame_container.grid_columnconfigure(6, weight=1)
 top_frame_container.grid_columnconfigure(7, weight=1)
 
+nav_buttons_frame = ctk.CTkFrame(top_frame_container, fg_color="transparent")
+nav_buttons_frame.grid(row=1, rowspan=2, column=0, padx=5)
+
+btn_nav_back = ctk.CTkButton(
+    nav_buttons_frame, text="<", width=35, height=35,
+    font=("Verdana", 14, "bold"), fg_color="#4B6CB7", hover_color="#5B7CD9",
+    state="disabled", command=go_back
+)
+btn_nav_back.pack(side="left", padx=2)
+
+btn_nav_forward = ctk.CTkButton(
+    nav_buttons_frame, text=">", width=35, height=35,
+    font=("Verdana", 14, "bold"), fg_color="#4B6CB7", hover_color="#5B7CD9",
+    state="disabled", command=go_forward
+)
+btn_nav_forward.pack(side="left", padx=2)
+
 # Corpus selection
 label_corpus = ctk.CTkLabel(top_frame_container, text="Wybierz korpus:", font=("Verdana", 12, 'bold'), text_color="white")
 label_corpus.grid(row=1, column=1, padx=1, pady=1, sticky="w")
@@ -5846,6 +10165,7 @@ option_corpus = ctk.CTkOptionMenu(
     height=35,
     corner_radius=8
 )
+corpus_var.trace_add("write", lambda *args: load_semantic_neighbors())
 option_corpus.grid(row=2, column=1, padx=1, pady=1, sticky="w")
 
 # Query widget (keep background)
@@ -5926,6 +10246,7 @@ option_sort = ctk.CTkOptionMenu(
     top_frame_container,
     values=["Alfabetycznie", "Lewy kontekst", "Prawy kontekst", "Autor", "Tytuł", "Data publikacji"],
     variable=sort_option_var,
+    command=resort_results,       # <--- DODANE
     font=("Verdana", 12, 'bold'),
     fg_color="#4B6CB7",
     dropdown_fg_color="#4B6CB7",
@@ -5937,6 +10258,7 @@ option_sort = ctk.CTkOptionMenu(
     corner_radius=8
 )
 option_sort.grid(row=2, column=6, padx=1, pady=1, sticky="w")
+
 
 settings_path = os.path.join(BASE_DIR, "temp/u.png")
 try:
@@ -5958,6 +10280,7 @@ settings_button.grid(row=1, rowspan=2, column=7, pady=1, sticky="w")
 notify_status("Budowanie interfejsu użytkownika...")
 tabview = ctk.CTkTabview(
     app,
+    command=lambda: push_nav_state(),
     corner_radius=12,
     border_width=0,
     fg_color="#2C2F33",  # background of tabview and tabs
@@ -6015,7 +10338,8 @@ warning_label = ctk.CTkLabel(
 
 # Utworzenie PanedWindow (widżetu z przeciąganym separatorem)
 # Top frame for pagination + entry/buttons
-paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor="size_we", opaqueresize=False)
+kursor_separatora = "resizeleftright" if sys.platform == "darwin" else "size_we"
+paned_window = tk.PanedWindow(result_frame, orient="horizontal", bg="#2C2F33", bd=0, sashwidth=8, sashcursor=kursor_separatora, opaqueresize=False)
 paned_window.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
 # Utworzenie dwóch głównych kontenerów dla lewej i prawej strony (one będą zmieniane przez separator)
@@ -6172,6 +10496,7 @@ button_toggle_coref = ctk.CTkButton(
 button_toggle_coref.grid(row=0, column=2, sticky="ew", padx=(2, 0))
 
 
+
 # Context menus
 add_textbox_context_menu(text_full, allow_paste=False)
 add_textbox_context_menu(entry_query, allow_paste=True)
@@ -6193,10 +10518,11 @@ selected_table = ctk.StringVar(value="Formy podstawowe (base)")
 table_selector = ctk.CTkSegmentedButton(
     tab_wyniki_frekw,
     variable=selected_table,
-    values=["Formy podstawowe (base)", "Formy ortograficzne (orth)", "Częstość w czasie", "Kolokacje"],
+    values=["Formy podstawowe (base)", "Formy ortograficzne (orth)", "Częstość w czasie", "Kolokacje", "Profil kolokacyjny"],
     command=show_table,
     font=("Verdana", 12, 'bold')
 )
+
 # sticky="ew" każe mu wypełnić przestrzeń w poziomie, a pady=(10,5) usuwa wielką dziurę na górze
 table_selector.grid(row=0, column=0, pady=(2, 5), padx=10, sticky="ew")
 
@@ -6410,10 +10736,15 @@ all_pos = [
 # --- Ramka dla kolokacji ---
 colloc_frame = ctk.CTkFrame(tab_wyniki_frekw, fg_color="#2C2F33", corner_radius=15)
 
-colloc_controls = ctk.CTkFrame(colloc_frame, fg_color="#1F2328", corner_radius=12)
-colloc_controls.grid(row=0, column=0, sticky="ew", pady=10, padx=10)
+# Lewy panel na opcje (przewijany)
+colloc_options_frame = ctk.CTkScrollableFrame(colloc_frame, fg_color="transparent", corner_radius=0, width=280)
+colloc_options_frame.pack(pady=(5, 10), padx=(10, 5), side="left", fill="y")
 
-# --- Zmienne sterujące (Dodane granice zdania) ---
+# Prawy panel na tabelę i paginację
+colloc_data_frame = ctk.CTkFrame(colloc_frame, fg_color="transparent")
+colloc_data_frame.pack(pady=10, padx=(0, 10), side="left", fill="both", expand=True)
+
+# --- Zmienne sterujące ---
 colloc_sort_var = ctk.StringVar(master=app, value="Log-Dice")
 colloc_mode_var = ctk.StringVar(master=app, value="Liniowe")
 syn_dir_var = ctk.StringVar(master=app, value="Podrzędnik")
@@ -6422,137 +10753,251 @@ upos_var = ctk.StringVar(master=app, value="Wszystkie")
 pos_var = ctk.StringVar(master=app, value="Wszystkie")
 colloc_form_var = ctk.StringVar(master=app, value="Lemat (base)")
 sentence_boundary_var = ctk.BooleanVar(master=app, value=True)
-colloc_ignore_case_var = ctk.BooleanVar(master=app, value=True)
-colloc_dedup_var = ctk.BooleanVar(master=app, value=False)
+colloc_ignore_case_var = ctk.BooleanVar(master=app, value=False)
 
 font_ui = ("Verdana", 11, 'bold')
 fg_opt = "#4B6CB7"
 
-# GWARANCJA RÓWNEGO PODZIAŁU: 6 identycznych kolumn i 2 elastyczne wiersze
-for i in range(6):
-    colloc_controls.grid_columnconfigure(i, weight=1, uniform="colloc_cols")
+# ==========================================
+# KARTA 1: Metoda wyszukiwania
+# ==========================================
+card_method = SettingsCard(colloc_options_frame, "Metoda wyszukiwania", expanded=True)
+method_frame = card_method.content
 
-colloc_controls.grid_rowconfigure(0, weight=1)
-colloc_controls.grid_rowconfigure(1, weight=1)
+ctk.CTkLabel(method_frame, text="Typ kontekstu:", font=font_ui).pack(anchor="w", pady=(5, 2))
+ctk.CTkOptionMenu(method_frame, variable=colloc_mode_var, values=["Liniowe", "Składniowe"],
+                  command=lambda e: toggle_colloc_mode(), fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
 
-# ================= WIERZ 0 =================
-# Wiersz 0, Kolumna 0: Typ
-cell_00 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_00.grid(row=0, column=0, sticky="ew", padx=5, pady=(10, 5))
-ctk.CTkLabel(cell_00, text="Typ:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(cell_00, variable=colloc_mode_var, values=["Liniowe", "Składniowe"],
-                  command=lambda e: toggle_colloc_mode(), width=90, height=30, fg_color=fg_opt,
-                  button_color=fg_opt).pack(side="left", fill="x", expand=True)
+dynamic_method_frame = ctk.CTkFrame(method_frame, fg_color="transparent")
+dynamic_method_frame.pack(fill="x", pady=(0, 5))
 
-# Wiersz 0, Kolumn 1 i 2: Dynamiczna ramka (zajmuje 2 kolumny)
-cell_01 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_01.grid(row=0, column=1, columnspan=2, sticky="ew", padx=5, pady=(10, 5))
-
-frame_linear = ctk.CTkFrame(cell_01, fg_color="transparent")
-ctk.CTkLabel(frame_linear, text="L-span:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-entry_l_span = ctk.CTkEntry(frame_linear, width=40, height=30, fg_color="#2C2F33", text_color="white", corner_radius=8)
+# Tryb Liniowy
+frame_linear = ctk.CTkFrame(dynamic_method_frame, fg_color="transparent")
+ctk.CTkLabel(frame_linear, text="L-span:", font=font_ui).grid(row=0, column=0, sticky="w", padx=(0, 5))
+entry_l_span = ctk.CTkEntry(frame_linear, width=45, height=28, corner_radius=8)
 entry_l_span.insert(0, "5")
-entry_l_span.pack(side="left", padx=(0, 15))
+entry_l_span.grid(row=0, column=1, sticky="w", padx=(0, 15))
 
-ctk.CTkLabel(frame_linear, text="R-span:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-entry_r_span = ctk.CTkEntry(frame_linear, width=40, height=30, fg_color="#2C2F33", text_color="white", corner_radius=8)
+ctk.CTkLabel(frame_linear, text="R-span:", font=font_ui).grid(row=0, column=2, sticky="w", padx=(0, 5))
+entry_r_span = ctk.CTkEntry(frame_linear, width=45, height=28, corner_radius=8)
 entry_r_span.insert(0, "5")
-entry_r_span.pack(side="left")
+entry_r_span.grid(row=0, column=3, sticky="w")
 
-frame_syntactic = ctk.CTkFrame(cell_01, fg_color="transparent")
-ctk.CTkLabel(frame_syntactic, text="Rel.:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(frame_syntactic, variable=syn_dir_var, values=["Podrzędnik", "Nadrzędnik", "Oba"], width=90,
-                  height=30, fg_color=fg_opt, button_color=fg_opt).pack(side="left", padx=(0, 15))
-ctk.CTkLabel(frame_syntactic, text="Deprel:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(frame_syntactic, variable=syn_deprel_var, values=DEPREL_TREE, width=120, height=30, fg_color=fg_opt,
-                  button_color=fg_opt).pack(side="left", fill="x", expand=True)
+# Tryb Składniowy
+frame_syntactic = ctk.CTkFrame(dynamic_method_frame, fg_color="transparent")
+ctk.CTkLabel(frame_syntactic, text="Kierunek:", font=font_ui).pack(anchor="w", pady=(0, 2))
+ctk.CTkOptionMenu(frame_syntactic, variable=syn_dir_var, values=["Podrzędnik", "Nadrzędnik", "Oba"],
+                  fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
+ctk.CTkLabel(frame_syntactic, text="Relacja (deprel):", font=font_ui).pack(anchor="w", pady=(0, 2))
+
+# 1. Zastępujemy CTkOptionMenu przyciskiem udającym rozwijaną listę
+syn_deprel_btn = ctk.CTkButton(
+    frame_syntactic,
+    text="Wszystkie ▼",
+    font=font_ui,
+    fg_color=fg_opt,
+    hover_color="#5B7CD9",
+    text_color="white",
+    anchor="w"
+)
+syn_deprel_btn.pack(fill="x")
 
 
+# 2. Logika dynamicznej zmiany napisu na przycisku
+def _update_syn_deprel_btn_text(*args):
+    val = syn_deprel_var.get()
+    # Jeśli nazwa jest bardzo długa, ucinamy żeby nie rozpychała lewego panelu
+    disp = val if len(val) < 25 else val[:22] + "..."
+    syn_deprel_btn.configure(text=f"{disp} ▼")
+
+
+syn_deprel_var.trace_add("write", _update_syn_deprel_btn_text)
+_update_syn_deprel_btn_text()  # Ustawienie poprawnego napisu na start
+
+# 3. Tworzenie kaskadowego menu (wczytuje aktualne kolory motywu)
+current_theme = THEMES[motyw.get()]
+deprel_menu = tk.Menu(syn_deprel_btn, tearoff=0,
+                      bg=current_theme["dropdown_fg"],
+                      fg=current_theme["button_text"],
+                      activebackground=current_theme["dropdown_hover"],
+                      activeforeground=current_theme["button_text"],
+                      font=("Verdana", 11))
+
+# 4. Generowanie opcji ze słownika DEPREL_TREE_DICT
+for main_cat, sub_cats in DEPREL_TREE_DICT.items():
+    if not sub_cats:
+        # Kategoria bez podkategorii
+        deprel_menu.add_command(label=main_cat, command=lambda c=main_cat: syn_deprel_var.set(c))
+    else:
+        # Kategoria z podkategoriami (tworzymy sub-menu)
+        sub_menu = tk.Menu(deprel_menu, tearoff=0,
+                           bg=current_theme["dropdown_fg"],
+                           fg=current_theme["button_text"],
+                           activebackground=current_theme["dropdown_hover"],
+                           activeforeground=current_theme["button_text"],
+                           font=("Verdana", 11))
+
+        # Opcja dla samej kategorii głównej (gwiazdka tylko dla warstwy wizualnej)
+        sub_menu.add_command(label=f"★ {main_cat} (zbiorcze)", command=lambda c=main_cat: syn_deprel_var.set(c))
+        sub_menu.add_separator()
+
+        for sub_cat in sub_cats:
+            sub_menu.add_command(label=sub_cat, command=lambda c=sub_cat: syn_deprel_var.set(c))
+
+        deprel_menu.add_cascade(label=main_cat, menu=sub_menu)
+
+
+# 5. Funkcja wywołująca menu pod przyciskiem (na kliknięcie)
+def show_deprel_menu(event=None):
+    if syn_deprel_btn.cget("state") != "disabled":
+        x = syn_deprel_btn.winfo_rootx()
+        y = syn_deprel_btn.winfo_rooty() + syn_deprel_btn.winfo_height()
+        deprel_menu.tk_popup(x, y)
+
+
+syn_deprel_btn.configure(command=show_deprel_menu)
 def toggle_colloc_mode(*args):
     if colloc_mode_var.get() == "Liniowe":
-        frame_linear.pack(side="left", fill="both", expand=True)
+        frame_linear.pack(fill="x", expand=True)
         frame_syntactic.pack_forget()
     else:
         frame_linear.pack_forget()
-        frame_syntactic.pack(side="left", fill="both", expand=True)
-
+        frame_syntactic.pack(fill="x", expand=True)
 
 toggle_colloc_mode()
 
-# Wiersz 0, Kolumna 3: UPOS
-cell_03 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_03.grid(row=0, column=3, sticky="ew", padx=5, pady=(10, 5))
-ctk.CTkLabel(cell_03, text="UPOS:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(cell_03, variable=upos_var, values=all_upos, width=80, height=30, fg_color=fg_opt,
-                  button_color=fg_opt).pack(side="left", fill="x", expand=True)
+chk_sentence_bound = ctk.CTkCheckBox(method_frame, text="Ogranicz do zdań", variable=sentence_boundary_var, font=font_ui, fg_color="#4E8752", hover_color="#57965C")
+chk_sentence_bound.pack(anchor="w", pady=(10, 5))
 
-# Wiersz 0, Kolumna 4: POS
-cell_04 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_04.grid(row=0, column=4, sticky="ew", padx=5, pady=(10, 5))
-ctk.CTkLabel(cell_04, text="POS:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(cell_04, variable=pos_var, values=all_pos, width=80, height=30, fg_color=fg_opt,
-                  button_color=fg_opt).pack(side="left", fill="x", expand=True)
+# ==========================================
+# KARTA 2: Filtry lingwistyczne
+# ==========================================
+card_filters = SettingsCard(colloc_options_frame, "Filtry lingwistyczne", expanded=False)
+filters_frame = card_filters.content
 
-# ================= WIERZ 1 =================
-# Wiersz 1, Kolumna 0: Sort
-cell_10 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_10.grid(row=1, column=0, sticky="ew", padx=5, pady=(5, 10))
-ctk.CTkLabel(cell_10, text="Sort:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(cell_10, variable=colloc_sort_var, values=["Log-Dice", "MI Score", "T-score", "Log-Likelihood"],
-                  width=90, height=30, fg_color=fg_opt, button_color=fg_opt).pack(side="left", fill="x", expand=True)
+ctk.CTkLabel(filters_frame, text="Forma kolokatu:", font=font_ui).pack(anchor="w", pady=(5, 2))
+ctk.CTkOptionMenu(filters_frame, variable=colloc_form_var, values=["Lemat (base)", "Token (orth)"],
+                  fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
 
-# Wiersz 1, Kolumna 1: Forma
-cell_11 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_11.grid(row=1, column=1, sticky="ew", padx=5, pady=(5, 10))
-ctk.CTkLabel(cell_11, text="Forma:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-ctk.CTkOptionMenu(cell_11, variable=colloc_form_var, values=["Lemat (base)", "Token (orth)"], width=90, height=30,
-                  fg_color=fg_opt, button_color=fg_opt).pack(side="left", fill="x", expand=True)
+ctk.CTkLabel(filters_frame, text="Część mowy (UPOS):", font=font_ui).pack(anchor="w", pady=(0, 2))
+ctk.CTkOptionMenu(filters_frame, variable=upos_var, values=all_upos,
+                  fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
 
-# Wiersz 1, Kolumna 2: Freq & Range
-cell_12 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_12.grid(row=1, column=2, sticky="ew", padx=5, pady=(5, 10))
-ctk.CTkLabel(cell_12, text="Min f:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-entry_min_freq = ctk.CTkEntry(cell_12, width=40, height=30, fg_color="#2C2F33", text_color="white", corner_radius=8)
+ctk.CTkLabel(filters_frame, text="Część mowy NKJP (POS):", font=font_ui).pack(anchor="w", pady=(0, 2))
+
+# 1. Przypisujemy dropdown do zmiennej, aby odnieść się do niego przy pakowaniu ramki
+pos_menu = ctk.CTkOptionMenu(filters_frame, variable=pos_var, values=all_pos,
+                             fg_color=fg_opt, button_color=fg_opt)
+pos_menu.pack(fill="x", pady=(0, 10))
+
+dynamic_feat_vars = {}
+dynamic_features_frame = ctk.CTkFrame(filters_frame, fg_color="transparent")
+
+# 2. Checkbox wrzucamy na stałe na dół karty, już pod ramkę z filtrami
+chk_ignore_case = ctk.CTkCheckBox(filters_frame, text="Ignoruj wielkość liter", variable=colloc_ignore_case_var,
+                                  font=font_ui, fg_color="#4E8752", hover_color="#57965C")
+chk_ignore_case.pack(anchor="w", pady=(5, 5))
+
+
+def update_dynamic_features(selected_val):
+    for widget in dynamic_features_frame.winfo_children():
+        widget.destroy()
+    dynamic_feat_vars.clear()
+
+    clean_pos = selected_val.split(" ")[0]
+    if clean_pos in FEAT_MAPPING and clean_pos != "Wszystkie":
+
+        # Pojawia się nowa cecha -> Wrzucamy ramkę z powrotem dokładnie pod "pos_menu"
+        dynamic_features_frame.pack(fill="x", after=pos_menu)
+
+        for feat in FEAT_MAPPING[clean_pos].keys():
+            lbl_text = {"number": "Liczba", "case": "Przypadek", "gender": "Rodzaj",
+                        "degree": "Stopień", "person": "Osoba", "aspect": "Aspekt",
+                        "negation": "Zanegowanie", "accentability": "Akcentowość",
+                        "post-prepositionality": "Poprzyimkowość", "accommodability": "Akomodacyjność",
+                        "vocalicity": "Wokaliczność", "agglutination": "Aglutynacyjność",
+                        "fullstoppedness": "Kropkowalność"}.get(feat, feat)
+
+            ctk.CTkLabel(dynamic_features_frame, text=f"{lbl_text}:", font=font_ui).pack(anchor="w", pady=(0, 2))
+            var = ctk.StringVar(value="Wszystkie")
+            dynamic_feat_vars[feat] = var
+            options = ["Wszystkie"] + MORPH_DICTS.get(feat, [])
+            ctk.CTkOptionMenu(dynamic_features_frame, variable=var, values=options,
+                              fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
+    else:
+        # Brak cech -> Całkowicie zwijamy ramkę z interfejsu, żeby nie było dziury
+        dynamic_features_frame.pack_forget()
+
+
+# 3. Podpinamy odświeżanie do menu (dopiero po zdefiniowaniu funkcji)
+pos_menu.configure(command=update_dynamic_features)
+
+# 4. Uruchomienie na start (ukryje ramkę od razu, bo domyślnie wybrane jest "Wszystkie")
+update_dynamic_features(pos_var.get())
+
+
+# ==========================================
+# KARTA 3: Parametry statystyczne
+# ==========================================
+card_stats = SettingsCard(colloc_options_frame, "Parametry statystyczne", expanded=False)
+stats_frame = card_stats.content
+
+ctk.CTkLabel(stats_frame, text="Sortowanie:", font=font_ui).pack(anchor="w", pady=(5, 2))
+ctk.CTkOptionMenu(stats_frame, variable=colloc_sort_var, values=["Log-Dice", "MI Score", "T-score", "Log-Likelihood"],
+                  fg_color=fg_opt, button_color=fg_opt).pack(fill="x", pady=(0, 10))
+
+freq_range_frame = ctk.CTkFrame(stats_frame, fg_color="transparent")
+freq_range_frame.pack(fill="x", pady=(0, 5))
+
+ctk.CTkLabel(freq_range_frame, text="Min f:", font=font_ui).grid(row=0, column=0, sticky="w", padx=(0, 5))
+entry_min_freq = ctk.CTkEntry(freq_range_frame, width=45, height=28, corner_radius=8)
 entry_min_freq.insert(0, "1")
-entry_min_freq.pack(side="left", padx=(0, 10))
-ctk.CTkLabel(cell_12, text="Min r:", font=font_ui, text_color="white").pack(side="left", padx=(0, 5))
-entry_min_range = ctk.CTkEntry(cell_12, width=40, height=30, fg_color="#2C2F33", text_color="white", corner_radius=8)
+entry_min_freq.grid(row=0, column=1, sticky="w", padx=(0, 5))
+
+ctk.CTkLabel(freq_range_frame, text="Min r:", font=font_ui).grid(row=0, column=2, sticky="w", padx=(10, 5))
+entry_min_range = ctk.CTkEntry(freq_range_frame, width=45, height=28, corner_radius=8)
 entry_min_range.insert(0, "1")
-entry_min_range.pack(side="left")
+entry_min_range.grid(row=0, column=3, sticky="w", padx=(0, 5))
 
-# Wiersz 1, Kolumna 3: Checkbox Ogranicz do zdań
-cell_13 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_13.grid(row=1, column=3, sticky="ew", padx=5, pady=(5, 10))
-chk_sentence_bound = ctk.CTkCheckBox(cell_13, text="Ogranicz do zdań", variable=sentence_boundary_var, font=font_ui, text_color="white", width=20, height=20, fg_color="#4E8752", hover_color="#57965C")
-chk_sentence_bound.pack(side="left", fill="x", expand=True)
+# --- Ikonka pomocy dla Min f i Min r ---
+colloc_help_icon = ctk.CTkLabel(freq_range_frame, text="❓", font=("Verdana", 14), text_color="#4B6CB7", cursor="hand2")
+colloc_help_icon.grid(row=0, column=4, sticky="w", padx=(5, 0))
 
-# Wiersz 1, Kolumna 4: Checkbox Ignoruj wielkość liter
-cell_14 = ctk.CTkFrame(colloc_controls, fg_color="transparent")
-cell_14.grid(row=1, column=4, sticky="ew", padx=5, pady=(5, 10))
-chk_ignore_case = ctk.CTkCheckBox(cell_14, text="Ignoruj wielk. liter", variable=colloc_ignore_case_var, font=font_ui, text_color="white", width=20, height=20, fg_color="#4E8752", hover_color="#57965C")
-chk_ignore_case.pack(side="left", fill="x", expand=True)
+colloc_help_text = (
+    "PARAMETRY FILTROWANIA:\n"
+    "• Min f (Minimalna frekwencja): Ile razy dana para słów musi wystąpić\n"
+    "  obok siebie w całym korpusie, aby algorytm w ogóle wziął ją pod uwagę.\n"
+    "  (Pomaga odrzucić np. jednorazowe literówki lub przypadkowe zbitki).\n\n"
+    "• Min r (Minimalny zasięg): W ilu RÓŻNYCH tekstach (dokumentach)\n"
+    "  musi wystąpić kolokacja, aby została uznana za istotną statystycznie.\n"
+    "  (Zapobiega faworyzowaniu specyficznych zwrotów użytych wielokrotnie\n"
+    "  tylko w jednym konkretnym tekście / przez jednego autora)."
+)
 
-# ================= PRZYCISK OBLICZ (Kolumna 5, Wiersze 0 i 1) =================
-# rowspan=2 sprawia, że przycisk wchodzi na dwa rzędy. sticky="nsew" każe mu wypełnić całą tę przestrzeń (kwadraciak)
-btn_calc_colloc = ctk.CTkButton(colloc_controls, text="Oblicz", command=lambda: calculate_collocs(), corner_radius=8,
-                                fg_color="#4E8752", hover_color="#57965C", font=("Verdana", 14, 'bold'))
-btn_calc_colloc.grid(row=0, column=5, rowspan=2, sticky="nsew", padx=(5, 10), pady=10)
+ToolTip(colloc_help_icon, colloc_help_text)
 
 
-# --- NOWE NAGŁÓWKI I SZEROKOŚCI TABELI ---
+# --- Przycisk OBLICZ ---
+btn_calc_colloc = ctk.CTkButton(colloc_options_frame, text="Oblicz", command=lambda: calculate_collocs(), corner_radius=8,
+                                fg_color="#4E8752", hover_color="#57965C", font=("Verdana", 14, 'bold'), height=40)
+btn_calc_colloc.pack(fill="x", pady=(20, 10), padx=5)
+
+
+# ==========================================
+# SEKCJA PRAWA: Tabela i Paginacja
+# ==========================================
 colloc_headers = ["Nr", "Kolokat", "Współwystąpienia", "Frekw. kolokatu", "Log-Likelihood", "MI Score", "T-score", "Log-Dice"]
 colloc_widths = [50, 150, 100, 100, 120, 100, 100, 100]
 colloc_justify = ["center", "center", "center", "center", "center", "center", "center", "center"]
 colloc_data = []
 
-# --- 1. NOWA RAMKA PAGINACJI DLA KOLOKACJI ---
-pagination_colloc_frame = ctk.CTkFrame(colloc_frame, fg_color="#1F2328", corner_radius=12)
-pagination_colloc_frame.grid(row=1, column=0, sticky="ew", pady=5, padx=5)
+# Ramka paginacji trafia teraz do colloc_data_frame
+pagination_colloc_frame = ctk.CTkFrame(colloc_data_frame, fg_color="#1F2328", corner_radius=12)
+pagination_colloc_frame.pack(fill="x", pady=(0, 5))
 
 for col in range(5):
     pagination_colloc_frame.columnconfigure(col, weight=1)
 
-# Przyciski nawigacyjne
 button_first_colloc = ctk.CTkButton(pagination_colloc_frame, text="|<", command=lambda: first_p(paginator_colloc), **button_kwargs_small)
 button_first_colloc.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
 
@@ -6568,16 +11013,14 @@ button_next_colloc.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
 button_last_colloc = ctk.CTkButton(pagination_colloc_frame, text=">|", command=lambda: last_p(paginator_colloc), **button_kwargs_small)
 button_last_colloc.grid(row=0, column=4, padx=5, pady=5, sticky="ew")
 
-# --- 2. TABELA KOLOKACJI ---
+# Główna tabela trafia do colloc_data_frame i wypełnia przestrzeń
 colloc_table = table.CustomTable(
-    colloc_frame, colloc_headers, colloc_data, colloc_widths, colloc_justify, 15,
+    colloc_data_frame, colloc_headers, colloc_data, colloc_widths, colloc_justify, 15,
     fulltext_data=[],
     search_callback=search_from_table
 )
-colloc_table.grid(row=2, column=0, sticky="nsew", pady=0)
-colloc_table.grid(row=2, column=0, sticky="nsew", pady=0)
+colloc_table.pack(fill="both", expand=True)
 
-# --- 3. DEFINICJA PAGINATORA ---
 paginator_colloc = {
     "data": colloc_data,
     "current_page": [0],
@@ -6588,29 +11031,539 @@ paginator_colloc = {
 
 colloc_table.sort_callback = lambda col, asc: global_sort_callback(paginator_colloc, col, asc)
 
-# Konfiguracja wierszy i kolumn ramki głównej kolokacji
-colloc_frame.rowconfigure(0, weight=0) # Panel sterowania
-colloc_frame.rowconfigure(1, weight=0) # Paginacja
-colloc_frame.rowconfigure(2, weight=1) # Tabela
-colloc_frame.columnconfigure(0, weight=1)
+# ==========================================
+# --- Ramka dla Profil kolokacyjny ---
+# ==========================================
+profile_frame = ctk.CTkFrame(tab_wyniki_frekw, fg_color="#2C2F33", corner_radius=15)
+
+# Lewy panel na opcje (przewijany)
+profile_options_frame = ctk.CTkScrollableFrame(profile_frame, fg_color="transparent", corner_radius=0, width=280)
+profile_options_frame.pack(pady=(5, 10), padx=(10, 5), side="left", fill="y")
+
+# Prawy panel na tabelę
+profile_data_frame = ctk.CTkFrame(profile_frame, fg_color="transparent")
+profile_data_frame.pack(pady=10, padx=(0, 10), side="left", fill="both", expand=True)
+
+# Karta opcji
+card_profile = SettingsCard(profile_options_frame, "Opcje profilu", expanded=True)
+profile_settings = card_profile.content
+
+ctk.CTkLabel(profile_settings, text="Minimalna frekwencja (Min f):", font=("Verdana", 11, 'bold')).pack(anchor="w", pady=(0, 2))
+entry_profile_minf = ctk.CTkEntry(profile_settings, width=150, height=28, corner_radius=8)
+entry_profile_minf.insert(0, "1")
+entry_profile_minf.pack(fill="x", pady=(0, 10))
+
+# --- NOWOŚĆ: Ignoruj wielkość liter ---
+profile_ignore_case_var = ctk.BooleanVar(master=app, value=False)
+chk_profile_ignore_case = ctk.CTkCheckBox(
+    profile_settings, text="Ignoruj wielkość liter", variable=profile_ignore_case_var,
+    font=("Verdana", 11, "bold"), fg_color="#4E8752", hover_color="#57965C"
+)
+chk_profile_ignore_case.pack(anchor="w", pady=(0, 10))
+
+profile_mwe_var = ctk.BooleanVar(master=app, value=True)
+chk_profile_mwe = ctk.CTkCheckBox(
+    profile_settings, text="Wyciągaj całe frazy (MWE)", variable=profile_mwe_var,
+    font=("Verdana", 11, "bold"), fg_color="#4E8752", hover_color="#57965C"
+)
+chk_profile_mwe.pack(anchor="w", pady=(0, 10))
+
+ctk.CTkLabel(profile_settings, text="Słowo centralne (węzeł):", font=("Verdana", 11, 'bold')).pack(anchor="w", pady=(0, 2))
+profile_node_var = ctk.StringVar(value="Token 1")
+profile_node_menu = ctk.CTkOptionMenu(
+    profile_settings,
+    variable=profile_node_var,
+    values=["Token 1"],
+    font=("Verdana", 11, "bold"),
+    fg_color="#4B6CB7", button_color="#4B6CB7",
+    dropdown_fg_color="#4B6CB7", dropdown_hover_color="#5B7CD9", text_color="white"
+)
+profile_node_menu.pack(fill="x", pady=(0, 10))
+
+btn_calc_profile = ctk.CTkButton(profile_options_frame, text="Generuj", corner_radius=8,
+                                fg_color="#4E8752", hover_color="#57965C", font=("Verdana", 14, 'bold'), height=40)
+btn_calc_profile.pack(fill="x", pady=(10, 10), padx=5)
+
+# Karta na wybór relacji (Dropdown)
+card_profile_rels = SettingsCard(profile_options_frame, "Wybór relacji", expanded=True)
+profile_rels_frame = card_profile_rels.content
+
+ctk.CTkLabel(profile_rels_frame, text="Kategoria składniowa:", font=("Verdana", 11, 'bold')).pack(anchor="w", pady=(5, 2))
+
+profile_rel_var = ctk.StringVar(value="Brak danych")
+
+# ZAMIENIAMY CTkOptionMenu NA CTkButton imitujący dropdown!
+profile_rel_menu_btn = ctk.CTkButton(
+    profile_rels_frame,
+    text="Brak danych ▼",
+    font=("Verdana", 11, "bold"),
+    fg_color="#4B6CB7",
+    hover_color="#5B7CD9",
+    text_color="white",
+    anchor="w",
+    state="disabled"
+)
+profile_rel_menu_btn.pack(fill="x", pady=(0, 10))
+
+# Dynamiczna zmiana napisu na przycisku po wybraniu opcji
+def _update_profile_btn_text(*args):
+    val = profile_rel_var.get()
+    # Skracamy tekst, żeby nie wypychał panelu na boki
+    disp = val if len(val) < 25 else val[:22] + "..."
+    profile_rel_menu_btn.configure(text=f"{disp} ▼")
+
+profile_rel_var.trace_add("write", _update_profile_btn_text)
+
+# Pomocnicza funkcja generująca drzewo (kaskadowe menu) dla Profilu Składniowego
+def build_profile_tree_menu(options_list, display_to_key_map, on_select_callback):
+    current_theme = THEMES[motyw.get()]
+    tree_menu = tk.Menu(profile_rel_menu_btn, tearoff=0,
+                        bg=current_theme["dropdown_fg"],
+                        fg=current_theme["button_text"],
+                        activebackground=current_theme["dropdown_hover"],
+                        activeforeground=current_theme["button_text"],
+                        font=("Verdana", 11))
+    tree_menu.add_command(
+        label="★ Podsumowanie profilu",
+        font=("Verdana", 11, "bold"),
+        command=lambda: on_select_callback("★ Podsumowanie profilu")
+    )
+    tree_menu.add_separator()
+
+    # --- WEWNĘTRZNA FUNKCJA AGREGUJĄCA ---
+    def on_group_select(group_name, items_list):
+        """Łączy dane z wielu relacji w jedną tabelę z dodatkowym tagiem relacji."""
+        import re
+        all_merged_rows = []
+        for opt in items_list:
+            actual_key = display_to_key_map.get(opt)
+            if actual_key in current_profile_dict:
+                all_merged_rows.extend(current_profile_dict[actual_key])
+
+        # Sortowanie po sile związku (Log-Dice)
+        all_merged_rows.sort(key=lambda r: (r.log_dice, r.cooc_freq), reverse=True)
+
+        table_rows = []
+        for i, row_obj in enumerate(all_merged_rows):
+            display_colloc = row_obj.collocate
+
+            # 1. Dodaj UPOS (np. [NOUN])
+            if row_obj.collocate_upos:
+                display_colloc = f"{display_colloc} [{row_obj.collocate_upos}]"
+
+            # 2. DODAJ TYP RELACJI (np. [obj])
+            # Wyciągamy tekst z nawiasu w nazwie relacji (np. "Dopełnienie (obj)" -> "obj")
+            rel_match = re.search(r'\(([^)]+)\)', row_obj.relation)
+            if rel_match:
+                rel_tag = rel_match.group(1)
+                display_colloc = f"{display_colloc} [{rel_tag}]"
+
+            table_rows.append([
+                i + 1, display_colloc, row_obj.cooc_freq, row_obj.doc_freq,
+                row_obj.global_freq, row_obj.ll_score, row_obj.mi_score,
+                row_obj.t_score, row_obj.log_dice
+            ])
+
+        paginator_profile["data"] = table_rows
+        paginator_profile["current_page"][0] = 0
+        update_table(paginator_profile)
+        profile_rel_var.set(f"★ {group_name} (zbiorcze)")
+
+    # Grupowanie opcji (logika get_group zostaje bez zmian)
+    def get_group(name):
+        n = name.lower()
+
+        # 1. Węzły nadrzędne MUSZĄ być pierwsze!
+        # Zabezpiecza to "Czynności, których jest podmiotem/dopełnieniem" przed wpadnięciem do grupy 1 lub 2
+        if any(x in n for x in ["modyfikowane", "czynności, których"]):
+            return "7. Węzły nadrzędne (Co określa?)"
+
+        # 2. Zwrotność
+        if "się" in n:
+            return "8. Zwrotność (się)"
+
+        # 3. Konstrukcje złożone i nazwy
+        if any(x in n for x in ["wielowyrazowe", "złożenia", "człon", "flat", "fixed", "compound", "apozycj"]):
+            return "6. Konstrukcje złożone i nazwy"
+
+        # 4. Porównania
+        if any(x in n for x in ["porównan", "punkt odniesienia"]):
+            return "4. Porównania"
+
+        # 5. Związki zdaniowe i szeregi (poprawiono "paratax" na "paratak")
+        if any(x in n for x in ["zdaniow", "dołączenia", "paratak", "szereg", "współrzędne", "przydawkow"]):
+            return "5. Związki zdaniowe i szeregi"
+
+        # 6. Podmioty (teraz w 100% bezpieczne)
+        if "podmiot" in n:
+            return "1. Podmioty"
+
+        # 7. Argumenty
+        if any(x in n for x in ["argument", "dopełnien", "orzecznik"]):
+            return "2. Argumenty (frazy wymagane)"
+
+        # 8. Modyfikatory (dodano "operator", "agens", "połączenia z przyimkiem", zaimki skrócono do "zaim")
+        if any(x in n for x in ["modyfikator", "okolicznik", "określnik", "przysłówek", "zaim", "przyimkow",
+                                "intensyfikator", "operator", "agens"]):
+            return "3. Modyfikatory (frazy niewymagane)"
+
+        return "9. Pozostałe"
+
+    grouped_options = {}
+    for opt in options_list:
+        actual_name = display_to_key_map.get(opt, opt.rsplit(" (", 1)[0])
+        group = get_group(actual_name)
+        grouped_options.setdefault(group, []).append(opt)
+
+    for group_name in sorted(grouped_options.keys()):
+        items = grouped_options[group_name]
+        sub_menu = tk.Menu(tree_menu, tearoff=0,
+                           bg=current_theme["dropdown_fg"], fg=current_theme["button_text"],
+                           activebackground=current_theme["dropdown_hover"],
+                           activeforeground=current_theme["button_text"],
+                           font=("Verdana", 11))
+
+        # --- NOWA OPCJA: Pokaż wszystkie z tej kategorii ---
+        sub_menu.add_command(
+            label=f"★ POKAŻ WSZYSTKIE ({len(items)})",
+            font=("Verdana", 11, "bold"),
+            command=lambda gn=group_name, it=items: on_group_select(gn, it)
+        )
+        sub_menu.add_separator()
+
+        for opt in sorted(items):
+            sub_menu.add_command(label=opt, command=lambda o=opt: on_select_callback(o))
+
+        tree_menu.add_cascade(label=f"{group_name}", menu=sub_menu)
+
+    def show_tree_menu(event=None):
+        if profile_rel_menu_btn.cget("state") != "disabled":
+            x = profile_rel_menu_btn.winfo_rootx()
+            y = profile_rel_menu_btn.winfo_rooty() + profile_rel_menu_btn.winfo_height()
+            tree_menu.tk_popup(x, y)
+
+    profile_rel_menu_btn.configure(command=show_tree_menu)
+
+# Zmienna globalna dla UI Profil kolokacyjny
+current_profile_dict = {}
+
+# Tabela dla Profil kolokacyjny
+profile_headers = ["Nr", "Kolokat", "Współwyst.", "Zasięg (Dok.)", "Freq. Glob.", "Log-Likelihood", "MI Score", "T-score", "Log-Dice"]
+profile_widths = [40, 150, 90, 100, 90, 110, 80, 80, 80]
+profile_justify = ["center"] * 9
+profile_data = []
+
+pagination_profile_frame = ctk.CTkFrame(profile_data_frame, fg_color="#1F2328", corner_radius=12)
+pagination_profile_frame.pack(fill="x", pady=(0, 5))
+for col in range(5): pagination_profile_frame.columnconfigure(col, weight=1)
+
+button_first_profile = ctk.CTkButton(pagination_profile_frame, text="|<", command=lambda: first_p(paginator_profile), **button_kwargs_small)
+button_first_profile.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+button_prev_profile = ctk.CTkButton(pagination_profile_frame, text="<", command=lambda: prev_p(paginator_profile), **button_kwargs_small)
+button_prev_profile.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
+page_label_profile = ctk.CTkLabel(pagination_profile_frame, text="1/1", **label_kwargs_small)
+page_label_profile.grid(row=0, column=2, padx=5, pady=5, sticky="ew")
+button_next_profile = ctk.CTkButton(pagination_profile_frame, text=">", command=lambda: next_p(paginator_profile), **button_kwargs_small)
+button_next_profile.grid(row=0, column=3, padx=5, pady=5, sticky="ew")
+button_last_profile = ctk.CTkButton(pagination_profile_frame, text=">|", command=lambda: last_p(paginator_profile), **button_kwargs_small)
+button_last_profile.grid(row=0, column=4, padx=5, pady=5, sticky="ew")
+
+profile_table = table.CustomTable(
+    profile_data_frame, profile_headers, profile_data, profile_widths, profile_justify, 15,
+    fulltext_data=[], search_callback=lambda w: search_from_table_profile(w)
+)
+profile_table.pack(fill="both", expand=True)
+
+paginator_profile = {
+    "data": profile_data,
+    "current_page": [0],
+    "table": profile_table,
+    "label": page_label_profile,
+    "items_per_page": 15
+}
+profile_table.sort_callback = lambda col, asc: global_sort_callback(paginator_profile, col, asc)
+
+# =======================================================
+# --- NOWOŚĆ: DASHBOARD DLA PROFILU (WORD SKETCH) ---
+profile_dashboard_frame = ctk.CTkScrollableFrame(profile_data_frame, fg_color="transparent")
+
+
+# (Nie pakujemy na starcie - będzie pokazane zamiennie z tabelą)
+
+def render_profile_dashboard(on_select_callback):
+    for widget in profile_dashboard_frame.winfo_children():
+        widget.destroy()
+
+    theme = THEMES[motyw.get()]
+    row, col = 0, 0
+    max_cols = 3  # Liczba kolumn kafelków
+
+    profile_dashboard_frame.grid_columnconfigure((0, 1, 2), weight=1, uniform="col")
+
+    # Sortujemy kategorie malejąco po liczbie unikalnych kolokatów
+    sorted_relations = sorted(current_profile_dict.items(), key=lambda x: len(x[1]), reverse=True)
+
+    for relation_key, rows in sorted_relations:
+        if not rows: continue
+
+        # Odtwarzamy oryginalną nazwę z menu (z liczbą) by przycisk wiedział, co kliknąć
+        display_name = f"{relation_key} ({len(rows)})"
+
+        card = ctk.CTkFrame(profile_dashboard_frame, corner_radius=8, fg_color=theme["subframe_fg"], border_width=1,
+                            border_color="#3E3F42")
+        card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
+
+        lbl_title = ctk.CTkLabel(card, text=relation_key, font=("Verdana", 11, "bold"),
+                                 text_color=theme.get("button_fg", "#4B6CB7"), wraplength=200)
+        lbl_title.pack(pady=(10, 5), padx=10)
+
+        lbl_subtitle = ctk.CTkLabel(card, text="Top 5 (wg Log-Dice)", font=("Verdana", 9, "italic"),
+                                    text_color="gray50")
+        lbl_subtitle.pack(pady=(0, 5))
+
+        list_frame = ctk.CTkFrame(card, fg_color="transparent")
+        list_frame.pack(fill="both", expand=True, padx=10)
+
+        # Wyświetlamy Top 5 posortowane już przez Log-Dice
+        for i, item in enumerate(rows[:5]):
+            item_row = ctk.CTkFrame(list_frame, fg_color="transparent")
+            item_row.pack(fill="x", pady=2)
+
+            colloc_str = item.display_collocate
+            if item.collocate_upos: colloc_str += f" [{item.collocate_upos}]"
+            # Ucięcie za długich wyrazów
+            if len(colloc_str) > 20: colloc_str = colloc_str[:17] + "..."
+
+            ctk.CTkLabel(item_row, text=f"{i + 1}. {colloc_str}", font=("Verdana", 11)).pack(side="left")
+            ctk.CTkLabel(item_row, text=f"{item.log_dice:.1f} LD", font=("Verdana", 10, "bold"), text_color=theme.get("label_text", "white")).pack(side="right")
+
+        # Przycisk "Pełna lista" wywołujący funkcję przeskoku
+        btn_details = ctk.CTkButton(
+            card, text="Pełna lista ➔", font=("Verdana", 11, "bold"), height=24,
+            fg_color="transparent", border_width=1, border_color=theme["button_fg"], text_color=theme["label_text"],
+            hover_color=theme["button_hover"],
+            command=lambda dn=display_name: on_select_callback(dn)
+        )
+        btn_details.pack(pady=(10, 10))
+
+        col += 1
+        if col >= max_cols:
+            col = 0
+            row += 1
+
+
+# =======================================================
+
+
+def calculate_word_profile():
+    if not full_results_sorted:
+        messagebox.showinfo("Brak", "Najpierw wyszukaj frazę.")
+        return
+
+    # Odczytanie przesunięcia słowa centralnego (offsetu)
+    node_selection = profile_node_var.get()
+
+    match = re.search(r'Token (\d+)', node_selection)
+    node_offset = (int(match.group(1)) - 1) if match else 0
+
+    target_lemmas_count = Counter()
+    for res in full_results_sorted:
+        lemmas = str(res[4]).split()
+        if node_offset < len(lemmas):
+            target_lemmas_count[lemmas[node_offset]] += 1
+
+    if not target_lemmas_count:
+        messagebox.showerror("Błąd", "Nie udało się ustalić lematu dla tego przesunięcia.")
+        return
+
+    target_lemma = target_lemmas_count.most_common(1)[0][0]
+
+    # Zapisz w pamięci globalnej do klikania tabeli
+    global current_profile_target_lemma
+    current_profile_target_lemma = target_lemma
+
+    try:
+        min_f = int(entry_profile_minf.get() or "2")
+    except ValueError:
+        min_f = 2
+
+    # --- POBIERAMY STAN CHECKBOXA ---
+    ignore_case_val = profile_ignore_case_var.get()
+
+    btn_calc_profile.configure(state="disabled", text="Generowanie...")
+
+    def worker():
+        try:
+            df = dataframes[global_selected_corpus]
+            inv_idx = inverted_indexes[global_selected_corpus]
+            token_freq_dict_raw = inv_idx['base_tf']
+            total_tokens_val = inv_idx.get('total_tokens', 1)
+
+            # --- AGREGACJA FREKWENCJI GLOBALNEJ W ZALEŻNOŚCI OD WIELKOŚCI LITER ---
+            if ignore_case_val:
+                token_freq_dict = {}
+                for k, v in token_freq_dict_raw.items():
+                    kl = str(k).lower()
+                    token_freq_dict[kl] = token_freq_dict.get(kl, 0) + v
+            else:
+                token_freq_dict = token_freq_dict_raw
+
+            adjusted_results = []
+            for res in full_results_sorted:
+                res_list = list(res)
+                res_list[12] = res_list[12] + node_offset
+                adjusted_results.append(tuple(res_list))
+
+            # Wywołanie funkcji z przekazaniem flagi ignore_case
+            mwe_val = profile_mwe_var.get()
+            profile_dict = compute_word_profile(
+                results=adjusted_results,
+                df=df,
+                token_freq_dict=token_freq_dict,
+                target_lemma=target_lemma,
+                total_tokens=total_tokens_val,
+                min_freq=min_f,
+                ignore_case=ignore_case_val,
+                expand_mwe=mwe_val
+            )
+
+            def update_ui():
+                global current_profile_dict
+                current_profile_dict = profile_dict
+
+                if not profile_dict:
+                    profile_rel_menu_btn.configure(state="disabled")
+                    profile_rel_var.set("Brak wyników")
+                    paginator_profile["data"] = []
+                    update_table(paginator_profile)
+                    btn_calc_profile.configure(state="normal", text="Generuj")
+                    with state_lock:
+                        current_state.current_profile_dict = {}
+                        current_state.profile_data = []
+                        current_state.profile_rel_options = ["Brak wyników"]
+                        current_state.profile_selected_rel = "Brak wyników"
+                    return
+
+                options = []
+                display_to_key = {}
+                for rel_name in sorted(profile_dict.keys()):
+                    rows = profile_dict[rel_name]
+                    display_name = f"{rel_name} ({len(rows)})"
+                    options.append(display_name)
+                    display_to_key[display_name] = rel_name
+
+                profile_rel_menu_btn.configure(state="normal")
+
+                def on_rel_select(selected_display_name):
+                    profile_rel_var.set(selected_display_name)
+
+                    # LOGIKA 1: Widok z lotu ptaka
+                    if selected_display_name == "★ Podsumowanie profilu":
+                        pagination_profile_frame.pack_forget()
+                        profile_table.pack_forget()
+                        profile_dashboard_frame.pack(fill="both", expand=True)
+                        render_profile_dashboard(on_rel_select)
+                        return
+
+                    # LOGIKA 2: Standardowa tabela dla wybranej relacji
+                    profile_dashboard_frame.pack_forget()
+                    pagination_profile_frame.pack(fill="x", pady=(0, 5))
+                    profile_table.pack(fill="both", expand=True)
+
+                    actual_key = display_to_key.get(selected_display_name)
+                    if not actual_key: return
+
+                    rows = current_profile_dict[actual_key]
+                    table_rows = []
+                    for i, row_obj in enumerate(rows):
+                        display_colloc = row_obj.collocate
+                        if row_obj.collocate_upos:
+                            display_colloc = f"{display_colloc} [{row_obj.collocate_upos}]"
+
+                        table_rows.append([
+                            i + 1, display_colloc, row_obj.cooc_freq, row_obj.doc_freq,
+                            row_obj.global_freq, row_obj.ll_score, row_obj.mi_score,
+                            row_obj.t_score, row_obj.log_dice
+                        ])
+
+                    paginator_profile["data"] = table_rows
+                    paginator_profile["current_page"][0] = 0
+                    update_table(paginator_profile)
+
+                    with state_lock:
+                        current_state.current_profile_dict = dict(current_profile_dict)
+                        current_state.profile_target_lemma = current_profile_target_lemma
+                        current_state.profile_data = list(table_rows)
+                        current_state.profile_rel_options = list(options)
+                        current_state.profile_selected_rel = selected_display_name
+
+                # Generowanie i przypinanie rozwijanego DRZEWA do przycisku
+                build_profile_tree_menu(options, display_to_key, on_rel_select)
+
+                # Ustawiamy domyślnie widok Word Sketch!
+                first_option = "★ Podsumowanie profilu"
+                profile_rel_var.set(first_option)
+                on_rel_select(first_option)
+
+                btn_calc_profile.configure(state="normal", text="Generuj")
+
+            app.after(0, update_ui)
+
+
+        except Exception as e:
+            logging.exception("Błąd profilu")
+            error_msg = str(e)  # <--- Zapisujemy błąd do trwałego stringa
+
+            def on_error(msg=error_msg):  # <--- Przekazujemy go w bezpieczny sposób
+                btn_calc_profile.configure(state="normal", text="Generuj")
+                messagebox.showerror("Błąd profilu", f"Wystąpił błąd:\n{msg}")
+
+            app.after(0, on_error)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+btn_calc_profile.configure(command=calculate_word_profile)
+
+
 
 # ------------------------------
 # Plots
 # ------------------------------
-plot_options_frame = ctk.CTkFrame(tab_wyniki_wykresy, fg_color="#2C2F33", corner_radius=15)
-plot_options_frame.pack(pady=(5, 10), padx=10, side="left")
+# Główny kontener opcji na lewo od wykresu:
+plot_options_frame = ctk.CTkScrollableFrame(tab_wyniki_wykresy, fg_color="transparent", corner_radius=0, width=280)
+plot_options_frame.pack(pady=10, padx=(10, 5), side="left", fill="y")
 
-# Save button container
-saveplot_button_frame = ctk.CTkFrame(plot_options_frame, fg_color="#1F2328", corner_radius=12)
-saveplot_button_frame.pack(pady=5, padx=5, fill="x")
+# Karta 1: Typ i zapis wykresu
+card_type = SettingsCard(plot_options_frame, "Typ i zapis wykresu", expanded=True)
+saveplot_button_frame = card_type.content
 
-# Plot type label
-plot_type_label = ctk.CTkLabel(saveplot_button_frame, text="Wybierz typ wykresu:", font=("Verdana", 13, 'bold'))
-plot_type_label.pack(pady=5, padx=5, fill="x")
-# Single mode variable (StringVar) for plot type
+# --- RAMKA Z TYTUŁEM I CHMURKĄ (TOOLTIP) ---
+type_label_frame = ctk.CTkFrame(saveplot_button_frame, fg_color="transparent")
+type_label_frame.pack(pady=(5, 0), padx=5, fill="x")
+
+plot_type_label = ctk.CTkLabel(type_label_frame, text="Wybierz typ wykresu:", font=("Verdana", 13, 'bold'))
+plot_type_label.pack(side="left", padx=(5, 5))
+
+plot_help_icon = ctk.CTkLabel(type_label_frame, text="❓", font=("Verdana", 14), text_color="#4B6CB7", cursor="hand2")
+plot_help_icon.pack(side="left")
+
+help_text = (
+    "TYPY WYKRESÓW:\n"
+    "• Liczba wystąpień: Surowa liczba trafień w danym okresie.\n"
+    "• Częstość względna: Liczba trafień znormalizowana na 1 000 000 słów.\n"
+    "• TF-IDF: Miara specyficzności słowa w danym okresie.\n"
+    "• Z-score: Miara dynamiki zmian względem średniej dla danego słowa.\n\n"
+    "Aplikacja może nie wyświetlać punktów na wykresie w okresach,\n"
+    "w których brakuje danych lub ich liczba jest zbyt mała,\n"
+    "aby wynik był statystycznie wiarygodny.\n"
+    "W trybie Auto próg ten jest wyznaczany automatycznie.\n"
+    "Można go zmienić lub wyłączyć w zakładce Opcje."
+)
+
+ToolTip(plot_help_icon, help_text)
+
 wykres_sort_mode = ctk.StringVar(value="Liczba wystąpień")
 
-# Rozwijane menu do wyboru statystyk
 plot_type_menu = ctk.CTkOptionMenu(
     saveplot_button_frame,
     variable=wykres_sort_mode,
@@ -6621,25 +11574,41 @@ plot_type_menu = ctk.CTkOptionMenu(
 )
 plot_type_menu.pack(pady=5, padx=5, fill="x")
 
-# Kontener na daty i interwał
-date_settings_frame = ctk.CTkFrame(plot_options_frame, fg_color="#1F2328", corner_radius=12)
-date_settings_frame.pack(pady=5, padx=5, fill="x")
+# Karta 2: Opcje Dat i Czasu
+card_date = SettingsCard(plot_options_frame, "Filtrowanie czasowe", expanded=False)
+date_settings_frame = card_date.content
 
-# Checkbox aktywujący niestandardowe daty
 custom_date_var = ctk.BooleanVar(value=False)
 
 def toggle_custom_dates():
     state = "normal" if custom_date_var.get() else "disabled"
     date_start_entry.configure(state=state)
     date_end_entry.configure(state=state)
-    force_recalculate_plot() # Opcjonalnie: odświeża od razu po kliknięciu
+    force_recalculate_plot()
 
-chk_custom_dates = ctk.CTkCheckBox(date_settings_frame, text="Niestandardowy zakres dat",
+dates_header_frame = ctk.CTkFrame(date_settings_frame, fg_color="transparent")
+dates_header_frame.pack(pady=(10, 2), fill="x", padx=10)
+
+chk_custom_dates = ctk.CTkCheckBox(dates_header_frame, text="Niestandardowy zakres dat",
                                    variable=custom_date_var, command=toggle_custom_dates,
                                    font=("Verdana", 11, "bold"))
-chk_custom_dates.pack(pady=(10, 2), anchor="w", padx=10)
+chk_custom_dates.pack(side="left")
 
-# Daty w jednym wierszu
+date_help_icon = ctk.CTkLabel(dates_header_frame, text="❓", font=("Verdana", 14), text_color="#4B6CB7", cursor="hand2")
+date_help_icon.pack(side="left", padx=5)
+
+date_help_text = (
+    "Przy obliczaniu miar znormalizowanych (PMW, TF-IDF), system opiera się na\n"
+    "sumarycznej objętości tekstów zliczonej w skali miesięcy. Jeśli zostanie zdefiniowany\n"
+    "interwał mniejszy niż miesiąc (np. dni) lub ramy czasowe przecinające miesiąc\n"
+    "w połowie, aplikacja stosuje podział proporcjonalny (np. dla 10 dni marca przyjmie\n"
+    "do obliczeń ok. 32% całkowitej liczby słów z tego miesiąca).\n\n"
+    "Należy pamiętać, że w takich przypadkach wykres prezentuje uśrednione\n"
+    "przybliżenie statystyczne, a nie rzeczywistą, punktową frekwencję z każdego dnia."
+)
+
+ToolTip(date_help_icon, date_help_text)
+
 dates_row_frame = ctk.CTkFrame(date_settings_frame, fg_color="transparent")
 dates_row_frame.pack(fill="x", padx=10, pady=2)
 
@@ -6670,11 +11639,42 @@ btn_refresh_plot = ctk.CTkButton(
 )
 btn_refresh_plot.pack(pady=10, padx=10, fill="x")
 
-# Checkboxes frame
-checkboxes_frame = ctk.CTkFrame(plot_options_frame, fg_color="#1F2328", corner_radius=12)
-checkboxes_frame.pack(pady=5, padx=5, fill="x")
+# Karta 3: Skalowanie
+card_scale = SettingsCard(plot_options_frame, "Skalowanie osi Y", expanded=False)
+scale_frame = card_scale.content
 
-# Save plot button
+ctk.CTkLabel(scale_frame, text="Skalowanie:", font=("Verdana", 11, "bold")).pack(side="left", padx=10, pady=5)
+
+scale_mode_var = ctk.StringVar(value="Auto")
+
+def on_scale_mode_change(value):
+    if value == "Ręczne":
+        entry_y_limit.pack(side="left", padx=(5, 10), pady=5)
+    else:
+        entry_y_limit.pack_forget()
+        entry_y_limit.delete(0, 'end')
+        force_recalculate_plot()
+
+scale_mode_btn = ctk.CTkSegmentedButton(
+    scale_frame,
+    values=["Auto", "Ręczne"],
+    variable=scale_mode_var,
+    command=on_scale_mode_change,
+    font=("Verdana", 11, "bold"),
+    fg_color="#2C2F33",
+    selected_color="#4B6CB7",
+    selected_hover_color="#5B7CD9"
+)
+scale_mode_btn.pack(side="left", padx=(0, 5), pady=5)
+
+entry_y_limit = ctk.CTkEntry(scale_frame, placeholder_text="Górny limit...", width=100, height=28)
+
+# Karta 4: Wybór elementów na wykresie
+# expand_card=True mówi systemowi, że ta karta może rosnąć (ponieważ ma wewnętrzny scroll listboxów z lematami)
+card_checkboxes = SettingsCard(plot_options_frame, "Zaznaczone elementy", expanded=True, expand_card=True)
+checkboxes_frame = card_checkboxes.content
+
+# Przycisk "Zapisz wykres" pakowany do Pierwszej Karty
 button_save_plot = ctk.CTkButton(
     saveplot_button_frame,
     text="Zapisz wykres",
@@ -6696,10 +11696,23 @@ frekw_wykresy.bind("<Configure>", on_resize)
 dropdown.configure(values=get_txt_files())
 
 # Przypisanie Enter do pola wpisywania lematu i całej aplikacji
-entry_query.bind("<Return>", on_enter)
+# --- Pomocnicze funkcje dla głównego pola wyszukiwania ---
+def on_enter_query(event):
+    on_enter(event)   # Uruchamia Twoje wyszukiwanie
+    return "break"    # Blokuje wstawienie nowej linii
+
+def insert_newline(event):
+    # Ręcznie wstawia nową linię w miejscu kursora
+    event.widget.insert("insert", "\n")
+    return "break"    # Blokuje inne domyślne akcje
+# ---------------------------------------------------------
+
+# Przypisanie Enter do pola wpisywania lematu i całej aplikacji
+entry_query.bind("<Return>", on_enter_query)           # Enter = Szukaj
+entry_query.bind("<Shift-Return>", insert_newline)     # Shift+Enter = Nowa linia
+
 entry_left_context.bind("<Return>", on_enter)
 entry_right_context.bind("<Return>", on_enter)
-
 
 # Enable undo/redo (since CTkEntry is based on tk.Entry)
 entry_query.configure(undo=True)
