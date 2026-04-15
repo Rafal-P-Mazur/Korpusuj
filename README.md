@@ -1,7 +1,7 @@
 
 # Korpusuj
 
-Korpusuj to aplikacja badawcza do budowy, przeszukiwania i analizy anotowanych korpusów tekstowych. Program umożliwia przetwarzanie plików źródłowych do formatu `.parquet`, wyszukiwanie z użyciem autorskiego języka zapytań typu CQL oraz analizę frekwencyjną, kolokacyjną i diachroniczną.
+Korpusuj to aplikacja badawcza do budowy, przeszukiwania i analizy anotowanych korpusów tekstowych. Program umożliwia przetwarzanie plików źródłowych do formatu `.parquet`, wyszukiwanie z użyciem autorskiej wersji języka zapytań typu CQL oraz analizę frekwencyjną, kolokacyjną i diachroniczną.
 
 ![App Screenshot 1](Images/1.png)
 
