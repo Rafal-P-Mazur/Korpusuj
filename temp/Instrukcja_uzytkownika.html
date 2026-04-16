@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Instrukcja Użytkownika - Korpusuj</title>
+<style>
+/* --- Light Mode (default) --- */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    line-height: 1.6;
+    background-color: #f9f9f9;
+    color: #333;
+    padding: 20px;
+    transition: background-color 0.3s, color 0.3s;
+}
+.container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #fff;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    border-radius: 8px;
+    transition: background-color 0.3s, color 0.3s;
+}
+
+/* Przycisk motywu */
+#theme-toggle {
+  background: #2c3e50;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: background 0.3s;
+}
+#theme-toggle:hover {
+  background: #34495e;
+}
+
+/* --- Dark Mode --- */
+body.dark-mode {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+body.dark-mode .container {
+    background-color: #1e1e1e;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+}
+body.dark-mode h1,
+body.dark-mode h2,
+body.dark-mode h3 {
+    color: #f5f5f5;
+}
+
+body.dark-mode .example,
+body.dark-mode .example2,
+body.dark-mode .note {
+    padding: 10px;
+    margin: 10px 0;
+}
+
+body.dark-mode .example {
+    background-color: #1b3320;
+    border-left: 4px solid #4caf50;
+}
+body.dark-mode .example2 {
+    background-color: #0f2d3a;
+    border-left: 4px solid #4fc3f7;
+}
+body.dark-mode .note {
+    background-color: #3a2f0f;
+    border-left: 4px solid #ffca28;
+}
+
+/* Tabele */
+body.dark-mode th {
+    background-color: #333;
+    color: #eee;
+}
+body.dark-mode table,
+body.dark-mode th,
+body.dark-mode td {
+    color: #e0e0e0;
+    border: 1px solid #555;
+    padding: 8px;
+}
+
+/* Light Mode Overrides */
+body:not(.dark-mode) .example {
+  background-color: #dff0d8;
+  border-left: 4px solid #3c763d;
+  padding: 10px;
+  margin: 10px 0;
+  color: #16321a;
+}
+body:not(.dark-mode) .example2 {
+  background-color: #d9edf7;
+  border-left: 4px solid #31708f;
+  padding: 10px;
+  margin: 10px 0;
+  color: #07323b;
+}
+body:not(.dark-mode) .note {
+  background-color: #fcf8e3;
+  border-left: 4px solid #8a6d3b;
+  padding: 10px;
+  margin: 10px 0;
+  color: #5a4518;
+}
+body:not(.dark-mode) table,
+body:not(.dark-mode) th,
+body:not(.dark-mode) td {
+  color: #333;
+  border: 1px solid #ccc;
+  padding: 8px;
+}
+body:not(.dark-mode) th {
+  background-color: #ecf0f1;
+  color: #2c3e50;
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-bottom: 20px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.key-btn {
+  display: inline-block;
+  background-color: #eee;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 0.9em;
+  color: #333;
+}
+body.dark-mode .key-btn {
+  background-color: #333;
+  border-color: #555;
+  color: #ddd;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      document.getElementById("theme-toggle").addEventListener("click", function() {
+        document.body.classList.toggle("dark-mode");
+        this.textContent = document.body.classList.contains("dark-mode") ? "☀️" : "🌙";
+      });
+    });
+  </script>
+
+  <div class="header">
+    <h1>Instrukcja Użytkownika – Korpusuj</h1>
+    <button id="theme-toggle">🌙</button>
+  </div>
+
+  <p>Aplikacja <strong>Korpusuj</strong> to zaawansowane narzędzie badawcze przeznaczone do analizy ilościowej i jakościowej anotowanych korpusów tekstowych. Niniejsza instrukcja prezentuje kluczowe funkcjonalności interfejsu oraz metody analizy i zarządzania wynikami wyszukiwania.</p>
+
+  <div class="note">
+    <strong>Uwaga:</strong> Szczegółowy opis składni języka zapytań znajduje się w dokumencie <em>Przewodnik po języku zapytań</em> dostępnym w menu <strong>Pomoc</strong>.
+  </div>
+
+  <hr>
+
+  <h2>1. Tworzenie własnego korpusu</h2>
+  <p>Pracę z aplikacją najczęściej rozpoczyna się od przetworzenia własnych zbiorów tekstowych na ustandaryzowany, anotowany korpus badawczy. Służy do tego zintegrowany kreator korpusów, który można uruchomić, wybierąjac w głównym menu opcje: <strong>Plik &gt; Utwórz korpus</strong>. Kreator przeprowadza pełną analizę przetwarzania języka naturalnego (NLP), w tym lematyzację, tagowanie morfosyntaktyczne, rozpoznawanie encji (NER) oraz analizę zależnościową.</p>
+  <h3>Obsługiwane formaty plików:</h3>
+  <ul>
+    <li>Dokumenty tekstowe (<code>.txt</code>, <code>.docx</code>, <code>.pdf</code> - z eksperymentalną obsługą OCR).</li>
+    <li>Arkusze kalkulacyjne (<code>.xlsx</code>) </li>
+    <li>Archiwa (<code>.zip</code>) - automatyczne rozpakowywanie i iterowanie po zawartości.</li>
+  </ul>
+
+  <h3>Konfiguracja procesu anotacji:</h3>
+  <ol>
+    <li><strong>Wybór modelu analitycznego:</strong>
+        <ul>
+            <li><strong>Stanza:</strong> Model o wysokiej precyzji.</li>
+            <li><strong>spaCy:</strong> Model zoptymalizowany pod kątem wydajności. </li>
+        </ul>
+    </li>
+    <li><strong>Mapowanie metadanych:</strong> W przypadku wgrywania arkuszy Excel lub korzystania z dodatkowego pliku <code>metadane.xlsx</code>, system wygeneruje okno dialogowe z prośbą o powiązanie kolumn ze standardowymi atrybutami (Nazwa pliku, Tytuł, Treść, Data, Autor). Plik może zawierać kolumny z dodatkowymi metadanymi, które również zostaną dodane do tworzonego korpusu.</li>
+    <li><strong>Przetwarzanie:</strong> Po zatwierdzeniu przyciskiem <strong>"Przetwórz pliki"</strong> program rozpocznie automatyczną anotację tekstów. naliza tekstów wymaga dużej mocy obliczeniowej. Program w wersji skompilowanej (<code>.exe</code>) wykorzystuje tylko procesor (CPU). Aby przyspieszyć pracę przy użyciu karty graficznej (GPU), należy uruchamiać aplikację ze skryptu <code>.py</code> z zainstalowaną biblioteką <em>torch</em> w wersji obsługującej dane GPU.</li>
+    <li><strong>Wynik przetwarzania:</strong> Po zakończeniu pracy kreatora powstanie plik z rozszerzeniem <code>.parquet</code> gotowy do załadowania w głównym oknie aplikacji.</li>
+  </ol>
+
+  <hr>
+
+  <h2>2. Ładowanie danych i rozpoczęcie pracy</h2>
+  <h3>Inicjalizacja i wczytywanie korpusu</h3>
+  <p>Aby załadować przygotowany koprus należy wybrać w głównym menu wybrać opcję <strong>Plik &gt; Nowy projekt</strong>, a następnie wskazać wygenerowane wcześniej pliki korpusowe z rozszerzeniem <code>.parquet</code>. </p>
+
+  <h3>Wybór aktywnego korpusu</h3>
+  <p>W przypadku załadowania kilku zbiorów danych, w lewym górnym rogu interfejsu staje się aktywna lista rozwijana <strong>"Wybierz korpus:"</strong>, umożliwiająca płynne przełączanie się między poszczególnymi zasobami.</p>
+
+  <hr>
+
+  <h2>3. Wyszukiwanie i formułowanie zapytań</h2>
+  <p>Głównym elementem interfejsu jest pole tekstowe przeznaczone do wprowadzania kwerend. Zapytania mogą być formułowane ręcznie lub za pomocą konstruktora zapytań.</p>
+
+  <h3>Konstruktor Zapytań</h3>
+  <p>W prawym dolnym rogu pola wyszukiwania znajduje się przycisk <strong>"Konstruktor"</strong>. Uruchamia on moduł ułatwiający tworzenie zapytań. Narzędzie to pozwala na:</p>
+  <ul>
+    <li>Dodawanie <strong>segmentów (tokenów)</strong> oraz definiowanie ich atrybutów morfologicznych i składniowych.</li>
+    <li>Określanie <strong>odstępów</strong> (wyrażonych w liczbie tokenów) między poszczególnymi elementami badanej sekwencji.</li>
+    <li>Definiowanie <strong>filtrów metadanych</strong>, pozwalających na zawężenie wyników do określonego autora, przedziału czasowego bądź obrębu pojedynczego zdania.</li>
+  </ul>
+  <p>Aby wygenerować zapytanie należy wybrać opcje <strong>"Gotowe - Wstaw zapytanie"</strong>.</p>
+
+  <h3>Kontekst wyników</h3>
+  <p>Pola <strong>Kontekst (l)</strong> i <strong>Kontekst (r)</strong> pozwalają określić, ile tokenów otaczających szukaną frazę ma być widocznych w tabeli wyników.</p>
+  <hr>
+
+  <h2>4. Analiza i przeglądanie wyników</h2>
+  <p>Po kliknięciu ikony lupy lub wciśnięciu klawisza <span class="key-btn">Enter</span> wyniki pojawią się w znajdujacej się w lewym panelu tabeli konkordancji.</p>
+
+  <h3>Panel rozszerzonego kontekstu</h3>
+ <p>Kliknięcie dowolnego wiersza w tabeli spowoduje wyświetlenie dłuższego fragmentu tekstu w prawym panelu (<strong>rozszerzony kontekst</strong>). Pod tym panelem znajdują się też dodatkowe funkcje:</p>
+  <ul>
+    <li><strong>Pokaż graf drzewa zależności:</strong> Generuje interaktywną wizualizację relacji składniowych dla zdania zawierającego znalezioną frazę.</li>
+    <li><strong>Zaznacz jednostki nazwane (NER):</strong> Wyróżnia w tekście wyrazy i frazy rozpoznane jako jednostki nazwane (imiona, nazwiska, nazwy miejsc, organizacji itp.).</li>
+    <li><strong>Zaznacz klastry koreferencyjne:</strong> Identyfikuje wyrażenia odnoszące się do tego samego obiektu w tekście.</li>
+  </ul>
+
+  <hr>
+
+  <h2>5. Analiza statystyczna (zakładka "Statystyki")</h2>
+  <p>Zakładka ta dostarcza zestawień ilościowych dla przeprowadzonych zapytań. Lista rozwijana w lewym górnym rogu umożliwia zmianę analizowanego aspektu, natomiast kolumny w tabelach można sortować klikając na ich nagłówki.</p>
+
+  <div class="example2">
+    <strong>Dostępne zestawienia tabelaryczne:</strong>
+    <ul>
+      <li><strong>Formy podstawowe (base):</strong> Agreguje wyniki na poziomie lematów.</li>
+      <li><strong>Formy ortograficzne (orth):</strong> Prezentuje rozkład częstotliwości poszczególnych form fleksyjnych (tokenów).</li>
+      <li><strong>Częstość w czasie:</strong> Przedstawia diachroniczny rozkład frekwencji wyszukiwanych struktur (z podziałem na miesiące i lata).</li>
+      <li><strong>Kolokacje:</strong> Moduł przeznaczony do analizy współwystępowania wyrazów.</li>
+    </ul>
+  </div>
+
+  <h3>Wyjaśnienie implementowanych miar statystycznych:</h3>
+  <ul>
+    <li><strong>Częstość względna (na 1 000 000 segmentów):</strong> Standaryzowana miara frekwencji, umożliwiająca obiektywne porównywanie wyników pomiędzy korpusami lub interwałami czasowymi o różnej objętości.</li>
+    <li><strong>Rozproszenie (DF - Document Frequency):</strong> Całkowita liczba unikalnych dokumentów (tekstów lub wierszy bazy), w których zarejestrowano wystąpienie badanej jednostki.</li>
+    <li><strong>TF-IDF:</strong> Miara oceniająca wagę słowa w korpusie na podstawie stosunku jego częstości w zbiorze do liczby dokumentów, w których występuje. Słowa wysoce powszechne uzyskują niską wartość, a specyficzne – wysoką. <em>W celu ułatwienia interpretacji i poprawy czytelności danych w interfejsie, ostateczny wynik prezentowany w aplikacji jest mnożony przez 100&nbsp;000.</em></li>
+    <li><strong>Z-score:</strong> Wskaźnik statystyczny określający odchylenie frekwencji danej jednostki w wybranym przedziale czasu od jej średniej historycznej dla całego korpusu. Wysoka wartość dodatnia sygnalizuje istotny wzrost użycia słowa.</li>
+  </ul>
+
+  <hr>
+
+  <h2>6. Analiza kolokacji</h2>
+  <p>Sekcja <strong>"Kolokacje"</strong> (dostępna w zakładce Statystyki) pozwala na wyodrębnienie i ewaluację statystyczną wyrażeń najczęściej współwystępujących z wyszukiwanym terminem. Algorytm wykorzystuje zaawansowany mechanizm deduplikacji nakładających się okien tekstowych oraz precyzyjnie uwzględnia interpunkcję jako dystans, co gwarantuje wysoką wiarygodność matematyczną wyników.</p>
+
+  <h3>Metody ekstrakcji kolokatów:</h3>
+  <ol>
+    <li><strong>Liniowe:</strong> Identyfikuje kolokaty na podstawie ich fizycznego sąsiedztwa w tekście. Wymaga zdefiniowania rozmiaru okna badawczego (zmiennych L-span oraz R-span).</li>
+    <li><strong>Składniowe:</strong> Ekstrahuje kolokaty na podstawie ich bezpośrednich zależności gramatycznych (relacje nadrzędnik-podrzędnik), niezależnie od odległości liniowej.</li>
+  </ol>
+
+  <p>Przed wykonaniem obliczeń badacz może ustawić filtry morfologiczne (UPOS/POS) oraz progi minimalnej frekwencji (<em>Min f</em>) i zakresu dokumentów (<em>Min r</em>), ograniczyć poszukiwania do granic jednego zdania, a także wybrać odpowiednią miarę asocjacji wykorzystywaną do oceny wyników.</p>
+
+  <h3>Wyjaśnienie miar asocjacji dla kolokacji:</h3>
+  <ul>
+    <li><strong>Log-Likelihood:</strong> Miara określająca istotność statystyczną współwystępowania słów. Wskazuje, czy dane wyrazy pojawiają się w swoim sąsiedztwie częściej, niż wynikałoby to z czystego przypadku.</li>
+    <li><strong>MI Score (Mutual Information):</strong> Szacuje siłę powiązania między wyrazami w oparciu o stosunek zaobserwowanej liczby wspólnych wystąpień do wartości oczekiwanej. Miara ta faworyzuje kolokacje bardzo rzadkie.</li>
+    <li><strong>T-score:</strong> Określa pewność powiązania wyrazów. Silnie uwzględnia bezwzględną frekwencję słów, przez co redukuje wpływ przypadkowych powiązań i premiuje kolokacje częste.</li>
+    <li><strong>Log-Dice:</strong> Miara typowości kolokacji, odporna na wpływ całkowitej objętości korpusu, co ułatwia porównywanie wyników między różnymi zbiorami danych. Oparta jest na stosunku wspólnych wystąpień do sumy frekwencji obu badanych jednostek.</li>
+  </ul>
+
+  <div class="note">
+    <strong>Eksploracja kontekstu kolokacji:</strong> Kliknięcie prawym przyciskiem na kolokat w tabeli otwiera menu kontekstowe. Wybór opcji "Wyszukaj kolokację" powoduje automatyczne wygenerowanie i uruchomienie nowego zapytania, które ekstrahuje z korpusu konteksty zawierające badany węzeł oraz analizowany kolokat.
+  </div>
+
+  <hr>
+
+  <h2>7. Analiza trendów (zakładka "Trendy")</h2>
+  <p>Zakładka ta służy do generowania zaawansowanych wizualizacji dynamiki zmian frekwencji badanych jednostek językowych w ujęciu czasowym.</p>
+  <ul>
+    <li><strong>Konfiguracja osi czasu:</strong> Interfejs po lewej stronie pozwala na niezwykle precyzyjne sterowanie ramami czasowymi. Badacz może zdefiniować sztywny <strong>Zakres dat</strong> (Od – Do, w formacie DD-MM-RRRR) oraz określić <strong>Interwał</strong> (np. co 1 dzień, 3 miesiące, 2 lata). Program automatycznie dzieli korpus na równe "koszyki" czasowe, prezentując dokładną datę początkową każdego z nich na osi X.</li>
+    <li><strong>Typ wykresu:</strong> Korzystając, Z listy rozwijanej, można dostosować rodzaj przedstawianych wartości: Liczba wystąpień, Częstość względna, TF-IDF oraz Z-score. <br>
+    <em>Ważne: Przy obliczaniu miar znormalizowanych (Częstość względna, TF-IDF), system opiera się na sumarycznej objętości tekstów zliczonej w skali miesięcy. Jeśli badacz zdefiniuje interwał mniejszy niż miesiąc (np. dni) lub ramy czasowe przecinające miesiąc w połowie, aplikacja stosuje podział proporcjonalny (np. dla 10 dni marca przyjmie do obliczeń ok. 32% całkowitej liczby słów z tego miesiąca). Należy pamiętać, że w takich przypadkach wykres prezentuje uśrednione przybliżenie statystyczne, a nie rzeczywistą, punktową frekwencję z każdego konkretnego dnia.</em></li>   <li><strong>Grupowanie:</strong> Aby połączyć wyniki różnych etykiet (np. w wypadku błędnego rozpoznania przez model różnych form fleksyjnych jako odrębnych lematów) należy zaznaczyć wybrane formy, wprowadzić nową wspólną nazwę i zatwierdzić operację przyciskiem <strong>"Grupuj/Zmień nazwę"</strong>.</li>
+    <li><strong>Odświeżanie i eksport:</strong> Każda zmiana przedziału czasowego wymaga kliknięcia przycisku <strong>"Odśwież wykres"</strong>. Wygenerowaną wizualizację można wyeksportować w wysokiej jakości, używając opcji <strong>"Zapisz wykres"</strong>.</li>
+  </ul>
+
+  <hr>
+  <h2>8. Tworzenie i edycja fiszek</h2>
+  <p>Fiszki służą do zapisywania wybranych fragmentów tekstów wraz z ich opisami do oddzielnych plików.</p>
+
+  <h3>Dodawanie fiszek:</h3>
+  <ol>
+    <li>Aby stworzyć nową fiszkę należy zaznaczyć w panelu rozszerzonego kontekstu fragment tekstu</li>
+    <li>W polu <strong>"Nazwa fiszki"</strong> (na górze okna) należy wpisać nazwę fiszki.</li>
+    <li>Po kliknięciu przycisku <strong>"Zapisz fiszkę"</strong> program dopisze zaznaczony tekst do istniejącej fiszki (lub utworzy nową fiszkę), dodając automatycznie informację o korpusie, tytule, autorze i dacie publikacji.</li>
+  </ol>
+
+  <h3>Edycja i przeglądanie fiszek:</h3>
+  <p>Aby przejrzeć zapisane cytaty, należy wybrać nazwę fiszki z listy rozwijanej <strong>"Otwórz fiszkę"</strong>. Otworzy się nowe okno z <strong>edytorem wizualnym</strong>, w którym można:</p>
+  <ul>
+    <li>Dowolnie zmieniać kolory, kroje i rozmiary czcionek.</li>
+    <li>Stosować pogrubienia, kursywę i podkreślenia.</li>
+    <li>Wyszukiwać fragmenty wewnątrz danej fiszki.</li>
+    <li>Dopisywać własne uwagi pod cytatami i zapisać zmiany przyciskiem "Zapisz".</li>
+  </ul>
+
+  <hr>
+
+  <h2>9. Eksport wyników</h2>
+  <p>Opcja dostępna w menu głównym <strong>Plik &gt; Eksportuj wyniki</strong> pozwala na trwałe zapisanie aktualnych rezultatów kwerendy do pliku arkusza kalkulacyjnego (<code>.xlsx</code>). Plik wynikowy jest automatycznie dzielony na 5 dedykowanych arkuszy tematycznych:</p>
+  <ul>
+      <li><strong>Wyniki wyszukiwania:</strong> Pełna lista konkordancji wraz z lewym i prawym kontekstem oraz metadanymi.</li>
+      <li><strong>Częstość lematów:</strong> Zestawienie globalnej frekwencji i częstości względnej dla form podstawowych.</li>
+      <li><strong>Częstość tokenów:</strong> Zestawienie globalnej frekwencji dla form ortograficznych.</li>
+      <li><strong>Częstość w czasie:</strong> Diachroniczny rozkład wystąpień (z podziałem na roczniki i miesiące).</li>
+      <li><strong>Kolokacje:</strong> Tabela zawierająca obliczone kolokaty wraz ze wszystkimi miarami asocjacji (Log-Dice, MI Score itp.).</li>
+  </ul>
+
+  <hr>
+
+  <h2>10. Konfiguracja ustawień aplikacji</h2>
+  <p>Opcja <strong>Ustawienia &gt; Preferencje</strong> pozwala na modyfikację globalnych ustawień aplikacji:</p>
+  <ul>
+    <li>Formatowanie tekstu (wielkość i krój czcionki).</li>
+    <li>Motyw graficzny aplikacji (jasny/ciemny) oraz domyślny styl wizualny generowanych wykresów.</li>
+    <li>Definicja wartości numerycznej dla rozszerzonego kontekstu (ile tokenów dookoła wyszukanego słowa ma pobierać program przy kliknięciu w wiersz tabeli).</li>
+  </ul>
+
+</div>
+
+</body>
+</html>
