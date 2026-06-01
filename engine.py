@@ -2241,6 +2241,7 @@ class SemanticNetworkViewer:
         self.render_graph()
         self._render_neighbors_list()
 
+
 class TopicEngine:
     def __init__(self, parquet_path):
         self.parquet_path = parquet_path
@@ -2253,7 +2254,26 @@ class TopicEngine:
         # Wybór modelu (Sentence Transformer).
         self.embedding_model_name = "sdadas/st-polish-paraphrase-from-mpnet"
 
-    def load_data(self):
+    # --- NOWA METODA POMOCNICZA DO CIĘCIA TEKSTÓW ---
+    def _chunk_text(self, text, max_words=200):
+        """Prosty podział tekstu na mniejsze fragmenty (akapity i okna słów)."""
+        chunks = []
+        # Podział w pierwszej kolejności na akapity (zachowuje logikę strukturalną)
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+
+        for p in paragraphs:
+            words = p.split()
+            if len(words) <= max_words:
+                chunks.append(p)
+            else:
+                # Jeśli sam akapit jest wielki, dzielimy go na sztywne porcje np. po 200 słów
+                for i in range(0, len(words), max_words):
+                    chunk = " ".join(words[i:i + max_words])
+                    chunks.append(chunk)
+        return chunks
+
+    # --- ZAKTUALIZOWANA METODA LOAD_DATA ---
+    def load_data(self, use_chunking=True, max_words_per_chunk=250, use_lemmas=False): # DODANO PARAMETR
         """Wczytuje teksty i daty z pliku parquet wygenerowanego przez creator.py"""
         logging.info(f"Wczytywanie danych z {self.parquet_path}...")
         try:
@@ -2267,13 +2287,37 @@ class TopicEngine:
             df = df.dropna(subset=['Treść'])
             df = df[df['Treść'].str.strip() != ""]
 
-            self.docs = df['Treść'].tolist()
+            # --- NOWE: Wybór między tekstem oryginalnym a lematami ---
+            if use_lemmas and "lemmas" in df.columns:
+                logging.info("Używam form zlematyzowanych (base) do modelowania BERTopic...")
+                # Lematy to listy, więc łączymy je w jeden string " ".join()
+                import numpy as np
+                raw_docs = df['lemmas'].apply(lambda x: " ".join(x) if isinstance(x, (list, np.ndarray)) else str(x)).tolist()
+            else:
+                raw_docs = df['Treść'].tolist()
 
             # Pobieranie dat, jeśli istnieją
             if "Data publikacji" in df.columns:
-                self.timestamps = df['Data publikacji'].tolist()
+                raw_timestamps = df['Data publikacji'].tolist()
             else:
-                self.timestamps = ["0000-00-00"] * len(self.docs)
+                raw_timestamps = ["0000-00-00"] * len(raw_docs)
+
+            # Resetujemy docelowe listy
+            self.docs = []
+            self.timestamps = []
+
+            # Aplikujemy chunking
+            if use_chunking:
+                logging.info("Rozpoczęto chunking długich dokumentów...")
+                for doc, ts in zip(raw_docs, raw_timestamps):
+                    chunks = self._chunk_text(doc, max_words=max_words_per_chunk)
+                    for chunk in chunks:
+                        self.docs.append(chunk)
+                        self.timestamps.append(ts)  # Kluczowe! Kopiujemy datę dla każdego kawałka
+                logging.info(f"Zakończono chunking. Plików orginalnych: {len(raw_docs)}, po podziale: {len(self.docs)}")
+            else:
+                self.docs = raw_docs
+                self.timestamps = raw_timestamps
 
             logging.info(f"Wczytano {len(self.docs)} dokumentów do analizy tematycznej.")
             return True
@@ -2757,6 +2801,579 @@ FEAT_MAPPING = {
     "xxx": {},
     "ign": {}
 }
+
+
+class CQLAutocomplete:
+    def __init__(self, textbox):
+        self.textbox = textbox
+        self.popup = None
+        self.listbox = None
+        self.current_prefix = ""
+        self.current_mode = None
+
+        # Linia, przy której aktualnie pokazano popup.
+        # Jeśli użytkownik kliknie inną linię textboxa, traktujemy to jako odkliknięcie.
+        self.popup_anchor_line = None
+
+        # Flaga używana po kliknięciu w inną linię:
+        # globalny ButtonPress chowa popup, a ButtonRelease textboxa nie powinien go od razu wznowić.
+        self._suppress_next_textbox_click = False
+
+        # --- ZBIORY DANYCH WG TWOICH KEYWORDS ---
+        self.attributes = [
+            "orth=", "orth!=", "base=", "base!=", "pos=", "pos!=", "upos=", "upos!=",
+            "ner=", "ner!=", "head=", "head!=", "coref=", "coref!=", "dependent=", "dependent!=",
+            "deprel=", "deprel!=", "number=", "number!=", "window_base=", "window_base!=",
+            "window_orth=", "window_orth!=", "gender=", "gender!=", "degree=", "degree!=",
+            "case=", "case!=", "person=", "person!=", "accentability=", "accentability!=",
+            "post-prepositionality=", "post-prepositionality!=", "accommodability=", "accommodability!=",
+            "aspect=", "aspect!=", "vocalicity=", "vocalicity!=", "agglutination=", "agglutination!=",
+            "negation=", "negation!=", "children.group=", "||",
+            #"srl_role=", "srl_role!="
+        ]
+
+        # --- GENEROWANIE ATRYBUTÓW SRL (srl_arg0=, srl_arg0_head= itd.) ---
+        # srl_bases = ["pred", "arg0", "arg1", "arg2", "tmp", "loc", "mnr", "cau", "prp", "ext"]
+        # for base in srl_bases:
+        #     self.attributes.extend([
+        #         f"srl_{base}=", f"srl_{base}!=",
+        #         f"srl_{base}_head=", f"srl_{base}_head!="
+        #     ])
+
+        self.global_tags = [
+            "data>", "data<", "data=", "data!=", "data<=", "data>=", "autor=", "autor!=",
+            "metadane:", "tytuł=", "tytuł!=", "frequency_base", "frequency_orth",
+            "top=", "min=", "max=", "s>"
+        ]
+
+        self.pos_tags = [
+            "subst", "depr", "adj", "adja", "adjp", "adjc", "conj", "ppron12",
+            "ppron3", "siebie", "num", "numcol", "fin", "bedzie", "aglt", "praet",
+            "impt", "imps", "inf", "pcon", "pant", "ger", "pact", "ppas", "winien",
+            "adv", "prep", "comp", "qub", "interj", "brev", "burk", "interp", "xxx", "ign"
+        ]
+
+        self.upos_tags = [
+            "NOUN", "PROPN", "ADJ", "VERB", "ADV", "PRON", "DET", "ADP",
+            "NUM", "CCONJ", "SCONJ", "PART", "INTJ", "PUNCT", "SYM", "X"
+        ]
+
+        # --- SŁOWNIKI SRL ROLI SEMANTYCZNYCH Z TŁUMACZENIAMI ---
+        self.srl_role_tags = [
+            "pred - predykat (orzeczenie)",
+            "arg0 - argument 0 (agens)",
+            "arg1 - argument 1 (patiens)",
+            "arg2 - argument 2 (beneficjent / cel / instrument)",
+            "tmp - określnik czasu (temporal)",
+            "loc - określnik miejsca (locative)",
+            "mnr - określnik sposobu (manner)",
+            "cau - określnik przyczyny (causal)",
+            "prp - określnik celu (purpose)",
+            "ext - określnik miary/stopnia (extent)"
+        ]
+
+        self.deprel_tree_dict = {
+            "Wszystkie": [],
+            "root - głowa drzewa": [],
+            "nsubj - podmiot nominalny": ["nsubj:pass - podmiot nominalny (strona bierna)"],
+            "csubj - podmiot zdaniowy": ["csubj:pass - podmiot zdaniowy (strona bierna)"],
+            "obj - argument syntetyczny (Acc / Gen)": [],
+            "iobj - argument syntetyczny (Dat / Ins)": [],
+            "ccomp - argument zdaniowy": [
+                "ccomp:obj - argument zdaniowy czasownika",
+                "ccomp:cleft - zdanie podrzędne zależne od zaimka 'to'"
+            ],
+            "xcomp - argument zdaniowy / bezokolicznikowy": [
+                "xcomp:pred - argument orzecznikowy (dla czasowników innych niż cop)",
+                "xcomp:obj - argument bezokolicznikowy (dopełnienie)",
+                "xcomp:subj - argument bezokolicznikowy (podmiotowy)",
+                "xcomp:cleft - argument bezokolicznikowy zależny od zaimka 'to'"
+            ],
+            "obl - modyfikator analityczny (okolicznik/dopełnienie)": [
+                "obl:arg - argument przyimkowy czasownika",
+                "obl:agent - sprawca w stronie biernej",
+                "obl:cmpr - fraza porównawcza",
+                "obl:orphan - argument z elipsą rzeczownika"
+            ],
+            "advmod - modyfikator przysłówkowy": [
+                "advmod:arg - argument przysłówkowy czasownika",
+                "advmod:emph - partykuła wzmacniająca / intensyfikator",
+                "advmod:neg - partykuła przecząca"
+            ],
+            "advcl - modyfikator zdaniowy (zdanie okolicznikowe)": [
+                "advcl:relcl - zdanie względne określające inne zdanie",
+                "advcl:cmpr - zdanie okolicznikowe porównawcze"
+            ],
+            "amod - modyfikator przymiotnikowy": [
+                "amod:flat - człon przymiotnikowy nazwy własnej"
+            ],
+            "nmod - modyfikator rzeczowny / przyimkowy": [
+                "nmod:arg - argument rzeczowny",
+                "nmod:poss - modyfikator dzierżawczy (np. zaimki)",
+                "nmod:flat - nominalny człon nazwy własnej",
+                "nmod:pred - wyrażenie orzecznikowe zależne od imiesłowu (bycia)"
+            ],
+            "nummod - modyfikator liczebnikowy": [
+                "nummod:gov - liczebnik rządzący przypadkiem rzeczownika",
+                "nummod:flat - liczebnikowy człon nazwy własnej"
+            ],
+            "det - określnik": [
+                "det:nummod - zaimki ilościowe uzgadniające przypadek",
+                "det:numgov - zaimki ilościowe rządzące przypadkiem"
+            ],
+            "acl - zdanie przydawkowe": [
+                "acl:relcl - zdanie przydawkowe względne"
+            ],
+            "aux - czasownik posiłkowy": [
+                "aux:pass - czasownik posiłkowy (strona bierna)",
+                "aux:cnd - czasownik posiłkowy (tryb przypuszczający)",
+                "aux:imp - czasownik posiłkowy (tryb rozkazujący)",
+                "aux:clitic - aglutynacyjny formant ruchomy (np. -śmy)"
+            ],
+            "cop - łącznik": [
+                "cop:locat - łącznik w funkcji lokatywnej"
+            ],
+            "case - wskaźnik przypadka / przyimek": [],
+            "mark - wskaźnik zespolenia (spójnik podrzędny)": [],
+            "cc - spójnik współrzędny": [
+                "cc:preconj - spójnik wprowadzający (np. 'zarówno')"
+            ],
+            "conj - połączenie współrzędne / szereg": [],
+            "expl - zaimek zwrotny / egzpletywny": [
+                "expl:pv - właściwy zaimek zwrotny 'się'",
+                "expl:impers - bezosobowe użycie 'się'"
+            ],
+            "discourse - element dyskursu": [
+                "discourse:intj - wykrzyknik",
+                "discourse:emo - emotikon / emoji"
+            ],
+            "parataxis - parataksa / wtrącenie": [
+                "parataxis:insert - wtrącenie / komentarz",
+                "parataxis:obj - mowa niezależna"
+            ],
+            "flat - struktura płaska": [
+                "flat:foreign - słowo obcojęzyczne"
+            ]
+        }
+
+        self.deprel_tags = []
+        for key, values in self.deprel_tree_dict.items():
+            if key == "Wszystkie":
+                continue
+            self.deprel_tags.append(key)
+            self.deprel_tags.extend(values)
+
+        self.morph_dicts = {
+            "case": [
+                "nom (mianownik)", "gen (dopełniacz)", "dat (celownik)",
+                "acc (biernik)", "inst (narzędnik)", "loc (miejscownik)", "voc (wołacz)"
+            ],
+            "number": [
+                "sg (pojedyncza)", "pl (mnoga)"
+            ],
+            "gender": [
+                "m1 (męskoosobowy)", "m2 (męskozwierzęcy)", "m3 (męskorzeczowy)",
+                "f (żeński)", "n (nijaki)"
+            ],
+            "degree": [
+                "pos (równy)", "com (wyższy)", "sup (najwyższy)"
+            ],
+            "person": [
+                "pri (pierwsza)", "sec (druga)", "ter (trzecia)"
+            ],
+            "aspect": [
+                "imperf (niedokonany)", "perf (dokonany)"
+            ],
+            "negation": [
+                "aff (niezanegowana - pisanie, czytanego)",
+                "neg (zanegowana - niepisanie, nieczytanego)"
+            ],
+            "accentability": [
+                "akc (akcentowana - jego, niego, tobie)",
+                "nakc (nieakcentowana - go, -ń, ci)"
+            ],
+            "post-prepositionality": [
+                "praep (poprzyimkowa - niego, -ń)",
+                "npraep (niepoprzyimkowa - jego, go)"
+            ],
+            "accommodability": [
+                "congr (uzgadniająca - dwaj, pięcioma)",
+                "rec (rządząca - dwóch, dwu, pięciorgiem)"
+            ],
+            "vocalicity": [
+                "wok (wokaliczna - -em)",
+                "nwok (niewokaliczna - -m)"
+            ],
+            "agglutination": [
+                "agl (aglutynacyjna - niósł)",
+                "nagl (nieaglutynacyjna - niosł-)"
+            ],
+            "fullstoppedness": [
+                "pun (z następującą kropką - tzn)",
+                "npun (bez kropki - wg)"
+            ]
+        }
+
+        tb = self.textbox._textbox
+
+        tb.bind("<KeyRelease>", self.handle_keypress)
+        tb.bind("<FocusOut>", self._on_focus_out)
+        tb.bind("<ButtonRelease-1>", self._on_textbox_click, add="+")
+        tb.bind("<Up>", self.navigate_up)
+        tb.bind("<Down>", self.navigate_down)
+        tb.bind("<Return>", self.insert_selection)
+
+        # KLUCZOWE:
+        # bind_all łapie kliknięcia także w inne ramki, panele, przyciski itd.
+        # Bez tego FocusOut w CustomTkinterze bywa niewystarczający.
+        tb.bind_all("<ButtonPress-1>", self._on_global_click, add="+")
+
+    # =========================================================
+    # OBSŁUGA ODKLIKNIĘCIA / FOKUSU
+    # =========================================================
+
+    def _is_widget_or_child(self, widget, parent):
+        """Sprawdza, czy widget jest parentem albo potomkiem parenta."""
+        try:
+            while widget is not None:
+                if widget == parent:
+                    return True
+                widget = getattr(widget, "master", None)
+        except Exception:
+            return False
+        return False
+
+    def _click_is_inside_popup(self, widget):
+        if not self.popup:
+            return False
+        return self._is_widget_or_child(widget, self.popup)
+
+    def _click_is_inside_textbox(self, widget):
+        try:
+            return widget == self.textbox._textbox
+        except Exception:
+            return False
+
+    def _event_line_in_textbox(self, event):
+        """Zwraca numer linii klikniętej w textboxie na podstawie współrzędnych eventu."""
+        try:
+            index = self.textbox._textbox.index(f"@{event.x},{event.y}")
+            return int(index.split(".")[0])
+        except Exception:
+            return None
+
+    def _current_insert_line(self):
+        try:
+            return int(self.textbox._textbox.index(tk.INSERT).split(".")[0])
+        except Exception:
+            return None
+
+    def _on_global_click(self, event=None):
+        """
+        Globalny handler kliknięć.
+
+        - Klik poza textboxem i poza popupem => zamyka popup.
+        - Klik w popup => nic nie robi, żeby listbox mógł wstawić wybór.
+        - Klik w textbox, ale w inną linię niż linia popupu => zamyka popup
+          i blokuje natychmiastowe wznowienie w ButtonRelease.
+        """
+        if event is None:
+            return
+
+        widget = getattr(event, "widget", None)
+
+        # Klik w popup/listbox — nie zamykamy, bo użytkownik może wybierać sugestię.
+        if self._click_is_inside_popup(widget):
+            return
+
+        # Klik poza właściwym tk.Text — zamknij.
+        if not self._click_is_inside_textbox(widget):
+            self.hide_popup()
+            return
+
+        # Klik w textbox.
+        # Jeśli popup jest widoczny i kliknięto inną linię, to jest "odkliknięcie".
+        if self.popup and self.popup_anchor_line is not None:
+            clicked_line = self._event_line_in_textbox(event)
+            if clicked_line is not None and clicked_line != self.popup_anchor_line:
+                self._suppress_next_textbox_click = True
+                self.hide_popup()
+                return
+
+    def _on_textbox_click(self, event=None):
+        """
+        ButtonRelease w textboxie.
+
+        Po kliknięciu w tę samą linię próbujemy wznowić autocomplete.
+        Po kliknięciu w inną linię nie wznawiamy, bo ButtonPress już uznał to za odkliknięcie.
+        """
+        if self._suppress_next_textbox_click:
+            self._suppress_next_textbox_click = False
+            return
+
+        try:
+            self.textbox._textbox.after(1, self.handle_keypress)
+        except Exception:
+            self.handle_keypress()
+
+    def _on_focus_out(self, event=None):
+        """
+        FocusOut zostawiamy jako dodatkową ochronę, ale z opóźnieniem.
+        Dzięki temu klik w listbox nie niszczy popupu przed insert_selection.
+        """
+        try:
+            self.textbox._textbox.after(80, self._hide_popup_if_focus_really_left)
+        except Exception:
+            self.hide_popup()
+
+    def _hide_popup_if_focus_really_left(self):
+        try:
+            focus = self.textbox._textbox.focus_get()
+
+            if focus == self.textbox._textbox:
+                return
+
+            if self.popup and self._is_widget_or_child(focus, self.popup):
+                return
+
+        except Exception:
+            pass
+
+        self.hide_popup()
+
+    # =========================================================
+    # LOGIKA AUTOUZUPEŁNIANIA
+    # =========================================================
+
+    def _check_value_mode(self, text, markers, tags, mode_name):
+        for marker in markers:
+            idx = text.rfind(marker)
+            if idx != -1:
+                if text.find('"', idx + len(marker)) == -1:
+                    prefix = text[idx + len(marker):]
+                    matches = [t for t in tags if t.startswith(prefix)]
+                    return matches, prefix, mode_name
+        return [], "", None
+
+    def handle_keypress(self, event=None):
+        if event and getattr(event, 'keysym', '') in (
+            "Up", "Down", "Left", "Right", "Return", "Escape", "Shift_L", "Control_L"
+        ):
+            if event.keysym == "Escape":
+                self.hide_popup()
+            return
+
+        cursor_index = self.textbox._textbox.index(tk.INSERT)
+        text_before = self.textbox._textbox.get(f"{cursor_index} linestart", cursor_index)
+
+        matches = []
+        self.current_prefix = ""
+        self.current_mode = None
+
+        # 1. Wartości z MORPH_DICTS
+        for attr, tags in self.morph_dicts.items():
+            markers = [f'{attr}="', f'{attr}!="']
+            matches, self.current_prefix, self.current_mode = self._check_value_mode(
+                text_before, markers, tags, "morph"
+            )
+            if matches:
+                break
+
+        # 2. Wartości DEPREL
+        if not matches:
+            matches, self.current_prefix, self.current_mode = self._check_value_mode(
+                text_before,
+                ['deprel="', 'deprel!="'],
+                self.deprel_tags,
+                "deprel"
+            )
+
+        # # 3. Wartości SRL_ROLE
+        # if not matches:
+        #     matches, self.current_prefix, self.current_mode = self._check_value_mode(
+        #         text_before,
+        #         ['srl_role="', 'srl_role!="'],
+        #         self.srl_role_tags,
+        #         "srl_role"
+        #     )
+
+        # 4. Wartości UPOS
+        if not matches:
+            matches, self.current_prefix, self.current_mode = self._check_value_mode(
+                text_before,
+                ['upos="', 'upos!="'],
+                self.upos_tags,
+                "upos"
+            )
+
+        # 5. Wartości POS
+        if not matches:
+            matches, self.current_prefix, self.current_mode = self._check_value_mode(
+                text_before,
+                ['pos="', 'pos!="'],
+                self.pos_tags,
+                "pos"
+            )
+
+        # 6. ATRYBUTY
+        if not matches:
+            last_bracket = max(text_before.rfind('['), text_before.rfind('&'), text_before.rfind('{'))
+            if last_bracket != -1:
+                word = text_before[last_bracket + 1:].strip()
+                if '"' not in word:
+                    self.current_prefix = word
+                    matches = [a for a in self.attributes if a.startswith(word)]
+                    self.current_mode = "attr"
+
+        # 7. TAGI GLOBALNE / METADANE
+        if not matches and '<' in text_before:
+            last_angle = text_before.rfind('<')
+            word = text_before[last_angle + 1:].strip()
+            if '"' not in word and '>' not in word:
+                self.current_prefix = word
+                matches = [g for g in self.global_tags if g.startswith(word)]
+                self.current_mode = "global"
+
+        if matches:
+            self.show_popup(matches)
+        else:
+            self.hide_popup()
+
+    def show_popup(self, matches):
+        if not self.popup:
+            self.popup = tk.Toplevel(self.textbox)
+            self.popup.wm_overrideredirect(True)
+            self.popup.attributes("-topmost", True)
+
+            self.listbox = tk.Listbox(
+                self.popup,
+                font=("Verdana", 10),
+                bg="#1F2328",
+                fg="white",
+                selectbackground="#4B6CB7",
+                highlightthickness=1,
+                bd=0,
+                exportselection=False
+            )
+            self.listbox.pack(fill="both", expand=True)
+            self.listbox.bind("<ButtonRelease-1>", self.insert_selection)
+
+        self.listbox.delete(0, tk.END)
+        for match in matches:
+            self.listbox.insert(tk.END, match)
+        self.listbox.selection_set(0)
+
+        # zapamiętaj linię, do której należy popup
+        self.popup_anchor_line = self._current_insert_line()
+
+        try:
+            inner_text = self.textbox._textbox
+            bbox = inner_text.bbox(tk.INSERT)
+
+            if bbox:
+                x, y, width, height = bbox
+                x_root = inner_text.winfo_rootx() + x + 2
+                y_root = inner_text.winfo_rooty() + y + height + 5
+
+                popup_h = min(len(matches) * 20 + 5, 150)
+                screen_height = self.popup.winfo_screenheight()
+
+                if y_root + popup_h > screen_height:
+                    y_root = inner_text.winfo_rooty() + y - popup_h - 5
+
+                self.popup.geometry(f"450x{popup_h}+{x_root}+{y_root}")
+        except Exception:
+            pass
+
+    def hide_popup(self):
+        if self.popup:
+            try:
+                self.popup.destroy()
+            except Exception:
+                pass
+            self.popup = None
+            self.listbox = None
+            self.popup_anchor_line = None
+
+    def navigate_up(self, event):
+        if self.popup and self.popup.winfo_ismapped() and self.listbox:
+            idx = self.listbox.curselection()
+            if idx:
+                self.listbox.selection_clear(idx[0])
+                new_idx = max(0, idx[0] - 1)
+                self.listbox.selection_set(new_idx)
+                self.listbox.see(new_idx)
+            return "break"
+
+    def navigate_down(self, event):
+        if self.popup and self.popup.winfo_ismapped() and self.listbox:
+            idx = self.listbox.curselection()
+            if idx:
+                self.listbox.selection_clear(idx[0])
+                new_idx = min(self.listbox.size() - 1, idx[0] + 1)
+                self.listbox.selection_set(new_idx)
+                self.listbox.see(new_idx)
+            return "break"
+
+    def insert_selection(self, event):
+        if self.popup and self.popup.winfo_ismapped() and self.listbox:
+            idx = self.listbox.curselection()
+            if idx:
+                word = self.listbox.get(idx[0])
+                cursor_index = self.textbox._textbox.index(tk.INSERT)
+
+                prefix_len = len(self.current_prefix)
+                if prefix_len > 0:
+                    start_delete = f"{cursor_index} - {prefix_len} chars"
+                    self.textbox._textbox.delete(start_delete, cursor_index)
+
+                # Wycinanie opisu dla wartości typu:
+                # "nom (mianownik)" -> "nom"
+                # "nsubj - podmiot nominalny" -> "nsubj"
+                if self.current_mode in ("morph", "deprel", "srl_role"):
+                    word = word.split(" ")[0]
+
+                text_after = self.textbox._textbox.get(tk.INSERT, tk.END)
+                should_trigger_next = False
+
+                if word.endswith('=') or word.endswith('!=') or word in ("data>", "data<", "data<=", "data>="):
+                    self.textbox._textbox.insert(tk.INSERT, word)
+
+                    if not text_after.startswith('"'):
+                        self.textbox._textbox.insert(tk.INSERT, '"')
+
+                    should_trigger_next = True
+
+                else:
+                    self.textbox._textbox.insert(tk.INSERT, word)
+
+                    if self.current_mode in ("pos", "upos", "deprel", "morph", "srl_role"):
+                        chars_to_add = ""
+
+                        if not text_after.startswith('"'):
+                            chars_to_add += '"'
+
+                        next_close = text_after.find(']')
+                        next_open = text_after.find('[')
+
+                        is_bracket_closed = next_close != -1 and (next_open == -1 or next_close < next_open)
+
+                        if not is_bracket_closed:
+                            chars_to_add += ']'
+
+                        if chars_to_add:
+                            self.textbox._textbox.insert(tk.INSERT, chars_to_add)
+
+                if 'highlight_entry' in globals():
+                    highlight_entry()
+
+            self.hide_popup()
+
+            if should_trigger_next:
+                self.textbox._textbox.after(10, self.handle_keypress)
+
+            return "break"
+
 class ToolTip:
     def __init__(self, widget, text):
         self.widget = widget
@@ -3469,7 +4086,7 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                     # Handle multiple values (e.g. orth="Polska|Niemcy")
                     val_rows = set()
                     for val in values:
-                        val_rows.update(corpus_index[key].get(val, set()))
+                        val_rows.update(corpus_index.get(key, {}).get(val, set()))
                     block_rows.intersection_update(val_rows)
                     has_constraints = True
 
@@ -3624,7 +4241,7 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
         "Data publikacji", "Tytuł", "Autor", "tags", "Treść", "token_counts",
         "tokens", "lemmas", "deprels", "postags", "full_postags",
         "word_ids", "sentence_ids", "head_ids", "start_ids", "end_ids", "ners", "upostags",
-        "corefs"
+        "corefs", "srl", "srls", "srl_frames"
     }
     meta_columns = [col for col in filtered_df_base.columns if col not in exclude_cols]
     meta_dicts = {col: filtered_df_base[col].to_dict() for col in meta_columns}
@@ -3654,6 +4271,30 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 
             upostags = getattr(row, "upostags", None)
             if upostags is not None: upostags = upostags.tolist() if hasattr(upostags, "tolist") else upostags
+
+            srls = getattr(row, "srls", None)
+            if srls is not None:
+                srls = srls.tolist() if hasattr(srls, "tolist") else srls
+            if srls is not None and len(srls) != len(tokens):
+                srls = None
+
+            srl_frames = getattr(row, "srl_frames", None)
+
+            if srl_frames is None:
+                srl_frames = []
+            elif hasattr(srl_frames, "item"):
+                srl_frames = srl_frames.item()
+
+            if isinstance(srl_frames, str):
+                try:
+                    srl_frames = json.loads(srl_frames)
+                except Exception:
+                    srl_frames = []
+            elif hasattr(srl_frames, "tolist"):
+                srl_frames = srl_frames.tolist()
+
+            if not isinstance(srl_frames, list):
+                srl_frames = []
 
             full_postags = row.full_postags.tolist() if hasattr(row.full_postags, "tolist") else row.full_postags
             word_ids = row.word_ids.tolist() if hasattr(row.word_ids, "tolist") else row.word_ids
@@ -3730,20 +4371,239 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
 
 
             # ----------------------------------------------------------------------
+            def normalize_srl_role(role):
+                role = str(role or "").upper()
 
+                if role.startswith("B-") or role.startswith("I-"):
+                    role = role[2:]
 
-            def match_conditions(token_idx, conditions):
-                if not conditions:
-                    return True
-                for cond in conditions:
-                    if not cond:
+                if role.startswith("ARGM-"):
+                    role = role.replace("ARGM-", "", 1)
+
+                return role
+
+            def get_frame_for_predicate(token_idx):
+                for frame in srl_frames:
+                    try:
+                        pred_id = int(frame.get("pred_id"))
+                    except Exception:
                         continue
+
+                    if pred_id == token_idx:
+                        return frame
+
+                return None
+
+            def token_is_srl_predicate(token_idx):
+                return get_frame_for_predicate(token_idx) is not None
+
+            def value_matches_text(value, candidate, match_type="exact"):
+                value = str(value)
+                candidate = str(candidate or "")
+
+                if match_type == "exact":
+                    return candidate.lower() == value.lower()
+
+                if match_type == "regex":
+                    return re.fullmatch(value, candidate, flags=re.IGNORECASE) is not None
+
+                if match_type == "regex_search":
+                    return re.search(value, candidate, flags=re.IGNORECASE) is not None
+
+                return False
+
+            def value_matches_any(value, candidates, match_type="exact"):
+                if candidates is None:
+                    candidates = []
+
+                for candidate in candidates:
+                    if value_matches_text(value, candidate, match_type):
+                        return True
+
+                return False
+
+
+
+            def parse_srl_argument_key(key):
+                key = str(key).lower()
+                parts = key.split("_")
+
+                if len(parts) < 2 or parts[0] != "srl":
+                    return None, None
+
+                role = parts[1].upper()
+                field = "_".join(parts[2:]) if len(parts) >= 3 else "base"
+                return role, field
+
+            def frame_has_argument(frame, role, field, value, match_type="exact"):
+                """
+                role: ARG0, ARG1, ARG2, TMP, LOC, MNR...
+                field: base/lemma/lemmas, orth/token/tokens, text, ner, head...
+                """
+                if not frame:
+                    return False
+
+                wanted_role = normalize_srl_role(role)
+
+                for arg in frame.get("arguments", []):
+                    arg_role = normalize_srl_role(arg.get("role"))
+                    arg_role_full = normalize_srl_role(arg.get("role_full"))
+
+                    if wanted_role not in {arg_role, arg_role_full}:
+                        continue
+
+                    field = field.lower()
+
+                    if field in ("base", "lemma", "lemmas"):
+                        candidates = [str(x).lower() for x in arg.get("lemmas", [])]
+                        if match_type == "exact":
+                            if str(value).lower() in candidates:
+                                return True
+                        else:
+                            if value_matches_any(value, candidates, match_type):
+                                return True
+
+                    elif field in ("orth", "token", "tokens"):
+                        candidates = [str(x) for x in arg.get("tokens", [])]
+                        if match_type == "exact":
+                            if str(value).lower() in [x.lower() for x in candidates]:
+                                return True
+                        else:
+                            if value_matches_any(value, candidates, match_type):
+                                return True
+
+                    elif field == "text":
+                        if value_matches_text(value, arg.get("text", ""), match_type):
+                            return True
+
+                    elif field == "ner":
+                        candidates = [str(x) for x in arg.get("ners", [])]
+                        if match_type == "exact":
+                            if str(value) in candidates:
+                                return True
+                        else:
+                            if value_matches_any(value, candidates, match_type):
+                                return True
+
+                    elif field == "upos":
+                        candidates = [str(x) for x in arg.get("upostags", [])]
+                        if match_type == "exact":
+                            if str(value).upper() in [x.upper() for x in candidates]:
+                                return True
+                        else:
+                            if value_matches_any(value, candidates, match_type):
+                                return True
+
+                    # --- TUTAJ JEST TWOJA ORYGINALNA, ZNAKOMITA LOGIKA GŁÓW ---
+                    elif field in ("head_base", "head_lemma", "head"):
+                        candidate = arg.get("head_lemma", "")
+                        if value_matches_text(value, candidate, match_type):
+                            return True
+
+                    elif field in ("head_text", "head_orth", "head_token"):
+                        candidate = arg.get("head_text", "")
+                        if value_matches_text(value, candidate, match_type):
+                            return True
+
+                    elif field == "head_ner":
+                        candidate = arg.get("head_ner", "")
+                        if value_matches_text(value, candidate, match_type):
+                            return True
+
+                    elif field == "head_pos":
+                        candidate = arg.get("head_pos", "")
+                        if value_matches_text(value, candidate, match_type):
+                            return True
+
+                return False
+
+            def check_frame_against_srl_conds(role_of_token, frame_dict, srl_conds):
+                for cond in srl_conds:
                     if len(cond) >= 5:
                         key, values, operator, is_nested, match_type = cond
                     else:
                         key, values, operator, is_nested = cond
                         match_type = "exact"
-                    if key in ("orth", "base", "pos", "deprel", "ner", "upos") or key.startswith("coref"):
+
+                    match_found = False
+
+                    if key in ("srl", "srl_role"):
+                        for val in values:
+                            val_norm = normalize_srl_role(val)
+                            if match_type == "exact" and role_of_token == val_norm:
+                                match_found = True;
+                                break
+                            elif match_type == "regex" and re.fullmatch(str(val), role_of_token, flags=re.IGNORECASE):
+                                match_found = True;
+                                break
+                            elif match_type == "regex_search" and re.search(str(val), role_of_token,
+                                                                            flags=re.IGNORECASE):
+                                match_found = True;
+                                break
+
+                    elif key in ("srl_pred", "srl_pred_lemma"):
+                        pred_id = int(frame_dict.get("pred_id", -1))
+                        pred_lemma = frame_dict.get("pred_lemma", "")
+                        if not pred_lemma and 0 <= pred_id < num_tokens:
+                            pl = lemmas[pred_id]
+                            if hasattr(pl, "item"): pl = pl.item()
+                            pred_lemma = pl
+                        pred_lemma = str(pred_lemma or "").strip().lower()
+
+                        for val in values:
+                            v_str = str(val).strip().lower()
+                            if match_type == "exact" and pred_lemma == v_str:
+                                match_found = True;
+                                break
+                            elif match_type == "regex" and re.fullmatch(str(val), pred_lemma, flags=re.IGNORECASE):
+                                match_found = True;
+                                break
+                            elif match_type == "regex_search" and re.search(str(val), pred_lemma, flags=re.IGNORECASE):
+                                match_found = True;
+                                break
+
+                    elif key == "srl_is_pred":
+                        expected_true = any(str(v).lower() in ("true", "1", "yes", "tak") for v in values)
+                        actual_true = (role_of_token == "PRED")
+                        match_found = (actual_true == expected_true)
+
+                    elif key.startswith("srl_"):
+                        role, field = parse_srl_argument_key(key)
+                        if role is not None and field is not None:
+                            for val in values:
+                                if frame_has_argument(frame_dict, role, field, val, match_type):
+                                    match_found = True
+                                    break
+
+                    if operator == "=" and not match_found:
+                        return False
+                    elif operator == "!=" and match_found:
+                        return False
+
+                return True
+
+            def match_conditions(token_idx, conditions):
+                if not conditions:
+                    return True
+
+                srl_conds = []
+                other_conds = []
+
+                for cond in conditions:
+                    if not cond: continue
+                    if cond[0].startswith("srl"):
+                        srl_conds.append(cond)
+                    else:
+                        other_conds.append(cond)
+
+                for cond in other_conds:
+                    if len(cond) >= 5:
+                        key, values, operator, is_nested, match_type = cond
+                    else:
+                        key, values, operator, is_nested = cond
+                        match_type = "exact"
+
+                    if key in ("orth", "base", "pos", "deprel", "ner", "upos"):
                         if key == "orth":
                             attr = tokens[token_idx]
                         elif key == "base":
@@ -3756,91 +4616,69 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                             attr = deprels[token_idx]
                         elif key == "ner":
                             attr = ners[token_idx]
-                        elif key.startswith("coref"):
-                            c_tags = corefs[token_idx] if corefs is not None else []
-                            if isinstance(c_tags, str): c_tags = [c_tags]
 
-                            match_found = False
-
-                            for c_tag in c_tags:
-                                if c_tag in ("0", "O", "_", None): continue
-
-                                tag_parts = c_tag.split("-", 1)
-                                token_role = tag_parts[0] if len(tag_parts) > 1 else ""
-                                c_id = tag_parts[1] if len(tag_parts) > 1 else c_tag
-
-                                required_role = ""
-                                if "(H)" in key:
-                                    required_role = "Head"
-                                elif "(P)" in key:
-                                    required_role = "Part"
-
-                                if required_role and token_role != required_role:
-                                    continue
-
-                                cluster_words = get_coref_clusters().get(c_id, set())
-
-                                for val in values:
-                                    val_lower = val.lower()
-                                    if match_type == "exact" and val_lower in cluster_words:
-                                        match_found = True
-                                    elif match_type == "regex" and any(
-                                        re.fullmatch(val_lower, w, re.IGNORECASE) for w in cluster_words):
-                                        match_found = True
-                                    elif match_type == "regex_search" and any(
-                                        re.search(val_lower, w, re.IGNORECASE) for w in cluster_words):
-                                        match_found = True
-
-                                if match_found:
-                                    break
-
-                            if operator == "=" and not match_found:
-                                return False
-                            elif operator == "!=" and match_found:
-                                return False
-
-                            continue
                         if operator == "=":
                             if match_type == "exact" and attr not in values:
-
                                 return False
-
                             elif match_type == "regex" and not any(re.fullmatch(v, attr) for v in values):
-
                                 return False
                             elif match_type == "regex_search" and not any(re.search(v, attr) for v in values):
                                 return False
-
                         elif operator == "!=":
                             if match_type == "exact" and attr in values:
                                 return False
-
                             elif match_type == "regex" and any(re.fullmatch(v, attr) for v in values):
                                 return False
                             elif match_type == "regex_search" and any(re.search(v, attr) for v in values):
                                 return False
+
+                    elif key.startswith("coref"):
+                        c_tags = corefs[token_idx] if corefs is not None else []
+                        if isinstance(c_tags, str): c_tags = [c_tags]
+                        match_found = False
+                        for c_tag in c_tags:
+                            if c_tag in ("0", "O", "_", None): continue
+                            tag_parts = c_tag.split("-", 1)
+                            token_role = tag_parts[0] if len(tag_parts) > 1 else ""
+                            c_id = tag_parts[1] if len(tag_parts) > 1 else c_tag
+                            required_role = ""
+                            if "(H)" in key:
+                                required_role = "Head"
+                            elif "(P)" in key:
+                                required_role = "Part"
+                            if required_role and token_role != required_role: continue
+                            cluster_words = get_coref_clusters().get(c_id, set())
+                            for val in values:
+                                val_lower = val.lower()
+                                if match_type == "exact" and val_lower in cluster_words:
+                                    match_found = True
+                                elif match_type == "regex" and any(
+                                        re.fullmatch(val_lower, w, re.IGNORECASE) for w in cluster_words):
+                                    match_found = True
+                                elif match_type == "regex_search" and any(
+                                        re.search(val_lower, w, re.IGNORECASE) for w in cluster_words):
+                                    match_found = True
+                            if match_found: break
+                        if operator == "=" and not match_found:
+                            return False
+                        elif operator == "!=" and match_found:
+                            return False
+
                     elif key.startswith("head") or key.startswith("head.group"):
-                        # 'children' in your existing code checks the *parent* of token_idx, keep that behaviour.
                         p_idx_map, _ = get_deps()
                         parent = p_idx_map[token_idx]
-
-                        # If there's no parent: "=" must fail, "!=" should pass (nothing to forbid)
                         if parent is None or parent < 0:
                             if operator == "=":
                                 return False
-                            else:  # operator == "!="
+                            else:
                                 continue
-
-                        # Parse children(...) syntax: children(N), children(<N), children(>N)
                         m = re.match(r'head(?:\.group)?(?:\((<|>|=)?(-?\d+)\))?$', key)
                         dist_op = m.group(1) if m and m.group(1) else None
                         dist_val = int(m.group(2)) if m and m.group(2) else None
 
-                        # Helper: check distance filter; returns True if parent/child distance passes the dist filter
                         def _distance_matches_child(dist_val, dist_op):
-                            if dist_val is None:
-                                return True
-                            distance =  word_ids[parent]  - word_ids[token_idx]# <-- same formula as children_dist
+                            if dist_val is None: return True
+                            distance = word_ids[parent] - word_ids[token_idx]
                             if dist_op in (None, "="):
                                 return distance == dist_val
                             elif dist_op == "<":
@@ -3850,75 +4688,45 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                             return False
 
                         if operator == "=":
-                            # require that parent (optionally constrained by distance) matches values/nested
-                            if not _distance_matches_child(dist_val, dist_op):
-                                return False
-
+                            if not _distance_matches_child(dist_val, dist_op): return False
                             if is_nested:
-                                # nested: parent must satisfy nested conditions
-                                if not match_conditions(parent, tuple(values)):
-                                    return False
+                                if not match_conditions(parent, tuple(values)): return False
                             else:
                                 parent_attr = lemmas[parent]
                                 if match_type == "exact":
-                                    if parent_attr not in values:
-                                        return False
+                                    if parent_attr not in values: return False
                                 elif match_type == "regex":
-                                    if not any(re.fullmatch(v, parent_attr) for v in values):
-                                        return False
+                                    if not any(re.fullmatch(v, parent_attr) for v in values): return False
                                 elif match_type == "regex_search":
-                                    if not any(re.search(v, parent_attr) for v in values):
-                                        return False
-
+                                    if not any(re.search(v, parent_attr) for v in values): return False
                         elif operator == "!=":
-                            # require that parent (within optional distance constraint) does NOT match values/nested
-                            # If distance constraint is present but doesn't match, the negation is vacuously satisfied:
                             if dist_val is not None and not _distance_matches_child(dist_val, dist_op):
-                                # no parent at that specified distance → nothing to forbid
                                 continue
-
                             if is_nested:
-                                # if parent satisfies nested => fail the whole condition
-                                if match_conditions(parent, tuple(values)):
-                                    return False
+                                if match_conditions(parent, tuple(values)): return False
                             else:
                                 parent_attr = lemmas[parent]
                                 if match_type == "exact":
-                                    if parent_attr in values:
-                                        return False
+                                    if parent_attr in values: return False
                                 elif match_type == "regex":
-                                    if any(re.fullmatch(v, parent_attr) for v in values):
-                                        return False
+                                    if any(re.fullmatch(v, parent_attr) for v in values): return False
                                 elif match_type == "regex_search":
-                                    if any(re.search(v, parent_attr) for v in values):
-                                        return False
-
-                        else:
-                            # unknown operator (safe-fail)
-                            return False
-
+                                    if any(re.search(v, parent_attr) for v in values): return False
 
                     elif key.startswith("dependent"):
-                        # Combined parent + parent_dist logic with correct nested semantics.
-                        # children_lookup[token_idx] are the token_idx's children (original code's semantics).
                         _, c_lookup_map = get_deps()
                         children = c_lookup_map[token_idx]
                         if not children:
-                            # If looking for existence and there are no children -> fail.
-                            # If it's a negation (operator !=), absence of children satisfies the condition.
                             if operator == "=":
                                 return False
-                            else:  # operator == "!="
-                                continue  # no children -> nothing to forbid
-                        # parse optional distance filter: parent(3), parent(-2), parent(<3), parent(>1)
+                            else:
+                                continue
                         m = re.match(r'dependent(?:\((<|>|=)?(-?\d+)\))?$', key)
                         dist_op = m.group(1) if m and m.group(1) else None
                         dist_val = int(m.group(2)) if m and m.group(2) else None
                         if operator == "=":
-                            # We require that at least one child (optionally satisfying distance) matches values/nested.
                             found = False
                             for child in children:
-                                # apply distance filter (if present). distance = child - parent (linear)
                                 if dist_val is not None:
                                     distance = word_ids[child] - word_ids[token_idx]
                                     if dist_op in (None, "=") and distance != dist_val:
@@ -3927,38 +4735,21 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                                         continue
                                     elif dist_op == ">" and not (distance > dist_val):
                                         continue
-
-                                # nested conditions: evaluate recursively on the child
                                 if is_nested:
                                     if match_conditions(child, tuple(values)):
-                                        found = True
+                                        found = True;
                                         break
                                 else:
-                                    # simple attribute match on the child (original behavior)
                                     child_attr = lemmas[child]
                                     if match_type == "exact":
-                                        if child_attr in values:
-                                            found = True
-                                            break
-
+                                        if child_attr in values: found = True; break
                                     elif match_type == "regex":
-                                        if any(re.fullmatch(v, child_attr) for v in values):
-                                            found = True
-                                            break
-
+                                        if any(re.fullmatch(v, child_attr) for v in values): found = True; break
                                     elif match_type == "regex_search":
-                                        if any(re.search(v, child_attr) for v in values):
-                                            found = True
-                                            break
-                            if not found:
-                                return False
-
-
-
+                                        if any(re.search(v, child_attr) for v in values): found = True; break
+                            if not found: return False
                         elif operator == "!=":
-                            # We require that NO child (that passes optional distance filter) matches values/nested.
                             for child in children:
-                                # distance filter (if present)
                                 if dist_val is not None:
                                     distance = word_ids[child] - word_ids[token_idx]
                                     if dist_op in (None, "=") and distance != dist_val:
@@ -3968,78 +4759,45 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                                     elif dist_op == ">" and not (distance > dist_val):
                                         continue
                                 if is_nested:
-                                    # if any child satisfies the nested condition -> the entire parent!= fails
-                                    if match_conditions(child, tuple(values)):
-                                        return False
+                                    if match_conditions(child, tuple(values)): return False
                                 else:
                                     child_attr = lemmas[child]
                                     if match_type == "exact":
-                                        if child_attr in values:
-                                            return False
+                                        if child_attr in values: return False
                                     elif match_type == "regex":
-                                        if any(re.fullmatch(v, child_attr) for v in values):
-                                            return False
+                                        if any(re.fullmatch(v, child_attr) for v in values): return False
                                     elif match_type == "regex_search":
-                                        if any(re.search(v, child_attr) for v in values):
-                                            return False
-                            # no forbidden child found => OK (do nothing)
-                        else:
-                            # if some other operator appears (shouldn't), fail safe
-                            return False
+                                        if any(re.search(v, child_attr) for v in values): return False
 
                     elif key.startswith("window_base") or key.startswith("window_orth"):
-                        # Parsowanie klucza
                         m = re.match(r'window_(base|orth)(?:\((\d+)\))?$', key)
-                        if not m:
-                            return False
-
-                        w_type = m.group(1)  # "base" lub "orth"
+                        if not m: return False
+                        w_type = m.group(1)
                         dist = int(m.group(2)) if m.group(2) else 50
-
-                        # Bezpieczne granice dla pętli
                         start_w = max(0, token_idx - dist)
                         end_w = min(num_tokens, token_idx + dist + 1)
-
                         found = False
                         for w_i in range(start_w, end_w):
-                            if w_i == token_idx:
-                                continue  # Nie sprawdzamy głównego tokenu
-
+                            if w_i == token_idx: continue
                             val = lemmas[w_i] if w_type == "base" else tokens[w_i]
-
                             if match_type == "exact":
-                                if val in values:
-                                    found = True
-                                    break
+                                if val in values: found = True; break
                             elif match_type == "regex":
-                                if any(re.fullmatch(v, val) for v in values):
-                                    found = True
-                                    break
+                                if any(re.fullmatch(v, val) for v in values): found = True; break
                             elif match_type == "regex_search":
-                                if any(re.search(v, val) for v in values):
-                                    found = True
-                                    break
-
-                        # Logika przepuszczania / odrzucania
+                                if any(re.search(v, val) for v in values): found = True; break
                         if operator == "=":
-                            if not found:
-                                return False
-                            else:
-                                continue
-
+                            if not found: return False
                         elif operator == "!=":
-                            if found:
-                                return False
-                            else:
-                                continue
+                            if found: return False
+
                     else:
                         full_tag = full_postags[token_idx]
                         tag_parts = full_tag.split(":")
                         pos = tag_parts[0] if tag_parts else ""
                         feats = tag_parts[1:] if len(tag_parts) > 1 else []
                         mapping = FEAT_MAPPING.get(pos, {})
-                        if key not in mapping:
-                            return False
+                        if key not in mapping: return False
                         feat_index = mapping[key]
                         token_feat = feats[feat_index] if feat_index < len(feats) else ""
                         if operator == "=":
@@ -4049,8 +4807,6 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                                 return False
                             elif match_type == "regex_search" and not any(re.search(v, token_feat) for v in values):
                                 return False
-
-
                         elif operator == "!=":
                             if match_type == "exact" and token_feat in values:
                                 return False
@@ -4059,18 +4815,131 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
                             elif match_type == "regex_search" and any(re.search(v, token_feat) for v in values):
                                 return False
 
+                if srl_conds:
+                    valid_frame_found = False
+                    candidate_frames = []
+
+                    if token_is_srl_predicate(token_idx):
+                        f = get_frame_for_predicate(token_idx)
+                        if f: candidate_frames.append(("PRED", f.get("pred_id", token_idx), f))
+
+                    t_roles = srls[token_idx] if srls is not None else []
+                    if hasattr(t_roles, "tolist"): t_roles = t_roles.tolist()
+                    if not isinstance(t_roles, (list, tuple)): t_roles = [t_roles]
+
+                    for r_item in t_roles:
+                        if isinstance(r_item, dict):
+                            role_str = str(r_item.get("role", r_item.get(b"role", "")))
+                            raw_pred_id = r_item.get("pred_id", r_item.get(b"pred_id"))
+                            try:
+                                p_id = int(raw_pred_id) if raw_pred_id is not None else None
+                            except:
+                                p_id = None
+                        else:
+                            role_str = str(r_item)
+                            p_id = None
+
+                        if role_str in ("0", "O", "_", "None", ""): continue
+                        clean_role = normalize_srl_role(role_str)
+                        if p_id is not None:
+                            f = get_frame_for_predicate(p_id)
+                            if f: candidate_frames.append((clean_role, p_id, f))
+
+                    for role_of_token, p_id, f_dict in candidate_frames:
+                        if check_frame_against_srl_conds(role_of_token, f_dict, srl_conds):
+                            valid_frame_found = True
+                            break
+
+                    if not valid_frame_found:
+                        return False
+
                 return True
 
             def expand_mention(s_idx, e_limit, current_conds):
                 current_cond_list = current_conds if isinstance(current_conds, list) else [current_conds]
                 is_coref_m = False
+                is_srl = False
+                srl_conds = []
                 for c in current_cond_list:
-                    if c and len(c) >= 1 and c[0] == "coref(M)":
-                        is_coref_m = True
-                        break
+                    if c and len(c) >= 1:
+                        if c[0] == "coref(M)":
+                            is_coref_m = True
+                        elif c[0].startswith("srl"):
+                            is_srl = True
+                            srl_conds.append(c)
+
+                if is_srl:
+                    n_idx = s_idx + 1
+
+                    def get_valid_signatures_for_token(t_idx, require_i=False):
+                        sigs = set()
+
+                        if not require_i:
+                            if token_is_srl_predicate(t_idx):
+                                f = get_frame_for_predicate(t_idx)
+                                if f and check_frame_against_srl_conds("PRED", f, srl_conds):
+                                    sigs.add((t_idx, "PRED"))
+
+                        t_roles = srls[t_idx] if srls is not None else []
+                        if hasattr(t_roles, "tolist"): t_roles = t_roles.tolist()
+                        if not isinstance(t_roles, (list, tuple)): t_roles = [t_roles]
+
+                        for r in t_roles:
+                            if isinstance(r, dict):
+                                raw_val = r.get("raw_role", r.get(b"raw_role", None))
+                                role_val = r.get("role", r.get(b"role", ""))
+                                role_full_val = r.get("role_full", r.get(b"role_full", role_val))
+                                bio_val = r.get("bio", r.get(b"bio", None))
+                                raw_pred = r.get("pred_id", r.get(b"pred_id"))
+                                try:
+                                    p_id = int(raw_pred) if raw_pred is not None else None
+                                except:
+                                    p_id = None
+                            else:
+                                raw_val = str(r)
+                                role_val = raw_val
+                                role_full_val = raw_val
+                                bio_val = ""
+                                p_id = None
+
+                            raw_val = str(raw_val or role_val or "")
+                            bio_val = str(bio_val or "")
+
+                            if require_i:
+                                if not (raw_val.startswith("I-") or bio_val == "I"):
+                                    continue
+                            else:
+                                if not (raw_val.startswith("B-") or raw_val.startswith("I-") or bio_val in ("B", "I")):
+                                    pass  # Złagodzenie dla jednowyrazowych, gołych tagów z parsowania
+
+                            clean = normalize_srl_role(role_full_val or role_val or raw_val)
+
+                            if p_id is not None:
+                                f = get_frame_for_predicate(p_id)
+                                if f and check_frame_against_srl_conds(clean, f, srl_conds):
+                                    sigs.add((p_id, clean))
+
+                        return sigs
+
+                    active_srls = get_valid_signatures_for_token(s_idx, require_i=False)
+                    if not active_srls:
+                        return n_idx
+
+                    while n_idx < e_limit:
+                        next_active = get_valid_signatures_for_token(n_idx, require_i=True)
+                        shared = active_srls.intersection(next_active)
+                        if shared:
+                            active_srls = shared
+                            n_idx += 1
+                        else:
+                            break
+
+                    return n_idx
 
                 if not is_coref_m:
                     return s_idx + 1  # Standardowy skok o 1 słowo
+
+
 
                 n_idx = s_idx + 1
                 c_tags = corefs[s_idx] if corefs is not None else []
@@ -4884,6 +5753,13 @@ def validate_query_for_ui(query: str):
     # --- Zbiór dozwolonych atrybutów dla tokenów ---
     VALID_KEYS = {
         "orth", "base", "pos", "upos", "deprel", "ner",
+
+        # stare SRL
+        "srl", "srl_role", "srl_pred", "srl_pred_lemma",
+
+        # nowe SRL predicate-centred
+        "srl_is_pred",
+
         "number", "case", "gender", "degree", "person", "aspect", "negation",
         "accentability", "post-prepositionality", "accommodability",
         "vocalicity", "agglutination", "fullstoppedness"
@@ -4906,7 +5782,11 @@ def validate_query_for_ui(query: str):
 
                     # Jeśli klucz nie jest na liście i nie jest atrybutem relacyjnym - wyrzuć błąd!
                     if base_key not in VALID_KEYS and not base_key.startswith(
-                            ("coref", "head", "dependent", "window_base", "window_orth")):
+                            (
+                                    "coref", "head", "dependent", "window_base", "window_orth",
+                                    "srl_arg", "srl_tmp", "srl_loc", "srl_mnr", "srl_dir",
+                                    "srl_adv", "srl_mod", "srl_neg", "srl_cau", "srl_prp", "srl_dis", "srl_ext"
+                            )):
                         raise QueryValidationError(
                             f"Nieznany atrybut w zapytaniu: '{key}'")
 
@@ -5072,44 +5952,90 @@ def filter_by_selected_sense(choice):
         loading_win.destroy()
 
 
-def resort_results(choice):
-    global full_results_sorted, current_page, global_query, global_selected_corpus
+def sort_search_results_in_place(results, choice):
+    """
+    Sortuje listę wyników konkordancji in-place.
 
-    # Jeśli nie ma wyników do sortowania, nic nie rób
-    if not full_results_sorted:
+    Indeksy wyniku:
+    x[3] = matched_text / orth
+    x[4] = matched_lemmas / base
+    x[6] = title
+    x[7] = author
+    x[9] = left_context
+    x[10] = right_context
+    """
+    if not results:
         return
 
-    # Pomocnicze funkcje do sortowania po kontekście
     import string
+    from collections import Counter
+
     def first_real_token(text):
-        if not text: return ""
-        for tok in text.split():
+        if not text:
+            return ""
+        for tok in str(text).split():
             cleaned = tok.strip(string.punctuation).lower()
-            if cleaned: return cleaned
+            if cleaned:
+                return cleaned
         return ""
 
     def last_real_token(text):
-        if not text: return ""
-        for tok in reversed(text.split()):
+        if not text:
+            return ""
+        for tok in reversed(str(text).split()):
             cleaned = tok.strip(string.punctuation).lower()
-            if cleaned: return cleaned
+            if cleaned:
+                return cleaned
         return ""
 
-    # Błyskawiczne sortowanie w miejscu (in-place)
     if choice == "Data publikacji":
-        full_results_sorted.sort(key=lambda x: str(x[0]) if x[0] else "")
-    elif choice == "Tytuł":
-        full_results_sorted.sort(key=lambda x: str(x[6]) if x[6] else "")
-    elif choice == "Autor":
-        full_results_sorted.sort(key=lambda x: str(x[7]) if x[7] else "")
-    elif choice == "Alfabetycznie":
-        full_results_sorted.sort(key=lambda x: str(x[3]) if x[3] else "")
-    elif choice == "Prawy kontekst":
-        full_results_sorted.sort(key=lambda x: first_real_token(x[10]))
-    elif choice == "Lewy kontekst":
-        full_results_sorted.sort(key=lambda x: last_real_token(x[9]))
+        results.sort(key=lambda x: str(x[0]) if x[0] else "")
 
-    # Resetujemy na pierwszą stronę i natychmiast odświeżamy tabelę
+    elif choice == "Tytuł":
+        results.sort(key=lambda x: str(x[6]) if x[6] else "")
+
+    elif choice == "Autor":
+        results.sort(key=lambda x: str(x[7]) if x[7] else "")
+
+    elif choice == "Alfabetycznie":
+        results.sort(key=lambda x: str(x[3]).lower() if x[3] else "")
+
+    elif choice == "Prawy kontekst":
+        results.sort(key=lambda x: first_real_token(x[10]))
+
+    elif choice == "Lewy kontekst":
+        results.sort(key=lambda x: last_real_token(x[9]))
+
+    elif choice == "Frekwencja base":
+        base_counter = Counter(str(x[4]) for x in results)
+
+        results.sort(
+            key=lambda x: (
+                -base_counter[str(x[4])],      # najczęstsze base najpierw
+                str(x[4]).lower(),             # potem alfabetycznie po base
+                str(x[3]).lower()              # potem po orth
+            )
+        )
+
+    elif choice == "Frekwencja orth":
+        orth_counter = Counter(str(x[3]) for x in results)
+
+        results.sort(
+            key=lambda x: (
+                -orth_counter[str(x[3])],      # najczęstsze orth najpierw
+                str(x[3]).lower(),             # potem alfabetycznie po orth
+                str(x[4]).lower()              # potem po base
+            )
+        )
+
+def resort_results(choice):
+    global full_results_sorted, current_page, global_query, global_selected_corpus
+
+    if not full_results_sorted:
+        return
+
+    sort_search_results_in_place(full_results_sorted, choice)
+
     current_page = 0
     display_page(global_query, global_selected_corpus)
 
@@ -5260,18 +6186,7 @@ def search():
 
 
             # --- SORTOWANIE W MIEJSCU (WYKONUJE SIĘ W TLE) ---
-            if sort_option == "Data publikacji":
-                results.sort(key=lambda x: str(x[0]) if x[0] else "")
-            elif sort_option == "Tytuł":
-                results.sort(key=lambda x: str(x[6]) if x[6] else "")
-            elif sort_option == "Autor":
-                results.sort(key=lambda x: str(x[7]) if x[7] else "")
-            elif sort_option == "Alfabetycznie":
-                results.sort(key=lambda x: str(x[3]) if x[3] else "")
-            elif sort_option == "Prawy kontekst":
-                results.sort(key=lambda x: first_real_token(x[10]))
-            elif sort_option == "Lewy kontekst":
-                results.sort(key=lambda x: last_real_token(x[9]))
+            sort_search_results_in_place(results, sort_option)
 
             # Przypisujemy posortowaną (lub nie) listę do zmiennej używanej dalej
             results_sorted = results
@@ -5355,7 +6270,6 @@ def search():
                             if key not in monthly_lemma_freq:
                                 monthly_lemma_freq[key] = {lemma: 0 for lemma in unique_lemmas}
                             current_date = (current_date.replace(day=28) + timedelta(days=4)).replace(day=1)
-
                     def update_data_tables():
                         global true_monthly_totals
                         true_monthly_totals.clear()
@@ -5367,14 +6281,32 @@ def search():
                                 true_monthly_totals[key] = true_monthly_totals.get(key, 0) + count
                                 flattened.append((year, month, count))
                         return flattened
-
                     update_data_tables()
                     total_token_count = sum(true_monthly_totals.values())
                     total_docs = len(df)
 
-                    # Teraz pobieramy dane z całego korpusu (indeksu), więc TF-IDF będzie rzetelny
+                    def _is_phrase_key(key):
+                        """True dla dopasowań wielotokenowych, np. 'ministerstwo edukacja narodowy'."""
+                        return isinstance(key, str) and len(key.split()) > 1
+
+                    def _df_for_matched_key(key, attr, exact_df_map):
+                        """
+                        DF/Rozproszenie dla tabel wyników.
+
+                        Dla fraz wielowyrazowych indeks odwrócony attr -> token/lemma NIE ma klucza
+                        'ministerstwo edukacja narodowy', więc poprzedni kod wpadał w fallback = 1.
+                        Dlatego dla fraz bierzemy DF z faktycznych trafień (unikalne row_idx).
+                        Dla pojedynczych tokenów/lematów zachowujemy dotychczasowy globalny DF z indeksu.
+                        """
+                        if _is_phrase_key(key):
+                            return max(1, len(exact_df_map.get(key, set())))
+
+                        global_docs_set = inverted_indexes[global_selected_corpus].get(attr, {}).get(key, set())
+                        return len(global_docs_set) if global_docs_set else max(1, len(exact_df_map.get(key, set())))
+
+                    # DF dla tabeli base: frazy liczymy po faktycznych trafieniach, pojedyncze lematy globalnie.
                     lemma_df_cache = {
-                        lemma: len(inverted_indexes[global_selected_corpus]["base"].get(lemma, set())) or 1
+                        lemma: _df_for_matched_key(lemma, "base", exact_lemma_df)
                         for lemma in unique_lemmas
                     }
 
@@ -5384,8 +6316,7 @@ def search():
                         frequency_normalized = (
                             (frequency / total_token_count) * 1_000_000 if total_token_count > 0 else 0.0)
                         tf_global = (frequency / total_token_count) if total_token_count > 0 else 0
-                        global_docs_set_orth = inverted_indexes[global_selected_corpus]["orth"].get(token, set())
-                        df_val_orth = len(global_docs_set_orth) if global_docs_set_orth else 1
+                        df_val_orth = _df_for_matched_key(token, "orth", exact_orth_df)
                         idf_global = math.log10(total_docs / df_val_orth) if df_val_orth > 0 else 0
                         global_tfidf_orth = tf_global * idf_global * 100000
                         fq_data_token.append([idx, token, frequency, round(frequency_normalized, 2), df_val_orth,
@@ -5402,8 +6333,7 @@ def search():
                         frequency_normalized = (
                             (frequency / total_token_count) * 1_000_000 if total_token_count > 0 else 0.0)
                         tf_global = (frequency / total_token_count) if total_token_count > 0 else 0
-                        global_docs_set_lemma = inverted_indexes[global_selected_corpus]["base"].get(lemma, set())
-                        df_val_lemma = len(global_docs_set_lemma) if global_docs_set_lemma else 1
+                        df_val_lemma = _df_for_matched_key(lemma, "base", exact_lemma_df)
                         idf_global = math.log10(total_docs / df_val_lemma) if df_val_lemma > 0 else 0
                         global_tfidf_lemma = tf_global * idf_global * 100000
                         fq_data.append([idx, lemma, frequency, round(frequency_normalized, 2), df_val_lemma,
@@ -5422,11 +6352,12 @@ def search():
                         else:
                             monthly_freq_for_use[month_key] = {lemma: 0.0 for lemma in lemma_counts}
 
-                    # Szybki bufor z prawdziwym (globalnym) DF dla unikalnych lematów
+
+                    # Szybki bufor DF: frazy z faktycznych trafień, pojedyncze lematy z indeksu globalnego.
                     global_lemma_df_cache = {}
                     for lemma in unique_lemmas:
-                        global_docs_set = inverted_indexes[global_selected_corpus]["base"].get(lemma, set())
-                        global_lemma_df_cache[lemma] = len(global_docs_set) if global_docs_set else 1
+                        global_lemma_df_cache[lemma] = _df_for_matched_key(lemma, "base", exact_lemma_df)
+
 
                     for month_key, lemma_counts in monthly_lemma_freq.items():
                         total = true_monthly_totals.get(month_key, 0)
@@ -6676,15 +7607,46 @@ def highlight_entry(event=None):
             entry_query.tag_remove(tag, "1.0", ctk.END)
 
     # --- Highlight keywords first ---
-    keywords = ["orth=", "orth!=", "base=", "base!=", "pos=", "pos!=", "upos=", "upos!=" "ner=", "ner!=", "head=", "head!=", "coref=", "coref!=",
-                "head=", "head!=", "dependent=", "dependent!=", "deprel=", "deprel!=", "number=", "number!=", "ner=", "ner!="
-                "window_base=", "window_base!=", "window_orth=", "window_orth!=",
-                "gender=", "gender!=", "degree=", "degree!=", "case=", "case!=", "person=", "person!=",
-                "accentability=", "accentability!=", "post-prepositionality=", "post-prepositionality!=",
-                "accommodability=", "accommodability!=", "aspect=", "aspect!=", "vocalicity=", "vocalicity!=",
-                "agglutination=", "agglutination!=", "negation=", "negation!=", "||", "data>", "data<", "data=",
-                "data!=", "data<=", "data>=", "autor=", "autor!=", "metadane:", "tytuł=", "tytuł!=",
-                "children.group=", "frequency_base", "frequency_orth", "top=", "min=", "max=", "<s>"]
+    keywords = [
+        "orth=", "orth!=",
+        "window_base=", "window_base!=",
+        "window_orth=", "window_orth!=",
+        "base=", "base!=",
+        "pos=", "pos!=",
+        "upos=", "upos!=",
+        "ner=", "ner!=",
+        "head=", "head!=",
+        "coref=", "coref!=",
+        "dependent=", "dependent!=",
+        "deprel=", "deprel!=",
+        "number=", "number!=",
+        "gender=", "gender!=",
+        "degree=", "degree!=",
+        "case=", "case!=",
+        "person=", "person!=",
+        "accentability=", "accentability!=",
+        "post-prepositionality=", "post-prepositionality!=",
+        "accommodability=", "accommodability!=",
+        "aspect=", "aspect!=",
+        "vocalicity=", "vocalicity!=",
+        "agglutination=", "agglutination!=",
+        "negation=", "negation!=",
+        "||",
+        "data>",
+        "data<",
+        "data=",
+        "data!=",
+        "data<=",
+        "data>=",
+        "autor=", "autor!=",
+        "metadane:",
+        "tytuł=", "tytuł!=",
+        "children.group=",
+        "frequency_base",
+        "frequency_orth",
+        "top=", "min=", "max=",
+        "<s>"
+    ]
 
     for term in keywords:
         start_idx = "1.0"
@@ -7070,7 +8032,26 @@ class ConditionRow(ctk.CTkFrame):
             "Aglutynacyjność (agglutination)": "agglutination",
             "Kropkowalność (fullstoppedness)": "fullstoppedness",
             "Okno lematu (window_base)": "window_base",
-            "Okno ortograficzne (window_orth)": "window_orth"
+            "Okno ortograficzne (window_orth)": "window_orth",
+            # "SRL: rola aktualnego elementu (srl_role)": "srl_role",
+            # "SRL: predykat ramy (srl_pred)": "srl_pred",
+            #
+            # "SRL: ARG0 zawiera lemat (srl_arg0)": "srl_arg0",
+            # "SRL: ARG1 zawiera lemat (srl_arg1)": "srl_arg1",
+            # "SRL: ARG2 zawiera lemat (srl_arg2)": "srl_arg2",
+            #
+            # "SRL: ARG0 tekst (srl_arg0_text)": "srl_arg0_text",
+            # "SRL: ARG1 tekst (srl_arg1_text)": "srl_arg1_text",
+            #
+            # "SRL: ARG0 głowa lemat (srl_arg0_head_base)": "srl_arg0_head_base",
+            # "SRL: ARG1 głowa lemat (srl_arg1_head_base)": "srl_arg1_head_base",
+            #
+            # "SRL: czas TMP (srl_tmp)": "srl_tmp",
+            # "SRL: miejsce LOC (srl_loc)": "srl_loc",
+            # "SRL: sposób MNR (srl_mnr)": "srl_mnr",
+            # "SRL: przyczyna CAU (srl_cau)": "srl_cau",
+            # "SRL: cel PRP (srl_prp)": "srl_prp",
+            # "SRL: zakres EXT (srl_ext)": "srl_ext",
 
         }
 
@@ -8565,9 +9546,10 @@ def show_corpus_info():
 
     # --- DOSTĘPNE METADANE ---
     exclude_cols = {
-        "Oryginalna_nazwa_pliku", "Treść", "token_counts", "tokens", "lemmas",
-        "deprels", "postags", "full_postags", "word_ids", "sentence_ids",
-        "head_ids", "start_ids", "end_ids", "ners", "upostags", "corefs"
+        "Data publikacji", "Tytuł", "Autor", "tags", "Treść", "token_counts",
+        "tokens", "lemmas", "deprels", "postags", "full_postags",
+        "word_ids", "sentence_ids", "head_ids", "start_ids", "end_ids", "ners", "upostags",
+        "corefs", "srl", "srls", "srl_frames"
     }
     meta_cols = [c for c in df.columns if c not in exclude_cols]
     meta_str = "\n  • ".join(meta_cols) if meta_cols else "  Brak dodatkowych metadanych"
@@ -9781,7 +10763,7 @@ def open_topic_modeling():
     # --- OKIENKO KONFIGURACJI ---
     setup_win = ctk.CTkToplevel(app)
     setup_win.title("Ustawienia Modelowania")
-    setup_win.geometry("450x450")  # POWIĘKSZONE OKNO na nowe opcje
+    setup_win.geometry("450x500")  # POWIĘKSZONE OKNO na nowe opcje
     setup_win.attributes("-topmost", True)
 
     x = app.winfo_x() + (app.winfo_width() // 2) - 225
@@ -9817,6 +10799,10 @@ def open_topic_modeling():
 
     # --- ZAAWANSOWANE OPCJE ---
     ctk.CTkLabel(setup_win, text="Opcje zaawansowane:", font=("Verdana", 12, "bold")).pack(pady=(15, 5))
+
+    use_lemmas_var = ctk.BooleanVar(value=True)  # Zaznaczone domyślnie
+    cb_lemmas = ctk.CTkCheckBox(setup_win, text="Pracuj na formach zlematyzowanych (base)", variable=use_lemmas_var)
+    cb_lemmas.pack(anchor="w", padx=40, pady=5)
 
     use_stopwords_var = ctk.BooleanVar(value=True)
     cb_stopwords = ctk.CTkCheckBox(setup_win, text="Filtruj polskie stop-words (zalecane)",
@@ -9858,15 +10844,18 @@ def open_topic_modeling():
                 return
 
         use_stopwords = use_stopwords_var.get()
-        diversity_val = round(diversity_var.get(), 2)  # Pobieramy wartość z suwaka
+        diversity_val = round(diversity_var.get(), 2)
+
+        # --- NOWE: Pobierz decyzję o lematach z checkboxa ---
+        use_lemmas = use_lemmas_var.get()
 
         setup_win.destroy()
-        # Przekazujemy parametr dalej
-        _run_modeling_process(nr_topics_val, use_stopwords, diversity_val)
+        # --- ZMIANA: Dodano czwarty parametr use_lemmas ---
+        _run_modeling_process(nr_topics_val, use_stopwords, diversity_val, use_lemmas)
 
     ctk.CTkButton(setup_win, text="Rozpocznij analizę", command=start_process).pack(pady=20)
 
-    def _run_modeling_process(nr_topics_val, use_stopwords, diversity_val):
+    def _run_modeling_process(nr_topics_val, use_stopwords, diversity_val, use_lemmas):
         # 3. Tworzymy okienko ładowania
         loading_win = ctk.CTkToplevel(app)
         loading_win.title("Modelowanie Tematyczne")
@@ -9922,9 +10911,9 @@ def open_topic_modeling():
             try:
                 print("Inicjalizacja TopicEngine...")
                 engine = TopicEngine(parquet_path)
-
                 app.after(0, lambda: lbl_status.configure(text="Wczytywanie i filtrowanie tekstów..."))
-                if not engine.load_data():
+
+                if not engine.load_data(use_chunking=True, max_words_per_chunk=250, use_lemmas=use_lemmas):
                     raise Exception("Plik korpusu nie posiada kolumny 'Treść' lub jest pusty.")
 
                 app.after(0, lambda: lbl_status.configure(text="Trenowanie modelu (może to potrwać)..."))
@@ -10174,6 +11163,7 @@ entry_query = ctk.CTkTextbox(
     exportselection=False, corner_radius=12, fg_color="#1F2328"
 )
 entry_query.grid(row=0, rowspan=4, column=2, padx=15,  pady=(5,5), sticky="ew")
+CQLAutocomplete(entry_query)
 
 def open_query_builder():
     current_theme = THEMES[motyw.get()]
@@ -10244,9 +11234,9 @@ label_sort.grid(row=1, column=6, padx=1, pady=1, sticky="w")
 sort_option_var = tk.StringVar(value="Alfabetycznie")
 option_sort = ctk.CTkOptionMenu(
     top_frame_container,
-    values=["Alfabetycznie", "Lewy kontekst", "Prawy kontekst", "Autor", "Tytuł", "Data publikacji"],
+    values=["Alfabetycznie", "Lewy kontekst", "Prawy kontekst", "Autor", "Tytuł", "Data publikacji", "Frekwencja base","Frekwencja orth"],
     variable=sort_option_var,
-    command=resort_results,       # <--- DODANE
+    command=resort_results,
     font=("Verdana", 12, 'bold'),
     fg_color="#4B6CB7",
     dropdown_fg_color="#4B6CB7",

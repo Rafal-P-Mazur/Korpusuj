@@ -30,6 +30,7 @@ import pyarrow.parquet as pq
 import gc
 import torch
 from datetime import datetime
+from transformers import AutoTokenizer, AutoModelForTokenClassification
 
 # --- IMPORTY WARUNKOWE ---
 try:
@@ -52,7 +53,7 @@ try:
     if not hasattr(torch.utils.data.dataset, 'T_co'):
         torch.utils.data.dataset.T_co = typing.TypeVar('T_co', covariant=True)
     import herference
-    logging.info("SUKCES: Herference zaimportowane pomyślnie na górze pliku!")
+    #logging.info("SUKCES: Herference zaimportowane pomyślnie na górze pliku!")
 except Exception as e:
     herference = None
     messagebox.showerror("Błąd importu Herference", f"Nie udało się zaimportować biblioteki herference:\n\n{e}")
@@ -69,6 +70,14 @@ else:
 
 selected_files = {}
 file_buttons = []
+
+
+FILES_PER_PAGE = 100
+file_page_index = 0
+
+pagination_label = None
+pagination_prev_button = None
+pagination_next_button = None
 
 
 # --- HELPER: FORMATOWANIE ROZMIARU (KB/MB) ---
@@ -795,6 +804,57 @@ def update_status(label, text, app):
     app.update_idletasks()
 
 
+# --- INICJALIZACJA SRL ---
+srl_tokenizer = None
+srl_model = None
+srl_id2label = None
+srl_device = None
+srl_available = False
+
+SRL_MODEL_PATH = "./roberta-srl-model-v9d-dual-core"
+
+
+def initialize_srl(status_label, app):
+    global srl_tokenizer, srl_model, srl_id2label, srl_device, srl_available
+
+    try:
+        status_label.configure(text="Ładuję model SRL Hugging Face...")
+        app.update_idletasks()
+
+        srl_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        try:
+            srl_tokenizer = AutoTokenizer.from_pretrained(SRL_MODEL_PATH, use_fast=True)
+        except Exception:
+            from transformers import RobertaTokenizerFast
+            srl_tokenizer = RobertaTokenizerFast.from_pretrained(SRL_MODEL_PATH)
+
+        srl_model = AutoModelForTokenClassification.from_pretrained(SRL_MODEL_PATH)
+
+        srl_model.to(srl_device)
+        srl_model.eval()
+        srl_id2label = srl_model.config.id2label
+
+        srl_available = True
+        status_label.configure(text="Model SRL załadowany pomyślnie.")
+        return True
+
+    except Exception as e:
+        logging.warning(f"Model SRL niedostępny — kontynuuję bez SRL: {e}")
+
+        srl_tokenizer = None
+        srl_model = None
+        srl_id2label = None
+        srl_device = None
+        srl_available = False
+
+        status_label.configure(
+            text="Model SRL niedostępny — kontynuuję bez analizy ról semantycznych."
+        )
+        app.update_idletasks()
+
+        return False
+
 # --- INITIALIZATION ---
 def initialize_stanza(status_label, app):
     global nlp_stanza
@@ -1112,6 +1172,14 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
         try:
             update_status(status_label, f"Przetwarzam: {filename} (Część {i + 1}/{total_chunks})", app)
             doc = nlp_spacy(chunk)
+
+            chunk_token_offset = len(all_processed_tokens)
+
+            spacy_i_to_global = {
+                token.i: chunk_token_offset + local_i
+                for local_i, token in enumerate(doc)
+            }
+
         except Exception:
             global_char_offset += len(chunk)
             continue
@@ -1168,7 +1236,6 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
                 logging.warning(f"Błąd mapowania koreferencji (herference): {e}")
         # ----------------------------------------
 
-
         for sent_idx, sentence in enumerate(sentences, start=1):
             real_sent_id = sent_idx + global_sent_id_offset
             current_progress = (i / total_chunks) + ((sent_idx / len(sentences)) / total_chunks)
@@ -1176,15 +1243,122 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
                 progress_bar.set(current_progress)
                 app.update_idletasks()
 
+            # --- SRL: SZUKANIE PREDYKATÓW I PREDYKCJA ---
+            # Słownik do agregacji ról dla każdego tokenu w zdaniu.
+            # Jeśli SRL jest niedostępne, zostanie pusty.
+            srl_tags_for_sentence = {token.i: [] for token in sentence}
+
+            if srl_available and srl_tokenizer is not None and srl_model is not None:
+                # Szukamy czasowników wg spaCy
+                verbs_in_sentence = [token for token in sentence if token.pos_ == "VERB"]
+
+                for verb in verbs_in_sentence:
+                    # Format "Sentence Pair" (predykat, zdanie)
+                    inputs = srl_tokenizer(
+                        verb.text,
+                        sentence.text,
+                        truncation=True,
+                        max_length=256,
+                        return_offsets_mapping=True,
+                        return_tensors="pt",
+                    )
+
+                    offsets = inputs.pop("offset_mapping")[0].tolist()
+                    sequence_ids = inputs.sequence_ids(0)
+
+                    inputs = {k: v.to(srl_device) for k, v in inputs.items()}
+
+                    with torch.no_grad():
+                        logits = srl_model(**inputs).logits
+                    predictions = torch.argmax(logits, dim=-1)[0].tolist()
+
+                    # Mapowanie odpowiedzi na słowa w zdaniu
+                    for pred_idx, offset, seq_id in zip(predictions, offsets, sequence_ids):
+                        # seq_id == 1 oznacza główny tekst zdania; omijamy tokeny specjalne i znaki puste
+                        if seq_id != 1 or offset[0] == offset[1]:
+                            continue
+
+                        start_char_in_sent = offset[0]
+                        end_char_in_sent = offset[1]
+
+                        srl_label = srl_id2label.get(pred_idx, srl_id2label.get(str(pred_idx), "O"))
+                        if srl_label == "O":
+                            continue
+                        raw_role = srl_label
+
+                        # BIO: B-ARG0 / I-ARG0 / B-ARGM-TMP itd.
+                        bio = None
+                        role_full = raw_role
+
+                        if raw_role.startswith("B-") or raw_role.startswith("I-"):
+                            bio = raw_role[0]
+                            role_full = raw_role[2:]
+
+                        # Krótka wersja roli:
+                        # ARGM-TMP -> TMP
+                        # ARGM-LOC -> LOC
+                        # ARG0 zostaje ARG0
+                        role_short = role_full
+                        if role_short.startswith("ARGM-"):
+                            role_short = role_short.replace("ARGM-", "", 1)
+
+                        pred_global_id = spacy_i_to_global.get(verb.i)
+
+                        # Dopasowanie do tokenu spaCy na bazie znaków
+                        for token in sentence:
+                            tok_start = token.idx - sentence.start_char
+                            tok_end = tok_start + len(token.text)
+
+                            # Czy sub-token RoBERTy nakłada się na token ze spaCy?
+                            if start_char_in_sent < tok_end and tok_start < end_char_in_sent:
+
+                                srl_tags_for_sentence[token.i].append({
+                                    "pred_id": pred_global_id,
+
+                                    # gotowe informacje o predykacie
+                                    "pred_text": verb.text,
+                                    "pred_lemma": verb.lemma_.lower() if verb.lemma_ else verb.text.lower(),
+
+                                    # role
+                                    "raw_role": raw_role,
+                                    "bio": bio,
+                                    "role": role_short,
+                                    "role_full": role_full,
+
+                                    # predykat
+                                    "is_pred": role_short in ("PRED", "V")
+                                })
+
+                                if srl_label.startswith("B-"):
+                                    break
+
+            for tok_id in srl_tags_for_sentence:
+                # deduplikacja (bo model czasem duplikuje)
+                seen = set()
+                unique = []
+                for item in srl_tags_for_sentence[tok_id]:
+                    key = (
+                        item.get("pred_id"),
+                        item.get("role"),
+                        item.get("role_full"),
+                        item.get("raw_role"),
+                        item.get("bio")
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        unique.append(item)
+                srl_tags_for_sentence[tok_id] = unique
+
+            # --- SPAKOWANIE DANYCH ---
             for token in sentence:
                 start_idx_global = token.idx + global_char_offset
                 end_idx_global = start_idx_global + len(token.text) - 1
 
-                # Pobieranie kotwicy. Jeśli brak, wstawiamy "O"
                 coref_val = coref_anchors.get(token.i, [])
-
-                # --- ODTWARZAMY PEŁNY TAG NKJP ---
                 full_nkjp_tag = reconstruct_nkjp_tag(token.tag_, token.morph)
+
+                # Sklejamy role ze wszystkich predykatów
+                final_srl = srl_tags_for_sentence[token.i] if srl_tags_for_sentence[token.i] else []
 
                 all_processed_tokens.append({
                     "token": token.text,
@@ -1193,20 +1367,197 @@ def process_single_text_spacy(text, filename, status_label, progress_bar, app):
                     "wordID": token.i + 1,
                     "headID": token.head.i + 1 if token.head != token else 0,
                     "deprel": token.dep_,
-                    "postag": full_nkjp_tag,  # <--- TUTAJ UŻYWAMY NASZEGO HELPERA!
+                    "postag": full_nkjp_tag,
                     "start": start_idx_global,
                     "end": end_idx_global,
                     "ner": token.ent_type_ if token.ent_type_ else "O",
                     "upos": token.pos_,
-                    "coref": coref_val
+                    "coref": coref_val,
+                    "srl": final_srl  # <--- NASZA NOWA CECHA!
                 })
         global_sent_id_offset += len(sentences)
         global_char_offset += len(chunk)
+
         del doc
         gc.collect()
     return all_processed_tokens
 
+def build_srl_frames(tokens, lemmas, postags, sentence_ids, head_ids, ners, upostags, srls):
+    """
+    Buduje strukturę:
+    predykat -> argumenty jako spany.
 
+    srls[i] = lista ról SRL przypisanych do tokenu i.
+    """
+
+    frames = {}
+
+    # 1. Utwórz ramy dla wszystkich predykatów, które pojawiają się w SRL
+    for token_idx, token_srls in enumerate(srls):
+        if token_srls is None:
+            continue
+
+        if hasattr(token_srls, "tolist"):
+            token_srls = token_srls.tolist()
+
+        if not isinstance(token_srls, (list, tuple)):
+            token_srls = [token_srls]
+
+        for entry in token_srls:
+            if not isinstance(entry, dict):
+                continue
+
+            pred_id = entry.get("pred_id")
+
+            try:
+                pred_id = int(pred_id) if pred_id is not None else None
+            except (TypeError, ValueError):
+                pred_id = None
+
+            if pred_id is None:
+                continue
+
+            if pred_id < 0 or pred_id >= len(tokens):
+                continue
+
+            if pred_id not in frames:
+                frames[pred_id] = {
+                    "pred_id": pred_id,
+                    "pred_text": entry.get("pred_text") or tokens[pred_id],
+                    "pred_lemma": entry.get("pred_lemma") or lemmas[pred_id],
+                    "pred_pos": postags[pred_id] if postags and pred_id < len(postags) else None,
+                    "pred_upos": upostags[pred_id] if upostags and pred_id < len(upostags) else None,
+                    "sentence_id": sentence_ids[pred_id] if sentence_ids and pred_id < len(sentence_ids) else None,
+                    "arguments": []
+                }
+
+    # 2. Grupuj tokeny argumentów według predykatu i roli
+    grouped = {}
+
+    for token_idx, token_srls in enumerate(srls):
+        if token_srls is None:
+            continue
+
+        if hasattr(token_srls, "tolist"):
+            token_srls = token_srls.tolist()
+
+        if not isinstance(token_srls, (list, tuple)):
+            token_srls = [token_srls]
+
+        for entry in token_srls:
+            if not isinstance(entry, dict):
+                continue
+
+            pred_id = entry.get("pred_id")
+
+            try:
+                pred_id = int(pred_id) if pred_id is not None else None
+            except (TypeError, ValueError):
+                pred_id = None
+
+            if pred_id is None:
+                continue
+
+            role = entry.get("role")
+            role_full = entry.get("role_full", role)
+
+            if not role:
+                continue
+
+            # nie traktujemy samego predykatu jako argumentu
+            if role in ("PRED", "V") or entry.get("is_pred"):
+                continue
+
+            key = (pred_id, str(role).upper(), str(role_full).upper())
+            grouped.setdefault(key, []).append(token_idx)
+
+    # 3. Zamień listy tokenów na spany ciągłe
+    def flush_span(frame, role, role_full, span_indices):
+        if not span_indices:
+            return
+
+        start = span_indices[0]
+        end = span_indices[-1] + 1
+
+        arg_tokens = tokens[start:end]
+        arg_lemmas = lemmas[start:end]
+        arg_ners = ners[start:end] if ners else []
+        arg_upos = upostags[start:end] if upostags else []
+
+        span_set = set(span_indices)
+        head_idx = None
+
+        for idx in span_indices:
+            try:
+                h = int(head_ids[idx]) if head_ids and idx < len(head_ids) and head_ids[idx] is not None else None
+            except (TypeError, ValueError):
+                h = None
+
+            # głową frazy jest zwykle token, którego head wychodzi poza span
+            if h is None or h not in span_set:
+                head_idx = idx
+                break
+
+        if head_idx is None:
+            head_idx = span_indices[0]
+
+        frame["arguments"].append({
+            "role": role,
+            "role_full": role_full,
+            "start": start,
+            "end": end,
+
+            "text": " ".join(tokens[start:end]),
+            "tokens": tokens[start:end],
+            "lemmas": lemmas[start:end],
+            "ners": ners[start:end] if ners else [],
+            "upostags": upostags[start:end] if upostags else [],
+
+            # głowa argumentu
+            "head_id": head_idx,
+            "head_text": tokens[head_idx] if head_idx is not None and head_idx < len(tokens) else None,
+            "head_lemma": lemmas[head_idx] if head_idx is not None and head_idx < len(lemmas) else None,
+            "head_pos": postags[head_idx] if postags and head_idx is not None and head_idx < len(postags) else None,
+            "head_ner": ners[head_idx] if ners and head_idx is not None and head_idx < len(ners) else None,
+
+            "sentence_id": sentence_ids[start] if sentence_ids and start < len(sentence_ids) else None
+        })
+
+    for (pred_id, role, role_full), indices in grouped.items():
+        if pred_id not in frames:
+            continue
+
+        indices = sorted(indices)
+        frame = frames[pred_id]
+
+        current_span = []
+        previous = None
+
+        for idx in indices:
+            # rozbij span, jeśli argument wychodzi poza zdanie predykatu
+            same_sentence = (
+                sentence_ids
+                and idx < len(sentence_ids)
+                and pred_id < len(sentence_ids)
+                and sentence_ids[idx] == sentence_ids[pred_id]
+            )
+
+            if not same_sentence:
+                continue
+
+            if previous is None:
+                current_span = [idx]
+            elif idx == previous + 1:
+                current_span.append(idx)
+            else:
+                flush_span(frame, role, role_full, current_span)
+                current_span = [idx]
+
+            previous = idx
+
+        flush_span(frame, role, role_full, current_span)
+
+    return list(frames.values())
 def process_file_global(file_path, status_label, progress_bar, app, model_name, excel_mappings=None,
                         processed_set=None):
     ext = os.path.splitext(file_path)[1].lower()
@@ -1410,6 +1761,9 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     else:
         if not initialize_spacy(status_label, app): return
 
+    # SRL jest opcjonalne — brak modelu nie zatrzymuje przetwarzania
+    initialize_srl(status_label, app)
+
     progress_bar_current.set(0)
     app.update_idletasks()
 
@@ -1418,7 +1772,6 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     global_total_tokens = 0
     global_token_counts = {}
 
-    # 3. WZNAWIANIE Z CHECKPOINTÓW
     # 3. WZNAWIANIE Z CHECKPOINTÓW
     BATCH_SIZE = 20  # Zmniejszony bufor: częstsze zapisy, mniejsze ryzyko utraty po przerwaniu
     batch_data = []
@@ -1624,6 +1977,26 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
                 entry["upostags"] = [t["upos"] for t in processed_tokens]
                 entry["corefs"] = [t.get("coref", []) for t in processed_tokens]
 
+                srls_token_level = [t.get("srl", []) for t in processed_tokens]
+                entry["srls"] = srls_token_level
+
+                if srl_available:
+                    srl_frames = build_srl_frames(
+                        tokens=tokens_list,
+                        lemmas=lemmas_list,
+                        postags=entry["postags"],
+                        sentence_ids=entry["sentence_ids"],
+                        head_ids=entry["head_ids"],
+                        ners=entry["ners"],
+                        upostags=entry["upostags"],
+                        srls=srls_token_level
+                    )
+                else:
+                    srl_frames = []
+
+                # JSON string jest stabilniejszy przy zapisie do Parquet
+                entry["srl_frames"] = json.dumps(srl_frames, ensure_ascii=False)
+
                 try:
                     p_date = str(entry.get("Data publikacji", "0000-00-00")).strip()
                     parts = p_date.split('-')
@@ -1763,11 +2136,131 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     messagebox.showinfo("Sukces", "Zakończono przetwarzanie.")
 
 
+def get_file_page_count():
+    if not selected_files:
+        return 1
+    return max(1, (len(selected_files) + FILES_PER_PAGE - 1) // FILES_PER_PAGE)
 
+
+def update_file_selection_status(status_label=None):
+    """
+    Aktualizuje etykietę paginacji i status wyboru plików.
+    Nie tworzy nowych checkboxów — tylko odświeża teksty/liczniki.
+    """
+    total = len(selected_files)
+    selected_count = sum(1 for var in selected_files.values() if var.get() == 1)
+    page_count = get_file_page_count()
+
+    if pagination_label is not None:
+        pagination_label.configure(
+            text=f"Strona {file_page_index + 1}/{page_count} | "
+                 f"Zaznaczono {selected_count}/{total}"
+        )
+
+    if pagination_prev_button is not None:
+        pagination_prev_button.configure(
+            state="normal" if file_page_index > 0 else "disabled"
+        )
+
+    if pagination_next_button is not None:
+        pagination_next_button.configure(
+            state="normal" if file_page_index < page_count - 1 else "disabled"
+        )
+
+    if status_label is not None and total > 0:
+        status_label.configure(
+            text=f"Zaznacz pliki do przetworzenia. Wybrano {selected_count} z {total}."
+        )
+def reset_scrollable_frame_position(frame):
+    """
+    Resetuje pozycję przewinięcia CTkScrollableFrame do góry.
+    Używa wewnętrznego canvasa CustomTkinter, dlatego jest opakowane
+    defensywnie w try/except.
+    """
+    def _reset():
+        try:
+            frame._parent_canvas.yview_moveto(0)
+        except Exception:
+            try:
+                frame._canvas.yview_moveto(0)
+            except Exception:
+                pass
+
+    try:
+        frame.after_idle(_reset)
+    except Exception:
+        _reset()
+
+
+def render_file_page(frame, status_label=None):
+    """
+    Renderuje tylko jedną stronę checkboxów.
+    Stan zaznaczenia jest przechowywany w selected_files[path] jako IntVar,
+    więc przechodzenie między stronami nie gubi checkboxów.
+    """
+    global file_buttons, file_page_index
+
+    # Najpierw wyzeruj scroll, żeby nie przenosić pozycji z poprzedniej strony
+    reset_scrollable_frame_position(frame)
+
+    # Usuń tylko widoczne checkboxy z poprzedniej strony
+    for widget in frame.winfo_children():
+        widget.destroy()
+
+    file_buttons.clear()
+
+    paths = list(selected_files.keys())
+    page_count = get_file_page_count()
+
+    if file_page_index < 0:
+        file_page_index = 0
+    if file_page_index >= page_count:
+        file_page_index = page_count - 1
+
+    start = file_page_index * FILES_PER_PAGE
+    end = start + FILES_PER_PAGE
+    page_paths = paths[start:end]
+
+    for file_path in page_paths:
+        var = selected_files[file_path]
+
+        btn = ctk.CTkCheckBox(
+            frame,
+            text=os.path.basename(file_path),
+            variable=var,
+            command=lambda: update_file_selection_status(status_label)
+        )
+        btn.pack(anchor="w", padx=20, pady=6)
+        file_buttons.append(btn)
+
+    # Wymuś przeliczenie layoutu po utworzeniu nowych checkboxów
+    try:
+        frame.update_idletasks()
+    except Exception:
+        pass
+
+    # I jeszcze raz wyzeruj scroll po przeliczeniu geometrii.
+    # To jest ważne zwłaszcza dla ostatniej strony z kilkoma elementami.
+    reset_scrollable_frame_position(frame)
+
+    update_file_selection_status(status_label)
+
+
+def change_file_page(delta, frame, status_label=None):
+    """
+    Przechodzi do poprzedniej/następnej strony listy plików.
+    """
+    global file_page_index
+
+    page_count = get_file_page_count()
+    file_page_index = max(0, min(file_page_index + delta, page_count - 1))
+
+    render_file_page(frame, status_label)
 
 # --- UI ---
 def select_files(frame, progress_bar_current, progress_bar_total, lbl_size_info, status_label, app):
-    global selected_files, file_buttons
+    global selected_files, file_buttons, file_page_index
+
     file_paths = fd.askopenfilenames(
         title="Wybierz pliki",
         initialdir=BASE_DIR,
@@ -1779,29 +2272,52 @@ def select_files(frame, progress_bar_current, progress_bar_total, lbl_size_info,
                    ("Archives", "*.zip")],
         parent=app
     )
+
     if not file_paths:
         status_label.configure(text="Nie wybrano żadnego pliku.")
         return
 
+    added_count = 0
+
+    # Tworzymy tylko stan zaznaczeń, bez tworzenia tysięcy widgetów naraz
     for file_path in file_paths:
         if file_path not in selected_files:
-            var = ctk.IntVar(value=1)
-            selected_files[file_path] = var
-            btn = ctk.CTkCheckBox(frame, text=os.path.basename(file_path), variable=var)
-            btn.pack(anchor="w", padx=20, pady=10)
-            file_buttons.append(btn)
+            selected_files[file_path] = ctk.IntVar(value=1)
+            added_count += 1
+
+    # Po dodaniu nowych plików wracamy na pierwszą stronę
+    if added_count > 0:
+        file_page_index = 0
+
+    # Renderujemy tylko bieżącą stronę checkboxów
+    render_file_page(frame, status_label)
 
     # Hide bars initially
     progress_bar_current.grid_remove()
     progress_bar_total.grid_remove()
     lbl_size_info.grid_remove()
-    status_label.configure(text="Zaznacz pliki, które mają zostać przetworzone.")
+
+    total = len(selected_files)
+    selected_count = sum(1 for var in selected_files.values() if var.get() == 1)
+
+    status_label.configure(
+        text=f"Dodano {added_count} nowych plików. Wybrano {selected_count} z {total}."
+    )
 
 
 def main(parent_window=None):
-    global model, selected_files, file_buttons
+    global model, selected_files, file_buttons, file_page_index
+    global pagination_label, pagination_prev_button, pagination_next_button
+
+
     selected_files.clear()
     file_buttons.clear()
+    file_page_index = 0
+
+    pagination_label = None
+    pagination_prev_button = None
+    pagination_next_button = None
+
     if parent_window:
         app = ctk.CTkToplevel(parent_window)
         app.transient(parent_window)  # Trzyma okno kreatora nad głównym oknem
@@ -1809,14 +2325,14 @@ def main(parent_window=None):
     else:
         app = ctk.CTk()
 
-    def center_window(app, width=800, height=600):
+    def center_window(app, width=1000, height=600):
         screen_width = app.winfo_screenwidth()
         screen_height = app.winfo_screenheight()
         x = int((screen_width / 2) - (width / 2))
         y = int((screen_height / 2) - (height / 2))
         app.geometry(f"{width}x{height}+{x}+{y}")
 
-    center_window(app, 800, 600)
+    center_window(app, 1000, 600)
     app.title("Kreator korpusów")
 
     main_frame = ctk.CTkFrame(app)
@@ -1970,18 +2486,61 @@ def main(parent_window=None):
                                    fg_color='#4B6CB7', hover_color="#5B7CD9")
     process_button.grid(row=2, column=0, columnspan=2, pady=10)
 
-    checkbox_frame = ctk.CTkScrollableFrame(app)
-    checkbox_frame.pack(pady=6, fill="both", expand=True, side="right")
+    # Prawy panel: osobno kontrolki paginacji, osobno scrollowana lista checkboxów
+    right_panel = ctk.CTkFrame(app)
+    right_panel.pack(pady=6, fill="both", expand=True, side="right")
+
+    pagination_frame = ctk.CTkFrame(right_panel)
+    pagination_frame.pack(fill="x", padx=6, pady=(6, 2))
+
+    checkbox_frame = ctk.CTkScrollableFrame(right_panel)
+    checkbox_frame.pack(pady=6, fill="both", expand=True)
 
     switch_var = ctk.StringVar(value="on")
 
     def toggle_all():
         val = 1 if switch_var.get() == "on" else 0
-        for var in selected_files.values(): var.set(val)
 
-    toggle_button = ctk.CTkSwitch(checkbox_frame, text="Zaznacz wszystko", command=toggle_all,
-                                  variable=switch_var, onvalue="on", offvalue="off")
-    toggle_button.pack(padx=20, pady=20)
+        # Ważne: zmieniamy stan wszystkich plików, nie tylko bieżącej strony
+        for var in selected_files.values():
+            var.set(val)
+
+        update_file_selection_status(status_label)
+
+    toggle_button = ctk.CTkSwitch(
+        pagination_frame,
+        text="Zaznacz wszystko",
+        command=toggle_all,
+        variable=switch_var,
+        onvalue="on",
+        offvalue="off"
+    )
+    toggle_button.grid(row=0, column=0, padx=8, pady=8, sticky="w")
+
+    pagination_prev_button = ctk.CTkButton(
+        pagination_frame,
+        text="◀",
+        width=40,
+        command=lambda: change_file_page(-1, checkbox_frame, status_label)
+    )
+    pagination_prev_button.grid(row=0, column=1, padx=4, pady=8)
+
+    pagination_label = ctk.CTkLabel(
+        pagination_frame,
+        text="Strona 1/1 | Zaznaczono 0/0"
+    )
+    pagination_label.grid(row=0, column=2, padx=8, pady=8)
+
+    pagination_next_button = ctk.CTkButton(
+        pagination_frame,
+        text="▶",
+        width=40,
+        command=lambda: change_file_page(1, checkbox_frame, status_label)
+    )
+    pagination_next_button.grid(row=0, column=3, padx=4, pady=8)
+
+    # Stan początkowy przycisków paginacji
+    update_file_selection_status(status_label)
 
     if not parent_window:
         app.mainloop()
