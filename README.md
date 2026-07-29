@@ -89,7 +89,6 @@ korpus.dep_cache
 - `.search` zawiera indeks przyspieszający wyszukiwanie;
 - `.dep_cache` zawiera dane potrzebne do sprawnego wykonywania zapytań składniowych.
 
-Pliki `.search` i `.dep_cache` można ponownie utworzyć na podstawie pliku `.parquet` za pomocą narzędzia do zarządzania indeksami.
 
 ## Dokumentacja
 
