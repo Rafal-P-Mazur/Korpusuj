@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="pl"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><title>Przewodnik po języku zapytań wyszukiwarki Korpusuj</title><link href="prism.css" rel="stylesheet"/><style>
+:root{--bg:#f5f7fa;--surface:#fff;--text:#202938;--muted:#5e6b7a;--border:#d7dee7;--accent:#285f9e;--code:#f3f5f7;--shadow:0 10px 30px rgba(25,42,70,.10)}
+body.dark{--bg:#10151c;--surface:#181f29;--text:#e7edf5;--muted:#aab7c6;--border:#334052;--accent:#75b7ff;--code:#111821;--shadow:0 10px 30px rgba(0,0,0,.3);color-scheme:dark}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.68 "Segoe UI",system-ui,sans-serif}.bar{position:sticky;top:0;z-index:10;height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:var(--surface);border-bottom:1px solid var(--border)}button{font:inherit;color:var(--text);background:var(--code);border:1px solid var(--border);border-radius:999px;padding:.4rem .75rem;cursor:pointer}.layout{max-width:1320px;margin:auto;display:grid;grid-template-columns:270px minmax(0,920px);gap:26px;padding:28px 22px 48px}.toc{position:sticky;top:82px;align-self:start;max-height:calc(100vh - 105px);overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}.toc h2{font-size:1rem;margin:0 0 .8rem}.toc ul{list-style:none;padding:0;margin:0}.toc li{margin:.2rem 0}.toc .l3{padding-left:1rem;font-size:.92rem}.toc .l4{padding-left:2rem;font-size:.86rem}.toc a{display:block;padding:.18rem .3rem;text-decoration:none;color:var(--muted);border-radius:5px}.toc a:hover{background:var(--code);color:var(--accent)}main{min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:clamp(24px,4vw,52px)}h1{font-size:clamp(2rem,4vw,2.8rem);line-height:1.15;margin-top:0}h2{font-size:1.55rem;margin-top:2.6rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}h3{font-size:1.25rem;margin-top:2rem}h4{font-size:1.08rem;margin-top:1.5rem}h1,h2,h3,h4{scroll-margin-top:78px}a{color:var(--accent)}hr{border:0;border-top:1px solid var(--border);margin:2.4rem 0}li{margin:.35rem 0}code,pre{font-family:"Cascadia Code",Consolas,monospace;background:var(--code)}code{border:1px solid var(--border);border-radius:4px;padding:.08rem .3rem}pre{overflow:auto;border:1px solid var(--border);border-radius:8px;padding:1rem 1.1rem}pre code{border:0;padding:0}table{display:block;overflow:auto;border-collapse:collapse}th,td{border:1px solid var(--border);padding:.55rem .7rem;text-align:left}th{background:var(--code)}.foot{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--border);color:var(--muted);font-size:.9rem}@media(max-width:900px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:14px}main{padding:24px 20px}}@media print{.bar,.toc{display:none}.layout{display:block;padding:0}main{border:0;box-shadow:none;padding:0}}
+
+code,pre,kbd,samp{font-variant-ligatures:none!important;font-feature-settings:"liga" 0,"calt" 0!important;text-decoration:none!important}
+
+.token.operator{color:#8e44ad;background:transparent}.token.keyword,.token.attribute{color:#0875c1}.token.string{color:#3f7f19}.token.number{color:#a43b85}.token.punctuation{color:#59636f}body.dark .token.operator{color:#56b6c2;background:transparent}body.dark .token.keyword,body.dark .token.attribute{color:#61afef}body.dark .token.string{color:#98c379}body.dark .token.number{color:#d19a66}body.dark .token.punctuation{color:#abb2bf}body.dark pre[class*="language-"],body.dark code[class*="language-"]{color:#e7edf5;background:#111821;text-shadow:none}
+.toc[hidden]{display:none}
+.layout.no-toc{grid-template-columns:1fr}
+</style></head><body><header class="bar"><strong>Korpusuj — pomoc</strong><div><button id="tocbtn">☰ Spis treści</button> <button id="theme">🌙 Ciemny</button></div></header><div class="layout"><nav class="toc" id="toc"><h2>Spis treści</h2><ul><li class="l2"><a href="#podstawowa-składnia-języka-zapytań">Podstawowa składnia języka
+zapytań</a></li><li class="l3"><a href="#równość-i-wykluczenie-wartości">Równość i wykluczenie
+wartości</a></li><li class="l3"><a href="#łączenie-warunków-dotyczących-jednego-tokenu">Łączenie warunków
+dotyczących jednego tokenu</a></li><li class="l3"><a href="#sekwencje-tokenów">Sekwencje tokenów</a></li><li class="l3"><a href="#alternatywa-kompletnych-zapytań">Alternatywa kompletnych
+zapytań</a></li><li class="l2"><a href="#podstawowe-atrybuty">Podstawowe atrybuty</a></li><li class="l3"><a href="#orth-forma-tekstowa">orth — forma tekstowa</a></li><li class="l3"><a href="#base-lemat">base — lemat</a></li><li class="l3"><a href="#pos-część-mowy-w-tagsecie-modelu">pos — część mowy
+w tagsecie modelu</a></li><li class="l3"><a href="#upos-uniwersalna-część-mowy">upos — uniwersalna
+część mowy</a></li><li class="l3"><a href="#deprel-relacja-zależnościowa">deprel — relacja
+zależnościowa</a></li><li class="l3"><a href="#head-nadrzędnik-tokenu">head — nadrzędnik
+tokenu</a></li><li class="l3"><a href="#dependent-podrzędnik-tokenu">dependent —
+podrzędnik tokenu</a></li><li class="l3"><a href="#ner-jednostka-nazwana">ner — jednostka
+nazwana</a></li><li class="l3"><a href="#coref-koreferencja">coref — koreferencja</a></li><li class="l3"><a href="#window-base-i-window-orth-obecność-w-kontekście">window_base i window_orth — obecność w kontekście</a></li><li class="l2"><a href="#składnia-uproszczona">Składnia uproszczona</a></li><li class="l2"><a href="#wyrażenia-regularne">Wyrażenia regularne</a></li><li class="l3"><a href="#wyszukiwanie-fragmentu-wartości">Wyszukiwanie fragmentu
+wartości</a></li><li class="l2"><a href="#operator-zakresu">Operator zakresu</a></li><li class="l2"><a href="#atrybuty-cech-morfosyntaktycznych">Atrybuty cech
+morfosyntaktycznych</a></li><li class="l2"><a href="#jednostki-nazwane">Jednostki nazwane</a></li><li class="l2"><a href="#koreferencja">Koreferencja</a></li><li class="l3"><a href="#dowolny-element-klastra-coref">Dowolny element klastra — coref</a></li><li class="l3"><a href="#głowa-coref-h">Głowa — coref(H)</a></li><li class="l3"><a href="#część-coref-p">Część — coref(P)</a></li><li class="l3"><a href="#pełna-wzmianka-coref-m">Pełna wzmianka — coref(M)</a></li><li class="l2"><a href="#odległość-i-pozycja-nadrzędnika-lub-podrzędnika">Odległość i
+pozycja nadrzędnika lub podrzędnika</a></li><li class="l2"><a href="#analiza-kontekstu">Analiza kontekstu</a></li><li class="l2"><a href="#zagnieżdżanie-warunków">Zagnieżdżanie warunków</a></li><li class="l2"><a href="#filtrowanie-po-treści-zdań">Filtrowanie po treści zdań</a></li><li class="l3"><a href="#cała-sekwencja-w-jednym-zdaniu">Cała sekwencja w jednym
+zdaniu</a></li><li class="l3"><a href="#dodatkowy-element-w-tym-samym-zdaniu">Dodatkowy element w tym
+samym zdaniu</a></li><li class="l3"><a href="#kilka-elementów-w-dowolnej-kolejności">Kilka elementów w
+dowolnej kolejności</a></li><li class="l2"><a href="#filtrowanie-po-frekwencji">Filtrowanie po frekwencji</a></li><li class="l3"><a href="#najczęstsze-wartości-top">Najczęstsze wartości — top</a></li><li class="l3"><a href="#dolna-i-górna-granica-min-i-max">Dolna i górna granica — min i max</a></li><li class="l2"><a href="#filtrowanie-po-metadanych">Filtrowanie po metadanych</a></li><li class="l3"><a href="#autor">Autor</a></li><li class="l3"><a href="#tytuł">Tytuł</a></li><li class="l3"><a href="#data">Data</a></li><li class="l3"><a href="#własne-pola-metadanych">Własne pola metadanych</a></li><li class="l2"><a href="#złożone-przykłady">Złożone przykłady</a></li><li class="l3"><a href="#czasownik-z-podmiotem-i-dopełnieniem">Czasownik z podmiotem i
+dopełnieniem</a></li><li class="l3"><a href="#dopełnienie-z-modyfikatorem">Dopełnienie z modyfikatorem</a></li><li class="l3"><a href="#alternatywne-etykiety-podmiotu">Alternatywne etykiety
+podmiotu</a></li><li class="l3"><a href="#osoba-związana-składniowo-z-nazwą-organizacji">Osoba związana
+składniowo z nazwą organizacji</a></li><li class="l3"><a href="#kilka-lematów-w-jednym-zdaniu">Kilka lematów w jednym
+zdaniu</a></li><li class="l3"><a href="#zapytanie-z-datą-i-własną-metadaną">Zapytanie z datą i własną
+metadaną</a></li><li class="l2"><a href="#powiązana-dokumentacja">Powiązana dokumentacja</a></li></ul></nav><main><h1 id="przewodnik-po-języku-zapytań-wyszukiwarki-korpusuj">Przewodnik
+po języku zapytań wyszukiwarki Korpusuj</h1>
+<p>Język CQL (<em>Corpus Query Language</em>) w aplikacji Korpusuj służy
+do wyszukiwania tokenów i sekwencji tokenów w anotowanym korpusie.
+Zapytania mogą wykorzystywać formy tekstowe, lematy, części mowy, cechy
+morfologiczne, relacje składniowe, jednostki nazwane, koreferencję,
+treść zdań, frekwencję oraz metadane dokumentów.</p>
+<p>Działanie zapytania zależy od warstw zapisanych w korpusie. Zapytania
+o lemat korzystają z lematyzacji, zapytania składniowe — z anotacji
+zależnościowej, <code>ner</code> — z warstwy jednostek nazwanych, a
+<code>coref</code> — z warstwy koreferencji.</p>
+<hr/>
+<h2 id="podstawowa-składnia-języka-zapytań">Podstawowa składnia języka
+zapytań</h2>
+<p>Zapytanie dotyczące pojedynczego tokenu zapisuje się w nawiasach
+kwadratowych. Tokenem może być słowo, liczba, znak interpunkcyjny albo
+inny element wydzielony podczas analizy tekstu.</p>
+<p>Podstawowy warunek ma postać:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[atrybut="wartość"]</code></pre>
+<p>Atrybut wskazuje informację, która ma zostać sprawdzona, a wartość
+określa poszukiwaną cechę. Przykładowo:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wojna"]</code></pre>
+<p>Atrybut <code>base</code> oznacza lemat, czyli formę podstawową.
+Zapytanie znajduje wystąpienia, którym podczas anotacji przypisano lemat
+<code>wojna</code>. Wyniki mogą obejmować różne formy fleksyjne, takie
+jak „wojna”, „wojny”, „wojnę” i „wojną”, o ile występują w korpusie i
+zostały prawidłowo zanalizowane.</p>
+<p>Aby wyszukać konkretną formę zapisaną w tekście, należy użyć atrybutu
+<code>orth</code>:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="wojną"]</code></pre>
+<h3 id="równość-i-wykluczenie-wartości">Równość i wykluczenie
+wartości</h3>
+<p>Operator <code>=</code> wybiera tokeny spełniające warunek:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos="NOUN"]</code></pre>
+<p>Operator <code>!=</code> wybiera tokeny, które nie mają wskazanej
+wartości:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos!="NOUN"]</code></pre>
+<h3 id="łączenie-warunków-dotyczących-jednego-tokenu">Łączenie warunków
+dotyczących jednego tokenu</h3>
+<p>Kilka warunków dotyczących tego samego tokenu łączy się operatorem
+<code>&amp;</code>:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="mam" &amp; pos="subst"]</code></pre>
+<p>Zapytanie znajduje tokeny o formie <code>mam</code>, którym
+przypisano część mowy <code>subst</code>.</p>
+<p>Można połączyć większą liczbę cech:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="bohater" &amp; case="gen" &amp; number="pl"]</code></pre>
+<p>Wszystkie warunki wewnątrz jednego segmentu muszą być spełnione przez
+ten sam token.</p>
+<h3 id="sekwencje-tokenów">Sekwencje tokenów</h3>
+<p>Segmenty zapisane kolejno tworzą sekwencję:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wypowiedzieć"] [base="wojna"]</code></pre>
+<p>Zapytanie znajduje fragmenty, w których token o lemacie
+<code>wypowiedzieć</code> znajduje się bezpośrednio przed tokenem o
+lemacie <code>wojna</code>.</p>
+<p>Można łączyć różne atrybuty:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="móc"] [orth="zjeść"] [orth="obiad"] [orth="\\."]</code></pre>
+<p>Wynikiem sekwencji jest cały dopasowany fragment — od pierwszego do
+ostatniego tokenu.</p>
+<h3 id="alternatywa-kompletnych-zapytań">Alternatywa kompletnych
+zapytań</h3>
+<p>Dwie kompletne gałęzie zapytania można rozdzielić operatorem
+<code>||</code>:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">([orth="władza"] [orth="mediów"]) || ([base="władza"] [base="partia"])</code></pre>
+<p>Aplikacja wykonuje obie gałęzie i łączy ich wyniki. Nawiasy okrągłe
+wyznaczają granice poszczególnych sekwencji.</p>
+<p>Operatora <code>||</code> nie należy mylić z pojedynczym znakiem
+<code>|</code> używanym wewnątrz wartości:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="kot|pies"]</code></pre>
+<p>Pojedynczy znak <code>|</code> oznacza tutaj alternatywę wartości:
+lemat <code>kot</code> albo <code>pies</code>.</p>
+<hr/>
+<h2 id="podstawowe-atrybuty">Podstawowe atrybuty</h2>
+<h3 id="orth-forma-tekstowa"><code>orth</code> — forma tekstowa</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="Anię"]</code></pre>
+<p>Wyszukuje formę zapisaną w tekście jako <code>Anię</code>.</p>
+<h3 id="base-lemat"><code>base</code> — lemat</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="Ania"]</code></pre>
+<p>Wyszukuje wystąpienia, którym przypisano lemat <code>Ania</code>,
+niezależnie od ich formy fleksyjnej.</p>
+<h3 id="pos-część-mowy-w-tagsecie-modelu"><code>pos</code> — część mowy
+w tagsecie modelu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[pos="subst"]</code></pre>
+<p>Wyszukuje tokeny oznaczone wartością <code>subst</code>. Zestaw
+wartości zależy od modelu użytego do utworzenia korpusu.</p>
+<h3 id="upos-uniwersalna-część-mowy"><code>upos</code> — uniwersalna
+część mowy</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos="VERB"]</code></pre>
+<p>Wyszukuje tokeny oznaczone jako czasowniki w tagsecie Universal
+POS.</p>
+<h3 id="deprel-relacja-zależnościowa"><code>deprel</code> — relacja
+zależnościowa</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[deprel="nsubj"]</code></pre>
+<p>Wyszukuje tokeny pełniące wskazaną funkcję składniową względem
+nadrzędnika.</p>
+<h3 id="head-nadrzędnik-tokenu"><code>head</code> — nadrzędnik
+tokenu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="ryba" &amp; head="zjeść"]</code></pre>
+<p>Wyszukuje tokeny o lemacie <code>ryba</code>, których bezpośrednim
+nadrzędnikiem jest token pasujący do wartości <code>zjeść</code>.</p>
+<h3 id="dependent-podrzędnik-tokenu"><code>dependent</code> —
+podrzędnik tokenu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="miasto" &amp; dependent="piękny"]</code></pre>
+<p>Wyszukuje tokeny o lemacie <code>miasto</code>, które mają
+bezpośredni podrzędnik pasujący do wartości <code>piękny</code>.</p>
+<h3 id="ner-jednostka-nazwana"><code>ner</code> — jednostka
+nazwana</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[ner="S-persName"]</code></pre>
+<p>Wyszukuje tokeny oznaczone wskazaną etykietą jednostki nazwanej.</p>
+<h3 id="coref-koreferencja"><code>coref</code> — koreferencja</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[coref(H)="Polska"]</code></pre>
+<p>Wyszukuje elementy klastra koreferencyjnego zgodnie z wybraną
+rolą.</p>
+<h3 id="window-base-i-window-orth-obecność-w-kontekście"><code>window_base</code>
+i <code>window_orth</code> — obecność w kontekście</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="pies" &amp; window_base(5)="kot"]</code></pre>
+<p>Sprawdza, czy w odległości do pięciu tokenów od badanego tokenu
+znajduje się wskazany lemat.</p>
+<hr/>
+<h2 id="składnia-uproszczona">Składnia uproszczona</h2>
+<p>Korpusuj pozwala wpisywać proste zapytania bez nawiasów kwadratowych.
+Tekst:</p>
+<pre class="text"><code>kot je rybę</code></pre>
+<p>jest interpretowany jako sekwencja form tekstowych:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="kot"] [orth="je"] [orth="rybę"]</code></pre>
+<p>Interpunkcja przylegająca do wyrazu jest wydzielana jako osobny
+token. Zapytanie:</p>
+<pre class="text"><code>Kto wygrał mecz?</code></pre>
+<p>odpowiada sekwencji:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="Kto"] [orth="wygrał"] [orth="mecz"] [orth="\\?"]</code></pre>
+<p>Można połączyć pełny segment CQL ze zwykłym tekstem:</p>
+<pre class="text"><code>[base="móc"] zjeść obiad.</code></pre>
+<p>Pierwszy element jest wyszukiwany według lematu, a pozostałe jako
+formy tekstowe:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="móc"] [orth="zjeść"] [orth="obiad"] [orth="\\."]</code></pre>
+<p>Gwiazdka wpisana jako osobny element oznacza dokładnie jeden dowolny
+token:</p>
+<pre class="text"><code>Polska * Niemcy</code></pre>
+<p>co odpowiada zapytaniu:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="Polska"] [*] [orth="Niemcy"]</code></pre>
+<hr/>
+<h2 id="wyrażenia-regularne">Wyrażenia regularne</h2>
+<p>Wyrażenia regularne są obsługiwane wewnątrz segmentów CQL.
+Najczęściej używane metaznaki to:</p>
+<ul>
+<li><code>.</code> — dowolny pojedynczy znak;</li>
+<li><code>?</code> — zero albo jedno wystąpienie poprzedzającego
+elementu;</li>
+<li><code>*</code> — zero albo więcej wystąpień poprzedzającego
+elementu;</li>
+<li><code>+</code> — jedno albo więcej wystąpień poprzedzającego
+elementu;</li>
+<li><code>[a-z]</code> — znak z podanego zakresu;</li>
+<li><code>\\d</code> — cyfra;</li>
+<li><code>\\w</code> — znak słowa;</li>
+<li><code>\\s</code> — biały znak;</li>
+<li><code>|</code> — alternatywa;</li>
+<li><code>( )</code> — grupa wzorca;</li>
+<li><code>\\</code> — potraktowanie następnego znaku dosłownie.</li>
+</ul>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="koty?"]</code></pre>
+<p>Znajduje formę <code>kot</code> albo <code>koty</code>.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="..."]</code></pre>
+<p>Znajduje tokeny składające się z dokładnie trzech znaków.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="woj.*"]</code></pre>
+<p>Znajduje formy rozpoczynające się od <code>woj</code>, na przykład
+„wojna”, „wojskowy” lub „województwo”.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth=".*a"]</code></pre>
+<p>Znajduje formy kończące się literą <code>a</code>.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="dom.+"]</code></pre>
+<p>Znajduje formy rozpoczynające się od <code>dom</code> i zawierające
+co najmniej jeden dalszy znak.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="kwesti(a|ę)"]</code></pre>
+<p>Znajduje formę <code>kwestia</code> albo <code>kwestię</code>.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="\\."]</code></pre>
+<p>Znajduje kropkę. Ukośnik odwrotny powoduje, że znak <code>.</code>
+jest rozumiany dosłownie.</p>
+<h3 id="wyszukiwanie-fragmentu-wartości">Wyszukiwanie fragmentu
+wartości</h3>
+<p>Wartość poprzedzona znakiem <code>~</code> służy do wyszukiwania
+ciągu wewnątrz tokenu:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="~zys"]</code></pre>
+<p>Zapytanie może znaleźć formy takie jak „kryzys”, „kryzysowy” i
+„zysk”.</p>
+<hr/>
+<h2 id="operator-zakresu">Operator zakresu</h2>
+<p>Segment:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[*]</code></pre>
+<p>oznacza jeden dowolny token.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="Polska"] [*] [orth="Niemcy"]</code></pre>
+<p>Zapytanie znajduje sekwencje, w których pomiędzy formami
+<code>Polska</code> i <code>Niemcy</code> znajduje się dokładnie jeden
+token.</p>
+<p>Zakres liczby dowolnych tokenów zapisuje się bezpośrednio po
+luce:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="Ania"] [*][1,3] [base="Tomek"]</code></pre>
+<p>Zapytanie dopuszcza od jednego do trzech tokenów pomiędzy
+elementami.</p>
+<p>Zakres może obejmować zero:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="kot"] [*][0,1] [base="zjeść"]</code></pre>
+<p>Elementy mogą znajdować się bezpośrednio obok siebie albo być
+rozdzielone jednym tokenem.</p>
+<hr/>
+<h2 id="atrybuty-cech-morfosyntaktycznych">Atrybuty cech
+morfosyntaktycznych</h2>
+<p>Cechy morfosyntaktyczne można łączyć z lematem lub częścią mowy.
+Najczęściej używane atrybuty to:</p>
+<ul>
+<li><code>case</code> — przypadek;</li>
+<li><code>number</code> — liczba;</li>
+<li><code>gender</code> — rodzaj;</li>
+<li><code>person</code> — osoba;</li>
+<li><code>aspect</code> — aspekt.</li>
+</ul>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="bohater" &amp; case="gen" &amp; number="pl"]</code></pre>
+<p>Zapytanie wyszukuje wystąpienia lematu <code>bohater</code> w
+dopełniaczu liczby mnogiej.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos="VERB" &amp; person="pri" &amp; number="sg" &amp; aspect="imperf"]</code></pre>
+<p>Zapytanie wyszukuje czasowniki niedokonane w pierwszej osobie liczby
+pojedynczej.</p>
+<p>Dokładne nazwy i wartości cech zależą od modelu językowego i warstw
+zapisanych w korpusie.</p>
+<hr/>
+<h2 id="jednostki-nazwane">Jednostki nazwane</h2>
+<p>Atrybut <code>ner</code> wyszukuje tokeny na podstawie etykiet
+jednostek nazwanych:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[ner="S-persName"]</code></pre>
+<p>Zestaw etykiet zależy od modelu użytego podczas tworzenia korpusu.
+Dla języka polskiego mogą występować typy takie jak:</p>
+<ul>
+<li><code>persName</code> — nazwa osoby;</li>
+<li><code>orgName</code> — nazwa organizacji;</li>
+<li><code>geogName</code> — nazwa geograficzna;</li>
+<li><code>placeName</code> — nazwa miejsca;</li>
+<li><code>date</code> — data;</li>
+<li><code>time</code> — czas.</li>
+</ul>
+<p>Stanza dodaje do typu jednostki prefiks opisujący pozycję tokenu:</p>
+<ul>
+<li><code>S-</code> — jednostka jednotokenowa;</li>
+<li><code>B-</code> — początek jednostki wielotokenowej;</li>
+<li><code>I-</code> — token wewnątrz jednostki;</li>
+<li><code>E-</code> — koniec jednostki wielotokenowej;</li>
+<li><code>O</code> — token nienależący do jednostki nazwanej.</li>
+</ul>
+<p>Zapytanie:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[ner=".-persName"]</code></pre>
+<p>wykorzystuje kropkę jako dowolny pojedynczy znak. Dzięki temu
+znajduje etykiety osób z dowolnym jednoterowym prefiksem, na przykład
+<code>S-persName</code>, <code>B-persName</code>,
+<code>I-persName</code> i <code>E-persName</code>.</p>
+<hr/>
+<h2 id="koreferencja">Koreferencja</h2>
+<p>Koreferencja łączy wzmianki odnoszące się do tego samego obiektu,
+osoby lub pojęcia. Zapytania koreferencyjne wymagają korpusu z warstwą
+koreferencji.</p>
+<h3 id="dowolny-element-klastra-coref">Dowolny element klastra —
+<code>coref</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[coref="Polska"]</code></pre>
+<p>Aplikacja odnajduje klaster zawierający wzmiankę pasującą do wartości
+<code>Polska</code>, a następnie zwraca tokeny należące do tego
+klastra.</p>
+<h3 id="głowa-coref-h">Głowa — <code>coref(H)</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[coref(H)="Kowalski"]</code></pre>
+<p>Zwraca tokeny oznaczone jako głowy wzmianek należących do
+dopasowanego klastra.</p>
+<h3 id="część-coref-p">Część — <code>coref(P)</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[pos="pron" &amp; coref(P)="Warszawa"]</code></pre>
+<p>Wyszukuje zaimki oznaczone jako części wzmianek w klastrze związanym
+z wartością <code>Warszawa</code>.</p>
+<h3 id="pełna-wzmianka-coref-m">Pełna wzmianka —
+<code>coref(M)</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[coref(M)="Polska"]</code></pre>
+<p>Zwraca pełną wzmiankę należącą do dopasowanego klastra
+koreferencyjnego.</p>
+<hr/>
+<h2 id="odległość-i-pozycja-nadrzędnika-lub-podrzędnika">Odległość i
+pozycja nadrzędnika lub podrzędnika</h2>
+<p>Atrybuty <code>head(...)</code> i <code>dependent(...)</code> mogą
+ograniczać pozycję elementu relacji względem badanego tokenu.</p>
+<p>Wartość dodatnia oznacza pozycję po prawej stronie, a ujemna — po
+lewej. Można również stosować operatory porównania odległości.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[head(1)="makaron"]</code></pre>
+<p>Wyszukuje tokeny, których nadrzędnik pasujący do wartości
+<code>makaron</code> znajduje się o jedną pozycję tokenową po prawej
+stronie.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[dependent(&lt;2)="smaczny"]</code></pre>
+<p>Wyszukuje tokeny mające podrzędnik <code>smaczny</code> spełniający
+podany warunek odległości.</p>
+<hr/>
+<h2 id="analiza-kontekstu">Analiza kontekstu</h2>
+<p>Atrybuty <code>window_base</code> i <code>window_orth</code>
+sprawdzają obecność wskazanego słowa w otoczeniu badanego tokenu — po
+lewej albo prawej stronie.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="pies" &amp; window_base(5)="kot"]</code></pre>
+<p>Wyszukuje tokeny o lemacie <code>pies</code>, jeżeli lemat
+<code>kot</code> występuje nie dalej niż pięć tokenów od nich.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[orth="Polska" &amp; window_orth(10)="gospodarka"]</code></pre>
+<p>Wyszukuje formę <code>Polska</code>, jeżeli w odległości do
+dziesięciu tokenów znajduje się forma <code>gospodarka</code>.</p>
+<p>Jeżeli odległość nie zostanie podana, aplikacja przeszukuje domyślnie
+50 tokenów po lewej i 50 tokenów po prawej stronie:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[pos="subst" &amp; window_base="wybory"]</code></pre>
+<hr/>
+<h2 id="zagnieżdżanie-warunków">Zagnieżdżanie warunków</h2>
+<p>Zagnieżdżone warunki w nawiasach klamrowych pozwalają dokładnie
+opisywać relacje <code>head</code> i <code>dependent</code>.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="trwać" &amp; dependent={base="wojna" &amp; deprel="nsubj"}]</code></pre>
+<p>Zapytanie znajduje token o lemacie <code>trwać</code>, jeżeli ma
+podrzędnik <code>wojna</code> w relacji <code>nsubj</code>.</p>
+<p>Można wymagać kilku podrzędników:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="zjeść" &amp; dependent={base="kot" &amp; deprel="nsubj"} &amp; dependent={base="ryba" &amp; deprel="obj"}]</code></pre>
+<p>Możliwe jest zagnieżdżenie wielopoziomowe:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="zjeść" &amp; dependent={deprel="obj" &amp; base="ryba" &amp; dependent={base="świeży" &amp; deprel="amod"}}]</code></pre>
+<p>Zapytanie opisuje czasownik <code>zjeść</code>, jego dopełnienie
+<code>ryba</code> oraz zależny od rzeczownika modyfikator
+<code>świeży</code>.</p>
+<p>Relację można zanegować:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="być" &amp; dependent!={orth="nie"}]</code></pre>
+<p>Negacja oznacza brak podrzędnika spełniającego cały warunek
+zagnieżdżony.</p>
+<hr/>
+<h2 id="filtrowanie-po-treści-zdań">Filtrowanie po treści zdań</h2>
+<p>Operator <code>&lt;s&gt;</code> ogranicza dopasowanie do jednego
+zdania albo nakłada dodatkowe warunki na zdanie zawierające główne
+trafienie.</p>
+<h3 id="cała-sekwencja-w-jednym-zdaniu">Cała sekwencja w jednym
+zdaniu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wygrać"] [*][1,3] [base="wojna"] &lt;s&gt;</code></pre>
+<p>Sekwencja musi w całości znajdować się w obrębie jednego zdania.</p>
+<h3 id="dodatkowy-element-w-tym-samym-zdaniu">Dodatkowy element w tym
+samym zdaniu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wygrać"] &lt;s [base="wojna"]&gt;</code></pre>
+<p>Zapytanie znajduje token <code>wygrać</code> w zdaniu zawierającym
+również token o lemacie <code>wojna</code>. Kolejność obu elementów jest
+dowolna.</p>
+<h3 id="kilka-elementów-w-dowolnej-kolejności">Kilka elementów w
+dowolnej kolejności</h3>
+<p>Warunki zapisane w nawiasach okrągłych wymagają obecności wszystkich
+podanych elementów w tym samym zdaniu, ale nie ustalają ich
+kolejności:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wygrać"] &lt;s ([base="Chinka"]) ([base="set"])&gt;</code></pre>
+<p>Zdanie musi zawierać zarówno lemat <code>Chinka</code>, jak i lemat
+<code>set</code>.</p>
+<hr/>
+<h2 id="filtrowanie-po-frekwencji">Filtrowanie po frekwencji</h2>
+<p>Operatory <code>&lt;frequency_base ...&gt;</code> i
+<code>&lt;frequency_orth ...&gt;</code> ograniczają wyniki według
+częstości lematów albo form tekstowych w zbiorze wyników.</p>
+<h3 id="najczęstsze-wartości-top">Najczęstsze wartości —
+<code>top</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="pies"] &lt;frequency_orth top="3"&gt;</code></pre>
+<p>Zapytanie zachowuje wyniki należące do trzech najczęstszych form
+tekstowych lematu <code>pies</code>.</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos="NOUN"] &lt;frequency_base top="10"&gt;</code></pre>
+<p>Zapytanie zachowuje wyniki należące do dziesięciu najczęstszych
+lematów wśród dopasowanych rzeczowników.</p>
+<h3 id="dolna-i-górna-granica-min-i-max">Dolna i górna granica —
+<code>min</code> i <code>max</code></h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[upos="VERB"] &lt;frequency_base min="2" max="10"&gt;</code></pre>
+<p>Zapytanie pozostawia wyniki, których lemat występuje w rozpatrywanym
+zbiorze co najmniej 2 i nie więcej niż 10 razy.</p>
+<p>Filtr frekwencji jest stosowany po wyszukaniu podstawowego zbioru
+wyników. Następnie aplikacja zlicza wartości <code>base</code> albo
+<code>orth</code> i stosuje parametry <code>top</code>, <code>min</code>
+i <code>max</code>.</p>
+<hr/>
+<h2 id="filtrowanie-po-metadanych">Filtrowanie po metadanych</h2>
+<p>Metadane opisują dokument jako całość. Filtr metadanych ogranicza
+dokumenty, w których wykonywana jest część tokenowa zapytania.</p>
+<h3 id="autor">Autor</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="Tadeusz"] &lt;autor="Mickiewicz"&gt;</code></pre>
+<p>Wyszukuje lemat <code>Tadeusz</code> w dokumentach, których pole
+autora spełnia podany warunek.</p>
+<h3 id="tytuł">Tytuł</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="dzień"] &lt;tytuł="~sen"&gt;</code></pre>
+<p>Wyszukuje lemat <code>dzień</code> w dokumentach, których tytuł
+zawiera ciąg <code>sen</code>.</p>
+<h3 id="data">Data</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="pies"] &lt;data="2024-04-.*"&gt;</code></pre>
+<p>Wyszukuje lemat <code>pies</code> w dokumentach z datą pasującą do
+podanego wzorca.</p>
+<p>Zakres dat można opisać dwoma warunkami:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="kot"] &lt;data &gt;= "2024-01-20"&gt; &lt;data &lt;= "2025-02-25"&gt;</code></pre>
+<p>Zapytanie ogranicza wyniki do dokumentów z datą mieszczącą się w
+podanym przedziale, włącznie z wartościami granicznymi.</p>
+<h3 id="własne-pola-metadanych">Własne pola metadanych</h3>
+<p>Dodatkowe kolumny zapisane w korpusie są dostępne przez prefiks
+<code>metadane:</code>:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="Duda"] &lt;metadane:portal="Wyborcza"&gt;</code></pre>
+<p>Wyszukuje lemat <code>Duda</code> w dokumentach, których pole
+<code>portal</code> ma wartość <code>Wyborcza</code>.</p>
+<p>Dla pól liczbowych lub porządkowalnych można użyć operatorów
+porównania:</p>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="mecz"] &lt;metadane:rok &gt; "2010"&gt;</code></pre>
+<hr/>
+<h2 id="złożone-przykłady">Złożone przykłady</h2>
+<h3 id="czasownik-z-podmiotem-i-dopełnieniem">Czasownik z podmiotem i
+dopełnieniem</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="zjeść" &amp; dependent={base="kot" &amp; deprel="nsubj"} &amp; dependent={base="ryba" &amp; deprel="obj"}]</code></pre>
+<h3 id="dopełnienie-z-modyfikatorem">Dopełnienie z modyfikatorem</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="zjeść" &amp; dependent={deprel="obj" &amp; base="ryba" &amp; dependent={base="świeży" &amp; deprel="amod"}}]</code></pre>
+<h3 id="alternatywne-etykiety-podmiotu">Alternatywne etykiety
+podmiotu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="trwać" &amp; dependent={base="wojna" &amp; deprel="nsubj|nsubj:pass"}]</code></pre>
+<h3 id="osoba-związana-składniowo-z-nazwą-organizacji">Osoba związana
+składniowo z nazwą organizacji</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[ner=".-persName" &amp; dependent={orth="prezes" &amp; dependent={ner=".-orgName"}}] [ner=".-persName"]</code></pre>
+<h3 id="kilka-lematów-w-jednym-zdaniu">Kilka lematów w jednym
+zdaniu</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="wygrać"] &lt;s ([base="Chinka"]) ([base="set"])&gt;</code></pre>
+<h3 id="zapytanie-z-datą-i-własną-metadaną">Zapytanie z datą i własną
+metadaną</h3>
+<pre class="cql language-korpusuj"><code class="language-korpusuj">[base="mecz"] &lt;data &gt;= "2020-01-01"&gt; &lt;metadane:gatunek="artykuł"&gt;</code></pre>
+<hr/>
+<h2 id="powiązana-dokumentacja">Powiązana dokumentacja</h2>
+<ul>
+<li><code>gui.md</code> — wykonywanie zapytań i przeglądanie wyników w
+interfejsie graficznym;</li>
+<li><code>cli.md</code> — uruchamianie zapytań, list zapytań, analiz i
+eksportu z wiersza poleceń;</li>
+<li><code>quickstart.md</code> — podstawowy przebieg pracy z
+aplikacją;</li>
+<li><code>architecture/search-pipeline.md</code> — techniczny opis
+przepływu wyszukiwania dla osób rozwijających aplikację.</li>
+</ul>
+<div class="foot">Dokumentacja aplikacji Korpusuj.</div></main></div><script>
+const b=document.body,t=document.getElementById('theme');if(localStorage.getItem('korpusuj-help-theme')==='dark')b.classList.add('dark');function label(){t.textContent=b.classList.contains('dark')?'☀️ Jasny':'🌙 Ciemny'}label();t.onclick=()=>{b.classList.toggle('dark');localStorage.setItem('korpusuj-help-theme',b.classList.contains('dark')?'dark':'light');label()};document.getElementById('tocbtn').onclick=()=>{const n=document.getElementById('toc'),l=document.querySelector('.layout');n.hidden=!n.hidden;l.classList.toggle('no-toc',n.hidden)};
+</script><script src="prism.js"></script><script>if(window.Prism){Prism.languages.korpusuj={string:{pattern:/"(?:\\.|[^"\\])*"/,greedy:true},attribute:{pattern:/\b(?:orth|base|pos|upos|deprel|head|dependent|ner|coref|window_base|window_orth|case|number|gender|person|aspect|frequency_base|frequency_orth|top|min|max|autor|tytuł|data|metadane)\b/u,alias:'keyword'},number:/\b\d+\b/,operator:/\|\||!=|>=|<=|=|>|<|&|\||~|\*|\+/,punctuation:/[\[\]{}()]/};Prism.highlightAll()}</script></body></html>

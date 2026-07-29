@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="pl"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><title>Instrukcja użytkownika — Korpusuj</title><style>
+:root{--bg:#f5f7fa;--surface:#fff;--text:#202938;--muted:#5e6b7a;--border:#d7dee7;--accent:#285f9e;--code:#f3f5f7;--shadow:0 10px 30px rgba(25,42,70,.10)}
+body.dark{--bg:#10151c;--surface:#181f29;--text:#e7edf5;--muted:#aab7c6;--border:#334052;--accent:#75b7ff;--code:#111821;--shadow:0 10px 30px rgba(0,0,0,.3);color-scheme:dark}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.68 "Segoe UI",system-ui,sans-serif}.bar{position:sticky;top:0;z-index:10;height:58px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;background:var(--surface);border-bottom:1px solid var(--border)}button{font:inherit;color:var(--text);background:var(--code);border:1px solid var(--border);border-radius:999px;padding:.4rem .75rem;cursor:pointer}.layout{max-width:1320px;margin:auto;display:grid;grid-template-columns:270px minmax(0,920px);gap:26px;padding:28px 22px 48px}.toc{position:sticky;top:82px;align-self:start;max-height:calc(100vh - 105px);overflow:auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px}.toc h2{font-size:1rem;margin:0 0 .8rem}.toc ul{list-style:none;padding:0;margin:0}.toc li{margin:.2rem 0}.toc .l3{padding-left:1rem;font-size:.92rem}.toc .l4{padding-left:2rem;font-size:.86rem}.toc a{display:block;padding:.18rem .3rem;text-decoration:none;color:var(--muted);border-radius:5px}.toc a:hover{background:var(--code);color:var(--accent)}main{min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:clamp(24px,4vw,52px)}h1{font-size:clamp(2rem,4vw,2.8rem);line-height:1.15;margin-top:0}h2{font-size:1.55rem;margin-top:2.6rem;padding-bottom:.35rem;border-bottom:1px solid var(--border)}h3{font-size:1.25rem;margin-top:2rem}h4{font-size:1.08rem;margin-top:1.5rem}h1,h2,h3,h4{scroll-margin-top:78px}a{color:var(--accent)}hr{border:0;border-top:1px solid var(--border);margin:2.4rem 0}li{margin:.35rem 0}code,pre{font-family:"Cascadia Code",Consolas,monospace;background:var(--code)}code{border:1px solid var(--border);border-radius:4px;padding:.08rem .3rem}pre{overflow:auto;border:1px solid var(--border);border-radius:8px;padding:1rem 1.1rem}pre code{border:0;padding:0}table{display:block;overflow:auto;border-collapse:collapse}th,td{border:1px solid var(--border);padding:.55rem .7rem;text-align:left}th{background:var(--code)}.foot{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--border);color:var(--muted);font-size:.9rem}@media(max-width:900px){.layout{display:block;padding:14px}.toc{position:static;max-height:none;margin-bottom:14px}main{padding:24px 20px}}@media print{.bar,.toc{display:none}.layout{display:block;padding:0}main{border:0;box-shadow:none;padding:0}}
+
+code,pre,kbd,samp{font-variant-ligatures:none!important;font-feature-settings:"liga" 0,"calt" 0!important;text-decoration:none!important}
+.toc[hidden]{display:none}
+.layout.no-toc{grid-template-columns:1fr}
+</style></head><body><header class="bar"><strong>Korpusuj — pomoc</strong><div><button id="tocbtn">☰ Spis treści</button> <button id="theme">🌙 Ciemny</button></div></header><div class="layout"><nav class="toc" id="toc"><h2>Spis treści</h2><ul><li class="l2"><a href="#1-rozpoczęcie-pracy">1. Rozpoczęcie pracy</a></li><li class="l3"><a href="#uruchamianie-aplikacji">Uruchamianie aplikacji</a></li><li class="l3"><a href="#otwieranie-korpusu">Otwieranie korpusu</a></li><li class="l3"><a href="#okno-główne-aplikacji">Okno główne aplikacji</a></li><li class="l2"><a href="#2-tworzenie-nowego-korpusu">2. Tworzenie nowego korpusu</a></li><li class="l3"><a href="#dołączanie-metadanych-z-zewnętrznego-pliku">Dołączanie
+metadanych z zewnętrznego pliku</a></li><li class="l3"><a href="#analiza-językowa-i-zapis">Analiza językowa i zapis</a></li><li class="l2"><a href="#3-wyszukiwanie">3. Wyszukiwanie</a></li><li class="l3"><a href="#zapytanie-w-języku-cql">Zapytanie w języku CQL</a></li><li class="l3"><a href="#konstruktor-zapytań-i-kontekst">Konstruktor zapytań i
+kontekst</a></li><li class="l3"><a href="#porządkowanie-wyników">Sortowanie wyników</a></li><li class="l2"><a href="#4-przeglądanie-wyników">4. Przeglądanie wyników</a></li><li class="l2"><a href="#5-statystyki">5. Statystyki</a></li><li class="l3"><a href="#interpretacja-danych-w-tabelach">Interpretacja danych w
+tabelach</a></li><li class="l2"><a href="#6-wykresy">6. Wykresy</a></li><li class="l3"><a href="#konfiguracja-wykresu">Konfiguracja wykresu</a></li><li class="l2"><a href="#7-kolokacje">7. Kolokacje</a></li><li class="l3"><a href="#rodzaje-kontekstu">Rodzaje kontekstu</a></li><li class="l3"><a href="#filtry-i-miary">Filtry i miary</a></li><li class="l2"><a href="#8-profil-kolokacyjny">8. Profil kolokacyjny</a></li><li class="l2"><a href="#9-sieć-semantyczna">9. Sieć semantyczna</a></li><li class="l3"><a href="#tworzenie-sieci-semantycznej">Tworzenie sieci semantycznej</a></li><li class="l3"><a href="#tryby-wyświetlania-sieci">Tryby wyświetlania sieci</a></li><li class="l3"><a href="#raport-semantyczny">Raport semantyczny</a></li><li class="l3"><a href="#znaczenie-kluczowych-metryk-z-raportu">Znaczenie kluczowych
+metryk z raportu</a></li><li class="l3"><a href="#struktura-raportu-html">Struktura raportu HTML</a></li><li class="l3"><a href="#filtrowanie-wyników-według-ram">Filtrowanie wyników według
+ram</a></li><li class="l2"><a href="#10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
+(BERTopic)</a></li><li class="l2"><a href="#11-eksport-i-podkorpus">11. Eksport i podkorpus</a></li><li class="l2"><a href="#12-informacje-preferencje-pomoc-i-skróty">12. Informacje,
+preferencje, pomoc i skróty</a></li><li class="l2"><a href="#13-rozwiązywanie-problemów">13. Rozwiązywanie problemów</a></li></ul></nav><main><h1 id="instrukcja-użytkownika-korpusuj">Instrukcja użytkownika —
+Korpusuj</h1>
+<p>Niniejszy przewodnik opisuje pracę z aplikacją Korpusuj. Obejmuje
+wszystkie etapy: od tworzenia i otwierania korpusów, przez wyszukiwanie
+i przeglądanie konkordancji, aż po generowanie statystyk, wykresów,
+analizę kolokacji i profili kolokacyjnych. Omówione zostało również
+badanie sieci semantycznych, filtrowanie wyników według ram
+znaczeniowych, modelowanie tematyczne oraz eksportowanie danych.</p>
+<p><em>Uwaga: Składnia zapytań CQL oraz instrukcje korzystania z
+interfejsu wiersza poleceń zostały opisane w osobnych częściach
+dokumentacji.</em></p>
+<hr/>
+<h2 id="1-rozpoczęcie-pracy">1. Rozpoczęcie pracy</h2>
+<h3 id="uruchamianie-aplikacji">Uruchamianie aplikacji</h3>
+<p>Aplikację można uruchomić na dwa sposoby.</p>
+<h4 id="uruchamianie-pliku-exe">Uruchamianie pliku EXE</h4>
+<p>Uruchom plik <code>Korpusuj.exe</code>.</p>
+<h4 id="uruchamianie-za-pomoca-pythona">Uruchamianie za pomocą Pythona</h4>
+<p>Zainstaluj Python 3.11, otwórz terminal w katalogu aplikacji i wykonaj kolejno:</p>
+<pre class="sourceCode powershell"><code class="sourceCode powershell">py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python Korpusuj.py</code></pre>
+<p>Środowisko wirtualne oraz zależności trzeba przygotować tylko przed pierwszym uruchomieniem. Przy kolejnych uruchomieniach wystarczą polecenia:</p>
+<pre class="sourceCode powershell"><code class="sourceCode powershell">.\.venv\Scripts\Activate.ps1
+python Korpusuj.py</code></pre>
+<h3 id="otwieranie-korpusu">Otwieranie korpusu</h3>
+<p>Otwieranie gotowego korpusu przebiega następująco:</p>
+<ol type="1">
+<li>Z menu należy wybrać opcję <strong>Nowy projekt</strong>.</li>
+<li>Wskazać plik korpusu w formacie <code>.parquet</code>.</li>
+<li>Poczekać na zakończenie ładowania i przygotowywania projektu.</li>
+<li>Po pomyślnym wczytaniu danych można rozpocząć wyszukiwanie lub
+uruchomić wybraną analizę.</li>
+</ol>
+<p><strong>Ważne:</strong> Pierwsze otwarcie dużego korpusu może potrwać
+dłużej, ponieważ aplikacja przygotowuje indeksy przyspieszające
+wyszukiwanie. Jeżeli korpus zawiera anotacje składniowe, mogą być
+również przygotowywane dane pomocnicze umożliwiające ich sprawne
+przeszukiwanie.</p>
+<p>Jeżeli otwieranie zakończy się błędem, warto sprawdzić, czy plik
+istnieje i czy jest prawidłowym korpusem obsługiwanym przez aplikację.
+Szczegółowe informacje o ewentualnych błędach zapisywane są w pliku
+logów:</p>
+<pre class="text"><code>%LOCALAPPDATA%\Korpusuj\logs\gui\korpusuj.log</code></pre>
+<h3 id="okno-główne-aplikacji">Okno główne aplikacji</h3>
+<p>W głównym oknie aplikacji znajdują się między innymi:</p>
+<ul>
+<li>pole do wprowadzania zapytań wyszukiwania,</li>
+<li>przycisk uruchamiający wyszukiwanie oraz <strong>Konstruktor
+zapytań</strong>,</li>
+<li>ustawienia szerokości lewego i prawego kontekstu,</li>
+<li>opcje sortowania wyników,</li>
+<li>tabela konkordancji z nawigacją między stronami,</li>
+<li>panele analityczne: statystyki, wykresy, kolokacje oraz profil
+kolokacyjny,</li>
+<li>przyciski dedykowane eksportowi danych i uruchamianiu analiz
+dodatkowych.</li>
+</ul>
+<hr/>
+<h2 id="2-tworzenie-nowego-korpusu">2. Tworzenie nowego korpusu</h2>
+<p>Wbudowany kreator umożliwia tworzenie korpusu na podstawie wskazanych
+dokumentów. Wynikiem jest pojedynczy plik <code>.parquet</code>, który
+można później otworzyć za pomocą opcji <strong>Nowy
+projekt</strong>.</p>
+<p>W tym celu należy wybrać <strong>Utwórz korpus</strong>, określić
+mechanizm analizy językowej i potrzebne warstwy analizy, a następnie
+kliknąć <strong>Wybierz pliki</strong>. Program obsługuje różnorodne
+formaty: pliki tekstowe (TXT), dokumenty Word (DOCX), pliki PDF, arkusze
+kalkulacyjne (XLSX) oraz archiwa ZIP. Po załadowaniu materiałów na
+liście pozostawia się zaznaczone tylko te pozycje, które mają zostać
+przetworzone (zmiana strony nie usuwa zaznaczeń).</p>
+<ul>
+<li><strong>TXT i DOCX:</strong> Pliki czytane są jako czysty tekst; z
+dokumentów DOCX pobierane są kolejne akapity.</li>
+<li><strong>PDF:</strong> Aplikacja w pierwszej kolejności próbuje
+wyodrębnić standardową warstwę tekstową. Jeśli strona ma formę skanu,
+system użyje narzędzi OCR, o ile zainstalowany jest odpowiedni
+komponent.</li>
+<li><strong>XLSX:</strong> Każdy wiersz jest traktowany jako odrębny
+dokument. W oknie mapowania należy wskazać kolumnę zawierającą treść
+oraz kolumnę Nazwa pliku, która identyfikuje dokument. Arkusz może
+zawierać również dodatkowe kolumny z metadanymi np. tytuł, data
+publikacji, autor itp.</li>
+<li><strong>ZIP:</strong> Archiwum jest rozpakowywane, a zawarte w nim
+obsługiwane dokumenty przetwarzane są osobno.</li>
+</ul>
+<p>Po wczytaniu plików wybiera się polecenie <strong>Przetwórz
+pliki</strong>. Dalsze kroki zależą od typu dokumentów: w przypadku
+zwykłych tekstów pojawia się pytanie o metadane, natomiast dla arkuszy
+XLSX wyświetla się okno mapowania kolumn.</p>
+<h3 id="dołączanie-metadanych-z-zewnętrznego-pliku">Dołączanie
+metadanych z zewnętrznego pliku</h3>
+<p>Metadane to informacje opisujące dokument, niebędące jego główną
+treścią (np. autor, data, gatunek, źródło). Dołączenie do korpusu
+metadanych ułatwia późniejsze filtrowanie wyników i umożliwia
+generowanie zestawień zmian częstości w czasie.</p>
+<p>Jeżeli informacje opisujące dokumenty znajdują się w osobnym arkuszu
+XLSX, można dołączyć go niezależnie od formatu plików źródłowych. Po
+kliknięciu "Przetwórz pliki" program wyświetli pytanie:</p>
+<pre class="text"><code>Czy dodać osobny plik z metadanymi (np. metadane.xlsx)?</code></pre>
+<p>Aby dołączyć plik z metadanymi należy wybrać <strong>Tak</strong> i
+wskazać odpowiedni dokument. Plik z metadanymi powinien zawierać kolumnę
+<strong>Nazwa pliku</strong> (na jej podstawie metadane łączone są z
+plikami zawierającymi treść tekstów), kolejne kolumny powinny zawierać
+dodatkowe informacje opisujące dokumenty np. <strong>Tytuł</strong>,
+<strong>Data publikacji</strong>, <strong>Autor</strong>,
+<strong>Gatunek</strong>. Każdy wiersz powinien opisywać jeden
+dokument.</p>
+<p><em>Zalecenia dotyczące tworzenia pliku z metadanymi:</em></p>
+<ul>
+<li>Najpewniejszą metodą jest wpisywanie w arkuszu pełnych nazw plików
+wraz z rozszerzeniami (np. <code>raport_01.pdf</code>).</li>
+<li>Każda nazwa powinna występować w arkuszu tylko raz. W przypadku
+powtórzeń, późniejszy wiersz nadpisuje wcześniejsze dane.</li>
+<li>Brak przypisanego wiersza w pliku metadanych nie wstrzymuje
+przetwarzania danego dokumentu. Zostanie on załadowany z domyślnymi
+wartościami (np. data <code>0000-00-00</code>).</li>
+<li>Najlepiej stosować jednolity format daty (np.
+<code>YYYY-MM-DD</code>). Aplikacja rozpoznaje polskie nazwy miesięcy,
+jednak ujednolicony zapis gwarantuje poprawne wyświetlanie na
+późniejszych wykresach.</li>
+</ul>
+<h3 id="analiza-językowa-i-zapis">Analiza językowa i zapis</h3>
+<p>Przed rozpoczęciem należy wybrać mechanizm analizy językowej: <a href="https://stanfordnlp.github.io/stanza/" rel="noopener noreferrer" target="_blank">Stanza</a> lub <a href="https://spacy.io/" rel="noopener noreferrer" target="_blank">spaCy</a>. Można także wybrać dodatkowe warstwy
+przetwarzania tekstu (rozpoznawanie jednostek nazwanych NER lub
+rozwiązywanie koreferencji). Koreferencja języka polskiego w ramach
+spaCy korzysta z narzędzia <a href="https://github.com/ipipan/herference" rel="noopener noreferrer" target="_blank">Herference</a>. Włączenie
+tych warstw poszerza możliwości badawcze, ale zwiększa rozmiar pliku i
+wydłuża przetwarzanie. Przy pierwszym uruchomieniu nastąpi pobranie
+niezbędnych modeli językowych.</p>
+<p>Podczas pracy wyświetlany jest pasek postępu. Wyniki zapisywane są na
+bieżąco w plikach <code>.part_*</code>. W przypadku przerwania procesu
+możliwe jest jego wznowienie po wskazaniu tej samej ścieżki zapisu.
+Aplikacja wczyta wówczas ukończone fragmenty i pominie wcześniej
+przetworzone teksty. Wznowienie zadania wymaga użycia identycznych
+ustawień warstw anotacji.</p>
+<hr/>
+<h2 id="3-wyszukiwanie">3. Wyszukiwanie</h2>
+<h3 id="zapytanie-w-języku-cql">Zapytanie w języku CQL</h3>
+<p>Wyszukiwanie odbywa się przy pomocy języka CQL (<em>Corpus Query
+Language</em>).</p>
+<p>Przykład zapytania o lemat:</p>
+<pre class="text"><code>[base="wojna"]</code></pre>
+<p>Zapytanie znajduje wszystkie wystąpienia w korpusie, którym podczas
+anotacji przypisano lemat „wojna”. Wyniki mogą obejmować różne formy
+fleksyjne, na przykład „wojna”, „wojny” lub „wojną”.</p>
+<h3 id="konstruktor-zapytań-i-kontekst">Konstruktor zapytań i
+kontekst</h3>
+<p>Przed zatwierdzeniem wyszukiwania można ustawić wielkość
+<strong>Lewego kontekstu</strong> i <strong>Prawego kontekstu</strong>.
+Definiują one szerokość fragmentu tekstu wyświetlanego wokół
+znalezionego słowa. Ustawienie to wpływa wyłącznie na prezentację
+wyników.</p>
+<p>Wyszukiwanie uruchamia się klawiszem <code>Enter</code> lub
+przyciskiem w interfejsie. Kombinacja klawiszy <code>Shift+Enter</code>
+wstawia w polu wyszukiwania nową linię.</p>
+<p>W celu sformułowania zapytania w języku CQL można skorzystać z pomocy
+<strong>Konstruktora</strong>. Po wskazaniu w nim odpowiedniego
+atrybutu, operatora i wartości, system wygeneruje i wstawi gotowy
+fragment zapytania do pola wyszukiwania.</p>
+<h3 id="porządkowanie-wyników">Sortowanie wyników</h3>
+<p>Kolejność wyświetlania wyników konkordancji można zmienić za pomocą
+opcji <strong>Sortuj wyniki</strong>. Dostępne opcje obejmują
+sortowanie alfabetyczne, sortowanie po lewym lub prawym kontekście,
+według metadanych (autor, data) oraz według frekwencji lematu lub formy
+tekstowej.</p>
+<hr/>
+<h2 id="4-przeglądanie-wyników">4. Przeglądanie wyników</h2>
+<p>Wyniki zapytania wyświetlane są jako konkordancje w formacie Key Word
+in Context (KWIC). W kolejnych kolumnach wyświetlane są: metadane,
+kontekst lewy, dopasowanie i kontekst prawy.</p>
+<p>Kliknięcie danego wiersza spowoduje wyświetlenie szerszego kontekstu
+w oknie pełnego widoku po prawej stronie. Przyciski znajdujące się pod
+oknem pełnego widoku umożliwiają wygenerowanie grafu zależności
+składniowych, a także podświetlenie klastrów koreferencyjnych i
+jednostek nazwanych (jeśli korpus ma wygenerowane takie warstwy).</p>
+<p>Zaznaczony wiersz w tabeli konkordancji lub tekst w oknie pełnego
+widoku można skopiować przy użyciu skrótu <code>Ctrl+C</code>.</p>
+<hr/>
+<h2 id="5-statystyki">5. Statystyki</h2>
+<p>Zakładka <strong>Statystyki</strong> służy do analizy słownictwa
+pojawiającego się w wynikach wyszukiwania. Narzędzie generuje niezależne
+tabele dla lematów (<code>base</code>) i dokładnych form z tekstu
+(<code>orth</code>).</p>
+<h3 id="interpretacja-danych-w-tabelach">Interpretacja danych w
+tabelach</h3>
+<p>Tabela prezentuje następujące parametry statystyczne:</p>
+<ul>
+<li><strong>Liczba wystąpień:</strong> Łączna liczba wystąpień danej
+pozycji w zbiorze wyników.</li>
+<li><strong>Częstość względna:</strong> Liczba wystąpień odniesiona do
+liczby tokenów w analizowanym materiale. Pozwala porównywać zbiory lub
+okresy różniące się objętością.</li>
+<li><strong>Rozproszenie (DF):</strong> Liczba odrębnych dokumentów, w
+których występuje dana pozycja.</li>
+<li><strong>TF-IDF:</strong> Miara zwiększająca wagę pozycji
+charakterystycznych dla określonego dokumentu lub okresu, a
+zmniejszająca wagę pozycji szeroko rozpowszechnionych w analizowanym
+zbiorze.</li>
+<li><strong>Z-score:</strong> Miara wskazująca na stopień odchylenia
+popularności danego słowa od jego przeciętnego poziomu
+występowania.</li>
+</ul>
+<p>Kliknięcie nagłówka kolumny zmienia kierunek sortowania tabeli.</p>
+<hr/>
+<h2 id="6-wykresy">6. Wykresy</h2>
+<p>Wykresy przedstawiają zmiany częstości wybranych form na osi czasu.
+Wykorzystanie tej funkcji wymaga posiadania w korpusie poprawnie
+sformatowanych metadanych z datami publikacji.</p>
+<h3 id="konfiguracja-wykresu">Konfiguracja wykresu</h3>
+<p>Aby przygotować wykres, należy zaznaczyć w statystykach wybrane
+pozycje, które staną się liniami na wykresie. W
+<strong>Preferencjach</strong> możliwe jest ustawienie minimalnego progu
+wystąpień tokenów. Podniesienie tego progu ukrywa najrzadsze formy, co
+może zwiększyć czytelność analizy głównych trendów.</p>
+<p>Dostępne parametry konfiguracyjne to:</p>
+<ul>
+<li><strong>Wybierz typ wykresu:</strong>
+<ul>
+<li><em>Liczba wystąpień</em> (przydatna, gdy objętość materiału w
+porównywanych okresach jest podobna).</li>
+<li><em>Częstość względna</em> (zalecana przy porównywaniu okresów o
+różnej ilości tekstu).</li>
+<li><em>TF-IDF</em> lub <em>Z-score</em>.</li>
+</ul></li>
+<li><strong>Interwał:</strong> Grupowanie danych po dniach, miesiącach
+lub latach. Należy dobrać interwał odpowiednio do gęstości danych, by
+uniknąć fragmentacji wykresu.</li>
+<li><strong>Zakres dat:</strong> Umożliwia zdefiniowanie analizowanego
+okresu (opcja <strong>Niestandardowy zakres dat</strong>).</li>
+<li><strong>Skalowanie osi Y:</strong> Tryb automatyczny lub ręczny.
+Tryb ręczny wymaga podania wartości w polu <strong>Górny limit</strong>
+i sprawdza się w przypadku porównywania kilku osobnych wykresów w równej
+skali.</li>
+<li><strong>Zaznaczone elementy:</strong> Pozwalają wybrać słowa lub
+frazy, dla których zostanie wygenerowany wykres. Aby dla kilku pozycji
+utworzyć jedną serię, należy wybrać je z listy, wpisać ich wspólną nazwę
+w polu <strong>Nowa nazwa dla zaznaczonych</strong> i wybrać
+<strong>Grupuj/Zmień nazwę</strong>.</li>
+</ul>
+<p>Zmiany ustawień zatwierdza się przyciskiem <strong>Odśwież
+wykres</strong>. Wykres można zapisać na dysku jako plik graficzny
+poleceniem <strong>Zapisz wykres</strong>.</p>
+<hr/>
+<h2 id="7-kolokacje">7. Kolokacje</h2>
+<p>Analiza kolokacji pomaga znaleźć słowa często współwystępujące z
+badanym wyrażeniem.</p>
+<h3 id="rodzaje-kontekstu">Rodzaje kontekstu</h3>
+<ul>
+<li><strong>Kontekst liniowy:</strong> Analizuje wyrazy znajdujące się w
+określonej odległości od trafienia. Wykorzystuje się tu parametry
+<strong>L-span</strong> i <strong>R-span</strong>. Zaznaczenie
+<strong>Ogranicz do zdań</strong> zapobiega łączeniu wyrazów
+przekraczających granice zdania.</li>
+<li><strong>Kontekst składniowy:</strong> Analizuje relacje składniowe
+niezależnie od liniowej odległości między wyrazami (wymaga odpowiednich
+warstw w korpusie). Można w tym miejscu określić
+<strong>Kierunek</strong> relacji (nadrzędnik, podrzędnik) oraz
+zastosować filtry części mowy.</li>
+</ul>
+<h3 id="filtry-i-miary">Filtry i miary</h3>
+<ul>
+<li><strong>Forma kolokatu:</strong> Analiza może obejmować lematy
+(<code>base</code>) lub dokładne formy (<code>orth</code>).</li>
+<li><strong>Progi minimalne:</strong> Wymagane jest ustalenie progu
+minimalnych współwystąpień (<code>Min f</code>) oraz minimalnego
+rozproszenia w dokumentach (<code>Min r</code>).</li>
+<li><strong>Miary asocjacyjne:</strong> Do oceny siły przyciągania słów
+dostępne są miary takie jak <strong>Log-Dice</strong>, <strong>MI
+Score</strong>, <strong>T-score</strong> oraz
+<strong>Log-Likelihood</strong>.</li>
+</ul>
+<p>Po ustawieniu parametrów należy wybrać przycisk
+<strong>Oblicz</strong>. Tabela wyników umożliwia interaktywne przejście
+do tabeli konkordancji przez kliknięcie w menu rozwijanym (otwieranym
+przez kliknięcie prawym przyciskiem myszy) opcji <strong>Wyszukaj
+kolokację</strong>.</p>
+<hr/>
+<h2 id="8-profil-kolokacyjny">8. Profil kolokacyjny</h2>
+<p>Profil kolokacyjny ułatwia analizę kolokacji danego wyrazu,
+kategoryzując powiązania wyrazowe ze względu na pełnione funkcje
+składniowe. W efekcie zostaje utworzony uporządkowany zestaw typowych
+nadrzędników i podrzędników przypisanych do badanej formy.</p>
+<p>Generowanie profilu:</p>
+<ol type="1">
+<li>Należy wykonać wyszukiwanie główne.</li>
+<li>Wskazać słowo stanowiące podstawę analizy w polu <strong>Słowo
+centralne (węzeł)</strong>. W przypadku zapytań złożonych z wielu słów
+konieczne jest precyzyjne określenie, który token stanowi podstawę
+profilu (np. <strong>Token 1</strong>).</li>
+<li>Podać <strong>Minimalną frekwencję (<code>Min f</code>)</strong>
+(usuwa z profilu połączenia występujące rzadziej niż wskazany
+próg).</li>
+<li>Ustawić filtry wielkości liter i kategorie składniowe.</li>
+<li>Kliknąć <strong>Generuj</strong>.</li>
+</ol>
+<p>Podsumowanie profilu dzieli połączenia na grupy odpowiadające
+relacjom składniowym. W każdej grupie aplikacja przedstawia najlepiej
+ocenione pozycje, między innymi ranking Top 5 (wg Log-Dice), oraz
+umożliwia otwarcie pełnej listy.</p>
+<hr/>
+<h2 id="9-sieć-semantyczna">9. Sieć semantyczna</h2>
+<p>Sieć semantyczna służy do badania powiązań znaczeniowych w korpusie
+na podstawie modelowania wektorowego. Dla wybranego lematu aplikacja
+wyszukuje słowa używane w podobnych kontekstach. Słowa te są
+przedstawiane jako sąsiedzi semantyczni i grupowane w ramy na podstawie
+wzajemnych podobieństw.</p>
+<ul>
+<li><strong>Rama semantyczna:</strong> Grupa słów silnie i bezpośrednio
+związanych ze słowem centralnym w modelu semantycznym. Mogą do niej
+należeć synonimy, wyrazy bliskoznaczne, określenia powiązanych pojęć i
+inne słowa reprezentujące wspólny obszar znaczeniowy.</li>
+<li><strong>Rama kontekstowa:</strong> Grupa opisująca charakterystyczne
+otoczenie użycia lematu. Może zawierać słowa związane z określonym
+tematem lub sytuacją, nawet jeśli nie są one bezpośrednio bliskoznaczne
+ze słowem centralnym.</li>
+</ul>
+<h3 id="tworzenie-sieci-semantycznej">Tworzenie sieci semantycznej</h3>
+<p>Przed rozpoczęciem eksploracji aplikacja musi przygotować model
+semantyczny dla aktualnie otwartego korpusu. Model ten powstaje na
+podstawie sposobu użycia słów w dokumentach. Aplikacja analizuje
+konteksty, w których występują poszczególne lematy, i zapisuje je w
+postaci wektorów, czyli matematycznych reprezentacji ich użycia. Słowa
+pojawiające się w podobnych otoczeniach uzyskują podobne wektory i mogą
+zostać później połączone w sieci.</p>
+<p>Jeżeli dane potrzebne do utworzenia sieci nie są jeszcze dostępne, po
+otwarciu modułu <strong>Sieć semantyczna</strong> aplikacja zaproponuje
+ich przygotowanie. Należy uruchomić ten proces i poczekać na jego
+zakończenie. Czas obliczeń zależy przede wszystkim od wielkości korpusu,
+liczby różnych lematów oraz wydajności komputera. Przygotowanie modelu
+wykonuje się dla całego korpusu, dlatego po jego ukończeniu można badać
+kolejne słowa bez ponownego przetwarzania wszystkich dokumentów.</p>
+<p>Model semantyczny nie korzysta z gotowego słownika znaczeń.
+Odzwierciedla zależności wykryte w otwartym korpusie. To samo słowo może
+zatem mieć innych sąsiadów w korpusie prasowym, innych w literaturze, a
+jeszcze innych w zbiorze tekstów specjalistycznych. Wyniki należy
+interpretować jako opis sposobu użycia słownictwa w badanym
+materiale.</p>
+<p>Po przygotowaniu modelu sieć dla konkretnego słowa tworzona jest
+podczas eksploracji:</p>
+<ol type="1">
+<li>Z menu głównego należy otworzyć moduł <strong>Sieć
+semantyczna</strong>.</li>
+<li>W polu <strong>Słowo centralne...</strong> wpisać lemat, który ma
+być punktem wyjścia analizy.</li>
+<li>Wybrać przycisk <strong>Eksploruj</strong>.</li>
+</ol>
+<p>Aplikacja wyszukuje wtedy wektor podanego lematu i porównuje go z
+wektorami pozostałych słów. Do sieci wybierani są najbliżsi sąsiedzi
+semantyczni, czyli słowa o najbardziej podobnych sposobach użycia.
+Liczba pokazywanych sąsiadów zależy od ustawień grafu, a bardzo słabe
+podobieństwa są pomijane.</p>
+<p>Słowo centralne i jego sąsiedzi stają się węzłami sieci. Linie łączą
+te słowa, między którymi aplikacja wykryła odpowiednio silne
+podobieństwo. Połączenie nie oznacza automatycznie synonimii. Może
+wskazywać podobieństwo znaczenia, wspólny temat, typowe
+współwystępowanie albo użycie w zbliżonych sytuacjach.</p>
+<p>Na podstawie wzajemnych podobieństw aplikacja grupuje sąsiadów w
+ramy. Dla każdej ramy wyznaczane są słowa najlepiej reprezentujące
+grupę, słowa należące do jej rdzenia oraz pozycje bardziej peryferyjne.
+Aplikacja nadaje również ramie etykietę złożoną z najbardziej
+reprezentatywnych elementów i określa, czy ma ona charakter semantyczny,
+czy kontekstowy.</p>
+<p>Wizualny układ węzłów jest tylko sposobem prezentacji obliczonych
+relacji. Położenie słowa po lewej lub prawej stronie wykresu samo w
+sobie nie ma znaczenia językowego. Istotne są przede wszystkim
+połączenia, przypisanie do ram i wartości podobieństwa. Zmiana ziarna
+losowości może zmienić rozmieszczenie punktów bez zmiany samych relacji
+semantycznych.</p>
+<p>Po wybraniu kolejnego węzła można rozwinąć jego otoczenie. Jeżeli
+opcja <strong>Rozwijaj obecną gałąź</strong> jest włączona, nowe słowa
+zostaną dołączone do istniejącego grafu. Po jej wyłączeniu aplikacja
+utworzy nowy widok z wybranym słowem jako kolejnym punktem
+centralnym.</p>
+<h3 id="tryby-wyświetlania-sieci">Tryby wyświetlania sieci</h3>
+<ul>
+<li><strong>Eksploracja:</strong> Podstawowy tryb interaktywnego
+przeglądania i rozwijania sieci.</li>
+<li><strong>Kręgosłup (MST):</strong> Upraszcza sieć do struktury
+łączącej wszystkie widoczne węzły bez zamkniętych pętli. Dzięki
+ograniczeniu liczby krawędzi łatwiej prześledzić ogólną budowę grafu.
+Pominięte połączenia nadal istnieją w danych, ale nie są pokazywane w
+tym widoku.</li>
+<li><strong>Klastry:</strong> Widok wyróżniający zwarte grupy silniej
+powiązanych węzłów w obrębie grafu.</li>
+</ul>
+<p>W <strong>Ustawieniach grafu</strong> dostępne są opcje pozwalające
+na ograniczenie liczby dołączanych sąsiadów, zmianę ziarna losowości
+(Seed) czy preferowanie słownictwa domenowego kosztem bardzo pospolitych
+wyrażeń.</p>
+<h3 id="raport-semantyczny">Raport semantyczny</h3>
+<p>W celu uzyskania szczegółowej analizy statystycznej pola
+semantycznego można wygenerować Raport semantyczny. Skutkuje to
+utworzeniem kompleksowego pliku <code>report.html</code>.</p>
+<p>Aby utworzyć raport, należy otworzyć zakładkę sieci semantycznej,
+podać słowo centralne, upewnić się, że figuruje ono w modelu, a
+następnie wybrać polecenie <strong>Raport semantyczny</strong>.</p>
+<h3 id="znaczenie-kluczowych-metryk-z-raportu">Znaczenie kluczowych
+metryk z raportu</h3>
+<ul>
+<li><strong>Typowość:</strong> Bliskość wektora słowa do centrum swojej
+ramy. Wskazuje na stopień reprezentatywności słowa dla danej grupy.</li>
+<li><strong>Swoistość:</strong> Różnica między podobieństwem słowa do
+własnej ramy a jego podobieństwem do najbliższej innej ramy. Wysoka
+wartość oznacza, że słowo lepiej reprezentuje własną ramę i słabiej
+wiąże się z pozostałymi.</li>
+<li><strong>Nośność:</strong> Łączna miara przydatności słowa do
+interpretacji ramy. Uwzględnia typowość, swoistość, frekwencję, siłę
+lokalnych połączeń i podobieństwo do lemy centralnej, a zmniejsza wagę
+słów bardzo ogólnych.</li>
+<li><strong>Zwartość i Separacja:</strong> Jednorodność grupy oraz
+stopień odrębności ramy od najbliższej innej ramy, wyznaczany na
+podstawie podobieństwa ich centroidów. Wyższa wartość oznacza
+wyraźniejszą granicę między grupami.</li>
+<li><strong>Ogólność:</strong> Stopień uczestnictwa pojęcia w innych
+obszarach semantycznych całego korpusu.</li>
+</ul>
+<h3 id="struktura-raportu-html">Struktura raportu HTML</h3>
+<ul>
+<li><strong>Karty podsumowujące:</strong> Pokazują między innymi
+frekwencję lematu, liczbę wybranych sąsiadów, liczbę ram, gęstość i
+spójność grafu, średnie podobieństwo pola, separację ram, parametr Top-K
+oraz minimalne podobieństwo.</li>
+<li><strong>Globalne rankingi słów:</strong> Listy Top 25
+najważniejszych pojęć klasyfikowanych według Centralności, Swoistości i
+Nośności.</li>
+<li><strong>Przestrzeń semantyczna (PCA):</strong> Dwuwymiarowe
+uproszczenie przestrzeni wektorowej. Bliskość punktów pomaga odczytywać
+podobieństwo, ale same kierunki osi nie mają określonego znaczenia
+językowego.</li>
+<li><strong>Szczegóły ramy:</strong> Rozdzielenie zawartości klastrów na
+rdzeń znaczeniowy oraz ogólniejsze peryferie semantyczne.</li>
+<li><strong>Obecność w innych polach:</strong> Sekcja ta wskazuje, w
+jakich innych polach pojęciowych badany lemat pełni istotną funkcję
+poboczną.</li>
+</ul>
+<p>Raport może nie zostać wygenerowany, jeżeli lemat nie występuje w
+indeksie, brakuje jego wektora, nie odnaleziono wystarczającej liczby
+powiązanych sąsiadów lub materiał jest zbyt mało liczny do utworzenia
+prawidłowych ram statystycznych.</p>
+<hr/>
+<h3 id="filtrowanie-wyników-według-ram">Filtrowanie wyników według
+ram</h3>
+<p>Po rozpoznaniu i zdefiniowaniu ram znaczeniowych dla hasła, dostępna
+staje się funkcja filtrowania bieżących konkordancji w oparciu o
+ustalone profile znaczeniowe.</p>
+<p>Wymagane jest wcześniejsze wykonanie wyszukiwania. Następnie w panelu
+głównym wybiera się opcję <strong>Filtrowanie wyników według
+ram</strong>. Z listy rozwijanej wskazuje się wybraną ramę semantyczną
+lub kontekstową i zatwierdza przyciskiem <strong>Filtruj
+wyniki</strong>. Interfejs wyświetli licznik skuteczności filtra, a
+wyświetlana tabela zostanie ograniczona do wystąpień przypisanych przez
+aplikację do wybranej ramy. Przypisanie jest wynikiem automatycznej
+analizy i w przypadkach granicznych może wymagać sprawdzenia
+kontekstu.</p>
+<hr/>
+<h2 id="10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
+(BERTopic)</h2>
+<p>Korpusuj wykorzystuje bibliotekę <a href="https://maartengr.github.io/BERTopic/index.html" rel="noopener noreferrer" target="_blank">BERTopic</a>.
+Oficjalna dokumentacja opisuje pełne możliwości biblioteki; nie
+wszystkie z nich są dostępne bezpośrednio w interfejsie Korpusuj.</p>
+<p>Modelowanie tematyczne (BERTopic) umożliwia wyszukiwanie ukrytych
+wzorców i grupowanie dokumentów według rozpoznanych automatycznie
+tematów. Wynikiem analizy jest raport HTML prezentujący wizualizację
+klastrów i słowa kluczowe opisujące domeny tekstu.</p>
+<p>Tryby wyznaczania liczby tematów obejmują tryb domyślny bez
+narzuconego limitu, automatyczną redukcję zbliżonych tematów oraz ręczne
+podanie docelowej liczby tematów.</p>
+<p>Dostępne opcje przygotowania tekstu obejmują:</p>
+<ul>
+<li>Używanie form zlematyzowanych (podstawowych).</li>
+<li>Filtrowanie polskich słów funkcyjnych (stop-words).</li>
+<li>Mechanizm różnorodności słów (ogranicza powtarzanie bardzo podobnych
+wyrazów w opisie tematu, dzięki czemu etykieta może obejmować szerszy
+zakres charakterystycznego słownictwa).</li>
+</ul>
+<p>Polecenie <strong>Rozpocznij analizę</strong> inicjuje złożone
+obliczenia. W trakcie analizy wyświetlane są komunikaty o postępie
+operacji. Temat o identyfikatorze <code>-1</code> obejmuje dokumenty lub
+fragmenty, których model nie przypisał do żadnego wyodrębnionego tematu.
+Są one traktowane jako szum.</p>
+<p>Jeżeli pojawi się komunikat <strong>Brak tematów</strong>, warto użyć
+większego zbioru, zmienić tryb ustalania liczby tematów, wypróbować
+automatyczną redukcję oraz porównać wynik z włączoną i wyłączoną
+lematyzacją lub filtracją stop-words.</p>
+<hr/>
+<h2 id="11-eksport-i-podkorpus">11. Eksport i podkorpus</h2>
+<p>Aplikacja umożliwia eksportowanie uzyskanych danych.</p>
+<p>Polecenie <strong>Eksportuj wyniki</strong> pozwala zapisać bieżących
+konkordancji i zestawień tabelarycznych w zewnętrznym pliku.</p>
+<p>Istnieje możliwość ograniczenia przeszukiwanego materiału poprzez
+utworzenie podkorpusu:</p>
+<ul>
+<li><strong>Utwórz podkorpus z wyników</strong> – pozwala utworzyć
+mniejszego korpusu ograniczonego do bieżących wyników wyszukiwania.</li>
+<li><strong>Utwórz podkorpus po metadanych</strong> – pozwala wybrać
+dokumenty na podstawie dostępnych pól, na przykład daty, autora, tytułu,
+gatunku lub innych metadanych zapisanych w korpusie.</li>
+</ul>
+<hr/>
+<h2 id="12-informacje-preferencje-pomoc-i-skróty">12. Informacje,
+preferencje, pomoc i skróty</h2>
+<p><strong>Informacje o korpusie</strong> Moduł pokazuje podstawowe
+informacje o zawartości korpusu, między innymi liczbę dokumentów i
+tokenów, liczbę unikatowych lematów i form tekstowych, zakres dat
+publikacji oraz dostępne pola metadanych.</p>
+<p><strong>Preferencje</strong> Sekcja ta służy do zmiany konfiguracji
+aplikacji. Można w niej dostosować motyw, czcionki, styl wykresów,
+zachowanie pamięci RAM oraz minimalny próg pozycji uwzględnianych na
+wykresach. Opcje potwierdza się przyciskiem zapisu, a powrót do ustawień
+podstawowych realizowany jest poleceniem <strong>Domyślne</strong>.</p>
+<p><strong>Pomoc i Skróty</strong> W menu Pomoc dostępne są dokumenty:
+<strong>Instrukcja użytkownika</strong> i <strong>Przewodnik po języku
+zapytań</strong>. Istotne skróty klawiaturowe to:</p>
+<ul>
+<li><code>Enter</code> — wykonanie zapytania,</li>
+<li><code>Shift+Enter</code> — wymuszenie nowej linii,</li>
+<li><code>Ctrl+Z</code> — cofnij,</li>
+<li><code>Ctrl+Y</code> — ponów,</li>
+<li><code>Ctrl+C</code> — kopiuj.</li>
+</ul>
+<hr/>
+<h2 id="13-rozwiązywanie-problemów">13. Rozwiązywanie problemów</h2>
+<ul>
+<li><strong>Długi czas wczytywania korpusu po otwarciu:</strong> Podczas
+pierwszego otwarcia dużego korpusu tworzone są indeksy pomocnicze;
+proces ten należy doprowadzić do końca.</li>
+<li><strong>Brak wyników wyszukiwania (0 trafień):</strong> Należy
+sprawdzić składnię, wybrany atrybut, pisownię wartości, filtry
+metadanych oraz to, czy korpus zawiera wymaganą warstwę anotacji.</li>
+<li><strong>Puste tabele kolokacji:</strong> Wymagane jest wcześniejsze
+wykonanie wyszukiwania. Należy sprawdzić progi <code>Min f</code> oraz
+<code>Min r</code> (zbyt rygorystyczne wykluczają wyniki).</li>
+<li><strong>Błąd ustalenia lematu przez profil kolokacyjny:</strong>
+Przy złożonych zapytaniach należy upewnić się, że w polu <strong>Słowo
+centralne (węzeł)</strong> został wybrany odpowiedni token.</li>
+<li><strong>Pusty wykres:</strong> Do utworzenia wykresu wymagana jest
+obecność dat w metadanych dołączonych do korpusu</li>
+<li><strong>Błąd budowania sieci lub raportu semantycznego:</strong>
+Brak wyniku może być spowodowany niewystarczającym rozmiarem korpusu.
+Wszelkie błędy działania aplikacji zapisywane są na bieżąco w pliku
+<code>%LOCALAPPDATA%\Korpusuj\logs\gui\korpusuj.log</code>.</li>
+</ul>
+<div class="foot">Dokumentacja aplikacji Korpusuj.</div></main></div><script>
+const b=document.body,t=document.getElementById('theme');if(localStorage.getItem('korpusuj-help-theme')==='dark')b.classList.add('dark');function label(){t.textContent=b.classList.contains('dark')?'☀️ Jasny':'🌙 Ciemny'}label();t.onclick=()=>{b.classList.toggle('dark');localStorage.setItem('korpusuj-help-theme',b.classList.contains('dark')?'dark':'light');label()};document.getElementById('tocbtn').onclick=()=>{const n=document.getElementById('toc'),l=document.querySelector('.layout');n.hidden=!n.hidden;l.classList.toggle('no-toc',n.hidden)};
+</script></body></html>
