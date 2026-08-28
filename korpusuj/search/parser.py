@@ -299,3 +299,19 @@ def parse_frequency_base_attribute(query):
     if opts and "top" in opts:
         return opts["top"]
     return None
+
+
+def split_sentence_operator_query(query):
+    """Split ``LHS <s RHS>`` into its two ordinary CQL query parts."""
+    text = str(query or "").strip()
+    if "<s" not in text:
+        return None
+    token_part, sentence_part = text.split("<s", 1)
+    token_part = token_part.strip()
+    sentence_part = sentence_part.strip()
+    if sentence_part.endswith(">"):
+        sentence_part = sentence_part[:-1].strip()
+    if not token_part or not sentence_part:
+        return None
+    return {"token_part": token_part, "sentence_part": sentence_part}
+

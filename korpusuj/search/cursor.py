@@ -9,6 +9,55 @@ from __future__ import annotations
 import re
 
 
+
+def _sentence_operator_as_list(value):
+    """Normalize one document-array value without treating text as characters."""
+    if value is None:
+        return []
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, (str, bytes)):
+        return [value]
+    try:
+        return list(value)
+    except Exception:
+        return [value]
+
+
+def _sentence_operator_bounds(sentence_ids, token_index):
+    """Return the half-open sentence span containing token_index."""
+    index = int(token_index)
+    sentence_id = sentence_ids[index]
+    start = index
+    while start > 0 and sentence_ids[start - 1] == sentence_id:
+        start -= 1
+    end = index + 1
+    while end < len(sentence_ids) and sentence_ids[end] == sentence_id:
+        end += 1
+    return start, end
+
+
+def _sentence_operator_hit_parts(hit):
+    """Read the document and token coordinates from a supported hit shape."""
+    if isinstance(hit, dict):
+        return (
+            hit.get("doc_id", hit.get("row_idx")),
+            hit.get("start", hit.get("start_idx")),
+            hit.get("end", hit.get("end_idx")),
+        )
+    if isinstance(hit, (tuple, list)) and len(hit) >= 3:
+        return hit[0], hit[1], hit[2]
+    return None, None, None
+
+
+
 # KORPUSUJ_PATCH_145C1_SAFE_DIAGNOSTICS_IMPORT
 try:
     from korpusuj.search.diagnostics import (
@@ -1097,6 +1146,80 @@ def resolve_result_row_fulltext_111(row):
     except Exception:
         return row
 
+def _split_grouped_sentence_rhs_conjunction(text):
+    """Return adjacent top-level parenthesized RHS groups, never ordinary OR.
+
+    This helper is used only after the outer ``LHS <s RHS>`` operator has been
+    recognized. Parentheses elsewhere in CQL retain their normal grouping role.
+    """
+    source = str(text or "").strip()
+    if not source:
+        return None
+    groups = []
+    index = 0
+    length = len(source)
+    while index < length:
+        while index < length and source[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        if source[index] != "(":
+            return None
+        start = index + 1
+        index += 1
+        depth = 1
+        bracket_depth = 0
+        brace_depth = 0
+        quote = None
+        escaped = False
+        while index < length and depth:
+            char = source[index]
+            if escaped:
+                escaped = False
+                index += 1
+                continue
+            if char == "\\":
+                escaped = True
+                index += 1
+                continue
+            if quote is not None:
+                if char == quote:
+                    quote = None
+                index += 1
+                continue
+            if char in ('"', "'"):
+                quote = char
+                index += 1
+                continue
+            if char == "[":
+                bracket_depth += 1
+            elif char == "]" and bracket_depth:
+                bracket_depth -= 1
+            elif char == "{" and bracket_depth == 0:
+                brace_depth += 1
+            elif char == "}" and bracket_depth == 0 and brace_depth:
+                brace_depth -= 1
+            elif bracket_depth == 0 and brace_depth == 0:
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        group = source[start:index].strip()
+                        if not group:
+                            return None
+                        groups.append(group)
+            index += 1
+        if depth != 0 or quote is not None or bracket_depth != 0 or brace_depth != 0:
+            return None
+        probe = index
+        while probe < length and source[probe].isspace():
+            probe += 1
+        if probe < length and source.startswith("||", probe):
+            return None
+        index = probe
+    return groups if len(groups) >= 2 else None
+
 class SearchCursor:
     """Lazily discover, count, page and materialize final matches for a planned query."""
     def __init__(self, index, plan, left_context_size=10, right_context_size=10, corpus_path=None):
@@ -1450,6 +1573,10 @@ class SearchCursor:
     # END KORPUSUJ_MIGRATION_036L4F2_SIMPLE_INDEXED_MORPH_FASTPATH
 
     def _iter_hits(self):
+        sentence_operator = self.plan.get("sentence_operator") if isinstance(self.plan, dict) else None
+        if sentence_operator:
+            yield from self._iter_sentence_operator_hits()
+            return
         fast_iter_036l4f2 = self._iter_hits_simple_indexed_morph_036l4f2()
         if fast_iter_036l4f2 is not None:
             yield from fast_iter_036l4f2
@@ -2095,10 +2222,10 @@ class SearchCursor:
                 return
             child_postings = self._condition_postings(anchor)
         else:
-            for v in cond.get("values", [cond.get("value")]):
-                for d, ps in self.index.get_postings("base", v).items():
-                    s = child_postings.setdefault(int(d), set())
-                    for p in ps: s.add(int(p))
+            for d, ps in self._dependency_value_postings(cond).items():
+                s = child_postings.setdefault(int(d), set())
+                for p in ps:
+                    s.add(int(p))
             child_postings = {d: sorted(ps) for d, ps in child_postings.items()}
         pos_count = 0; yielded = 0
         for batch in self._iter_posting_batches(child_postings):
@@ -2131,10 +2258,10 @@ class SearchCursor:
                 return
             parent_postings = self._condition_postings(anchor)
         else:
-            for v in cond.get("values", [cond.get("value")]):
-                for d, ps in self.index.get_postings("base", v).items():
-                    s = parent_postings.setdefault(int(d), set())
-                    for p in ps: s.add(int(p))
+            for d, ps in self._dependency_value_postings(cond).items():
+                s = parent_postings.setdefault(int(d), set())
+                for p in ps:
+                    s.add(int(p))
             parent_postings = {d: sorted(ps) for d, ps in parent_postings.items()}
         yielded = 0
         for batch in self._iter_posting_batches(parent_postings):
@@ -2243,8 +2370,45 @@ class SearchCursor:
             return False
         return False
 
+    def _dependency_value_postings(self, cond):
+        """Return base postings using the dependency condition's match mode."""
+        values = [
+            value
+            for value in cond.get("values", [cond.get("value")])
+            if value is not None
+        ]
+        match_type = str(cond.get("match_type") or "exact")
+        base_condition = {
+            "attr": "base",
+            "values": values,
+            "value": values[0] if values else None,
+            "match_type": match_type,
+        }
+        return self._condition_postings(base_condition) or {}
+
     def _dep_value_ok(self, actual, cond):
-        return str(actual) in {str(v) for v in cond.get("values", [cond.get("value")]) if v is not None}
+        """Match a resolved dependency lemma with ordinary CQL semantics."""
+        actual = str(actual)
+        values = [
+            str(value)
+            for value in cond.get("values", [cond.get("value")])
+            if value is not None
+        ]
+        match_type = str(cond.get("match_type") or "exact")
+        if match_type == "exact":
+            return actual in set(values)
+        for pattern in values:
+            try:
+                compiled = re.compile(pattern)
+            except re.error:
+                continue
+            if match_type == "regex_search":
+                if compiled.search(actual) is not None:
+                    return True
+            elif match_type == "regex":
+                if compiled.fullmatch(actual) is not None:
+                    return True
+        return False
     def _dep_distance_ok(self, spec, parent_pos, child_pos, kind="dependent"):
         if not spec: return True
         dist = int(parent_pos) - int(child_pos) if kind == "head" else int(child_pos) - int(parent_pos)
@@ -2273,10 +2437,10 @@ class SearchCursor:
             child_postings = self._condition_postings(anchor)
         else:
             # Semantyka legacy: dependent="X" sprawdza lemat zależnego tokenu.
-            for v in cond.get("values", [cond.get("value")]):
-                for d, ps in self.index.get_postings("base", v).items():
-                    s = child_postings.setdefault(int(d), set())
-                    for p in ps: s.add(int(p))
+            for d, ps in self._dependency_value_postings(cond).items():
+                s = child_postings.setdefault(int(d), set())
+                for p in ps:
+                    s.add(int(p))
             child_postings = {d: sorted(ps) for d, ps in child_postings.items()}
 
         self._candidate_preload_dependency_docs(child_postings.keys(), reason="dependent_seed")
@@ -2307,10 +2471,10 @@ class SearchCursor:
             parent_postings = self._condition_postings(anchor)
         else:
             # Semantyka legacy: head="X" sprawdza lemat nadrzędnika.
-            for v in cond.get("values", [cond.get("value")]):
-                for d, ps in self.index.get_postings("base", v).items():
-                    s = parent_postings.setdefault(int(d), set())
-                    for p in ps: s.add(int(p))
+            for d, ps in self._dependency_value_postings(cond).items():
+                s = parent_postings.setdefault(int(d), set())
+                for p in ps:
+                    s.add(int(p))
             parent_postings = {d: sorted(ps) for d, ps in parent_postings.items()}
 
         self._candidate_preload_dependency_docs(parent_postings.keys(), reason="head_seed")
@@ -2380,6 +2544,125 @@ class SearchCursor:
         )
         res = (publication_date, [left_context, matched_text_actual, right_context], full_text_ref_111, matched_text_actual, matched_lemmas, month_key, title, author, additional_metadata, left_context, right_context, doc_id, start, end)
         self._result_cache[i] = res; return res
+
+    def _sentence_operator_document(self, doc_id):
+        """Return one document through the ordinary cursor document cache."""
+        helper = globals().get("_get_doc_cached_036l4g7")
+        if callable(helper):
+            try:
+                return helper(self, int(doc_id))
+            except Exception:
+                pass
+        try:
+            return self.index.get_doc(int(doc_id))
+        except Exception:
+            return None
+
+    def _sentence_operator_hit_key(self, hit):
+        """Return a stable sentence key, rejecting spans crossing a boundary."""
+        
+        doc_id, start, end = _sentence_operator_hit_parts(hit)
+        if doc_id is None or start is None or end is None:
+            return None
+        try:
+            doc_id = int(doc_id)
+            start = int(start)
+            end = int(end)
+        except Exception:
+            return None
+        document = self._sentence_operator_document(doc_id)
+        if not isinstance(document, dict):
+            return None
+        sentence_ids = _sentence_operator_as_list(document.get("sentence_ids"))
+        if not sentence_ids or start < 0 or start >= len(sentence_ids) or end <= start:
+            return None
+        checked_end = min(end, len(sentence_ids))
+        sentence_id = sentence_ids[start]
+        if any(sentence_ids[position] != sentence_id for position in range(start, checked_end)):
+            return None
+        sentence_start, sentence_end = _sentence_operator_bounds(sentence_ids, start)
+        return doc_id, sentence_start, sentence_end
+
+    def _iter_sentence_operator_hits(self):
+        sentence_operator = self.plan.get("sentence_operator") or {}
+        grouped_rhs_parts = _split_grouped_sentence_rhs_conjunction(
+            sentence_operator.get("sentence_part")
+        )
+        if grouped_rhs_parts:
+            # Grouped RHS is a sentence-level conjunction. Plan each group as
+            # ordinary CQL instead of depending on the aggregate parenthesized
+            # plan shape, which belongs to normal top-level grouping/OR logic.
+            from korpusuj.search.planner import SearchPlanner
+
+            branch_plans = []
+            planner = SearchPlanner()
+            for branch_text in grouped_rhs_parts:
+                branch_plan = planner.plan(branch_text, self.index)
+                if not isinstance(branch_plan, dict) or not branch_plan.get("supported"):
+                    branch_plans = []
+                    break
+                branch_plans.append(branch_plan)
+
+            if len(branch_plans) == len(grouped_rhs_parts):
+                common_hits = None
+                for branch_text, branch_plan in zip(grouped_rhs_parts, branch_plans):
+                    child_plan = dict(self.plan)
+                    child_sentence_operator = dict(sentence_operator)
+                    child_sentence_operator["sentence_part"] = branch_text
+                    child_sentence_operator["rhs_plan"] = branch_plan
+                    child_plan["sentence_operator"] = child_sentence_operator
+                    child_cursor = SearchCursor(
+                        self.index,
+                        child_plan,
+                        self.left_context_size,
+                        self.right_context_size,
+                        corpus_path=self.corpus_path,
+                    )
+                    branch_hits = {
+                        (int(hit[0]), int(hit[1]), int(hit[2]))
+                        for hit in child_cursor._iter_hits()
+                    }
+                    common_hits = (
+                        branch_hits
+                        if common_hits is None
+                        else common_hits & branch_hits
+                    )
+                    if not common_hits:
+                        return
+                for hit in sorted(common_hits or ()):
+                    yield hit
+                return
+
+        """Execute complete RHS and retain complete LHS hits from the same sentences."""
+        specification = self.plan.get("sentence_operator") if isinstance(self.plan, dict) else None
+        if not isinstance(specification, dict):
+            return
+        rhs_plan = specification.get("rhs_plan")
+        if not isinstance(rhs_plan, dict):
+            raise ValueError("sentence operator plan has no rhs_plan")
+
+        lhs_plan = dict(self.plan)
+        lhs_plan.pop("sentence_operator", None)
+        cursor_arguments = {
+            "left_context_size": self.left_context_size,
+            "right_context_size": self.right_context_size,
+            "corpus_path": self.corpus_path,
+        }
+        rhs_cursor = SearchCursor(self.index, rhs_plan, **cursor_arguments)
+        matching_sentences = set()
+        for rhs_hit in rhs_cursor._iter_hits():
+            sentence_key = rhs_cursor._sentence_operator_hit_key(rhs_hit)
+            if sentence_key is not None:
+                matching_sentences.add(sentence_key)
+
+        if not matching_sentences:
+            return
+
+        lhs_cursor = SearchCursor(self.index, lhs_plan, **cursor_arguments)
+        for lhs_hit in lhs_cursor._iter_hits():
+            if lhs_cursor._sentence_operator_hit_key(lhs_hit) in matching_sentences:
+                yield lhs_hit
+
 
 
 
@@ -3904,45 +4187,6 @@ try:
 except Exception:
     TABLE_CONTEXT_SOURCE_POLICY = {"policy": "text_offsets_preferred"}
 
-# --- SENTENCE_OPERATOR_CURSOR_FILTER_167G ---
-def _install_sentence_operator_cursor_filter_167g():
-    try:
-        from korpusuj.search.sentence_operator import hit_parts, sentence_satisfies_conditions
-    except Exception:
-        return
-    cls = globals().get('SearchCursor')
-    if cls is None or getattr(cls, '_sentence_operator_cursor_filter_167g_installed', False): return
-    original_iter_hits = getattr(cls, '_iter_hits', None)
-    if not callable(original_iter_hits): return
-    def _doc_for_sentence_operator_167g(cursor, doc_id):
-        try:
-            fn = globals().get('_get_doc_cached_036l4g7')
-            if callable(fn): return fn(cursor, int(doc_id))
-        except Exception: pass
-        try: return cursor.index.get_doc(int(doc_id))
-        except Exception: return None
-    def iter_hits_with_sentence_operator_167g(self, *args, **kwargs):
-        spec = None
-        try:
-            plan = getattr(self, 'plan', None)
-            if isinstance(plan, dict): spec = plan.get('sentence_operator')
-        except Exception: spec = None
-        if not spec:
-            yield from original_iter_hits(self, *args, **kwargs); return
-        ordered = bool(spec.get('ordered')); conditions = spec.get('conditions') or []
-        for hit in original_iter_hits(self, *args, **kwargs):
-            doc_id, start, _end = hit_parts(hit)
-            if doc_id is None or start is None: continue
-            doc = _doc_for_sentence_operator_167g(self, doc_id)
-            if not isinstance(doc, dict): continue
-            try:
-                if sentence_satisfies_conditions(doc, int(start), ordered, conditions): yield hit
-            except Exception: continue
-    setattr(cls, '_iter_hits', iter_hits_with_sentence_operator_167g)
-    setattr(cls, '_sentence_operator_cursor_filter_167g_installed', True)
-try: _install_sentence_operator_cursor_filter_167g()
-except Exception: pass
-# --- END SENTENCE_OPERATOR_CURSOR_FILTER_167G ---
 
 # --- COREF_M_CONTIGUOUS_SHARED_CLUSTER_SPAN ---
 # coref(M) is a mention-span mode inherited from the legacy engine. It is not

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from korpusuj.search.parser import parse_single_condition, split_sentence_operator_query
 
 from korpusuj.index.sqlite_index import DEFAULT_INDEXED_ATTRS
 
@@ -17,13 +18,191 @@ DOC_FILTER_ATTRS_036L2B = {
     }
 # END KORPUSUJ_MIGRATION_036L2B_PLANNER_DOC_FILTER_ATTRS
 
+def _split_top_level_or(query):
+    """Split only top-level || operators, outside CQL containers and strings."""
+    text = str(query or "")
+    parts = []
+    start = 0
+    index = 0
+    square_depth = 0
+    brace_depth = 0
+    round_depth = 0
+    angle_depth = 0
+    quote = None
+    escaped = False
+
+    while index < len(text):
+        char = text[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            index += 1
+            continue
+
+        if char in ('"', "'"):
+            quote = char
+        elif char == "[":
+            square_depth += 1
+        elif char == "]" and square_depth:
+            square_depth -= 1
+        elif char == "{":
+            brace_depth += 1
+        elif char == "}" and brace_depth:
+            brace_depth -= 1
+        elif char == "(":
+            round_depth += 1
+        elif char == ")" and round_depth:
+            round_depth -= 1
+        elif char == "<":
+            angle_depth += 1
+        elif char == ">" and angle_depth:
+            angle_depth -= 1
+        elif (
+            char == "|"
+            and index + 1 < len(text)
+            and text[index + 1] == "|"
+            and square_depth == 0
+            and brace_depth == 0
+            and round_depth == 0
+            and angle_depth == 0
+        ):
+            parts.append(text[start:index].strip())
+            index += 2
+            start = index
+            continue
+        index += 1
+
+    parts.append(text[start:].strip())
+    if len(parts) <= 1 or any(not part for part in parts):
+        return None
+    return parts
+
+
+def _strip_balanced_outer_parentheses(query):
+    """Remove one outer (...) pair only when it encloses the complete query."""
+    text = str(query or "").strip()
+    if len(text) < 2 or text[0] != "(" or text[-1] != ")":
+        return text
+
+    depth = 0
+    quote = None
+    escaped = False
+    square_depth = 0
+    brace_depth = 0
+    angle_depth = 0
+
+    for index, char in enumerate(text):
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in ('"', "'"):
+            quote = char
+            continue
+        if char == "[":
+            square_depth += 1
+            continue
+        if char == "]" and square_depth:
+            square_depth -= 1
+            continue
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}" and brace_depth:
+            brace_depth -= 1
+            continue
+        if char == "<":
+            angle_depth += 1
+            continue
+        if char == ">" and angle_depth:
+            angle_depth -= 1
+            continue
+        if square_depth or brace_depth or angle_depth:
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return text
+            if depth == 0 and index != len(text) - 1:
+                return text
+
+    if quote is not None or depth != 0:
+        return text
+    return text[1:-1].strip()
+
+
 class SearchPlanner:
     """Translate parsed CQL into executable indexed-search plans."""
     INDEXABLE_ATTRS = set(DEFAULT_INDEXED_ATTRS)
     DEP_ATTR_RE = re.compile(r'^(head|dependent)(?:\(([^)]*)\))?$', re.IGNORECASE)
 
     def plan(self, query, index):
-        """Create an executable plan for a query and search index."""
+        """Create an executable plan, including native top-level OR unions."""
+        plan = self._plan_non_union(query, index)
+        if not (
+            isinstance(plan, dict)
+            and plan.get("supported") is False
+            and str(plan.get("reason") or "") == "elementy złożone CQL"
+        ):
+            return plan
+
+        branches = _split_top_level_or(query)
+        if not branches:
+            return plan
+
+        branch_plans = []
+        branch_queries = []
+        uses_dependency = False
+        for branch_query in branches:
+            normalized_query = _strip_balanced_outer_parentheses(branch_query)
+            branch_plan = self._plan_non_union(normalized_query, index)
+            if not (isinstance(branch_plan, dict) and branch_plan.get("supported")):
+                return plan
+            if str(branch_plan.get("type") or "") == "union":
+                return plan
+            branch_copy = dict(branch_plan)
+            branch_copy["or_union_branch_query"] = branch_query
+            branch_copy["or_union_normalized_query"] = normalized_query
+            branch_plans.append(branch_copy)
+            branch_queries.append(branch_query)
+            uses_dependency = bool(uses_dependency or branch_copy.get("uses_dependency"))
+
+        return {
+            "supported": True,
+            "type": "union",
+            "branches": branch_plans,
+            "branch_queries": branch_queries,
+            "metadata_filters": [],
+            "uses_dependency": uses_dependency,
+            "or_union_lazy_contract": True,
+        }
+
+    def _plan_non_union(self, query, index):
+        """Create an ordinary non-union plan for a query and search index."""
+        sentence_operator = split_sentence_operator_query(query)
+        if sentence_operator:
+            lhs_plan = self.plan(sentence_operator["token_part"], index)
+            rhs_plan = self.plan(sentence_operator["sentence_part"], index)
+            if not isinstance(lhs_plan, dict) or not isinstance(rhs_plan, dict):
+                raise ValueError("sentence operator requires plannable LHS and RHS queries")
+            combined_plan = dict(lhs_plan)
+            combined_plan["sentence_operator"] = {
+                "token_part": sentence_operator["token_part"],
+                "sentence_part": sentence_operator["sentence_part"],
+                "rhs_plan": rhs_plan,
+            }
+            return combined_plan
         available_attrs = set(self.INDEXABLE_ATTRS)
         try:
             meta_attrs = (index.meta().get("indexed_attrs", "") if index is not None else "")
@@ -213,14 +392,22 @@ class SearchPlanner:
             value = value[1:]
         dep_kind, dist = self._parse_dep_attr(raw_attr)
         if dep_kind:
+            parsed_attr, parsed_values, parsed_op, is_nested, parsed_match_type = (
+                parse_single_condition(part.strip())
+            )
+            if is_nested or str(parsed_attr).strip() != str(raw_attr).strip():
+                raise ValueError("niespójny prosty warunek zależnościowy")
+            values = list(parsed_values or [])
+            if not values:
+                raise ValueError("pusta wartość prostego warunku zależnościowego")
             return {
                 "attr": dep_kind,
                 "raw_attr": raw_attr,
-                "values": [value],
-                "value": value,
-                "match_type": "exact",
+                "values": values,
+                "value": values[0],
+                "match_type": parsed_match_type,
                 "distance": dist,
-                "neg": op == "!=",
+                "neg": parsed_op == "!=",
                 "is_dependency": True,
             }
         if raw_attr not in available_attrs and raw_attr not in DOC_FILTER_ATTRS_036L2B:
@@ -749,134 +936,3 @@ try:
     _install_searchplanner_gap_range_lazy_contract()
 except Exception:
     pass
-# Adds top-level || planning as a lazy union of ordinary supported branch plans.
-# This intentionally does not touch value-level alternatives such as
-# [base="wojna|światowy"], which already stay on ordinary SearchCursor routes.
-def _install_searchplanner_or_union_lazy_contract():
-    cls = globals().get("SearchPlanner")
-    if cls is None or getattr(cls, "_or_union_lazy_contract_installed", False):
-        return
-    original_plan = getattr(cls, "plan", None)
-    if not callable(original_plan):
-        return
-
-    def _split_top_level_or(query):
-        q = str(query or "")
-        parts = []
-        start = 0
-        i = 0
-        bracket_depth = 0
-        brace_depth = 0
-        in_str = False
-        esc = False
-        while i < len(q):
-            ch = q[i]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-                i += 1
-                continue
-            if ch == '"':
-                in_str = True
-                i += 1
-                continue
-            if ch == "[":
-                bracket_depth += 1
-                i += 1
-                continue
-            if ch == "]" and bracket_depth > 0:
-                bracket_depth -= 1
-                i += 1
-                continue
-            if ch == "{":
-                brace_depth += 1
-                i += 1
-                continue
-            if ch == "}" and brace_depth > 0:
-                brace_depth -= 1
-                i += 1
-                continue
-            if ch == "|" and i + 1 < len(q) and q[i + 1] == "|" and bracket_depth == 0 and brace_depth == 0:
-                parts.append(q[start:i].strip())
-                i += 2
-                start = i
-                continue
-            i += 1
-        parts.append(q[start:].strip())
-        if len(parts) <= 1:
-            return None
-        if any(not p for p in parts):
-            return None
-        return parts
-
-    def plan_or_union(self, query, index, *args, **kwargs):
-        plan = original_plan(self, query, index, *args, **kwargs)
-        try:
-            if not (isinstance(plan, dict) and plan.get("supported") is False):
-                return plan
-            if str(plan.get("reason") or "") != "elementy złożone CQL":
-                return plan
-            branches = _split_top_level_or(query)
-            if not branches:
-                return plan
-
-            branch_plans = []
-            uses_dependency = False
-            for branch_query in branches:
-                branch_plan = original_plan(self, branch_query, index, *args, **kwargs)
-                if not (isinstance(branch_plan, dict) and branch_plan.get("supported")):
-                    return plan
-                if str(branch_plan.get("type") or "") == "union":
-                    return plan
-                branch_copy = dict(branch_plan)
-                branch_copy["or_union_branch_query"] = branch_query
-                branch_plans.append(branch_copy)
-                uses_dependency = bool(uses_dependency or branch_copy.get("uses_dependency"))
-
-            return {
-                "supported": True,
-                "type": "union",
-                "branches": branch_plans,
-                "branch_queries": branches,
-                "metadata_filters": [],
-                "uses_dependency": uses_dependency,
-                "or_union_lazy_contract": True,
-            }
-        except Exception:
-            return plan
-
-    plan_or_union._or_union_lazy_contract_wrapped = True
-    setattr(cls, "plan", plan_or_union)
-    cls._or_union_lazy_contract_installed = True
-
-try:
-    _install_searchplanner_or_union_lazy_contract()
-except Exception:
-    pass
-
-# --- SENTENCE_OPERATOR_PLAN_SUPPORT_167G ---
-def _install_sentence_operator_plan_support_167g():
-    try:
-        from korpusuj.search.sentence_operator import split_sentence_operator_query, with_sentence_operator_metadata
-        from korpusuj.search.parser import parse_sentence_conditions
-    except Exception:
-        return
-    cls = globals().get('SearchPlanner')
-    if cls is None or getattr(cls, '_sentence_operator_plan_support_167g_installed', False): return
-    original_plan = getattr(cls, 'plan', None)
-    if not callable(original_plan): return
-    def plan_with_sentence_operator_167g(self, query, *args, **kwargs):
-        split = split_sentence_operator_query(query)
-        if not split: return original_plan(self, query, *args, **kwargs)
-        main_plan = original_plan(self, split['token_part'], *args, **kwargs)
-        return with_sentence_operator_metadata(main_plan, query, parse_sentence_conditions)
-    setattr(cls, 'plan', plan_with_sentence_operator_167g)
-    setattr(cls, '_sentence_operator_plan_support_167g_installed', True)
-try: _install_sentence_operator_plan_support_167g()
-except Exception: pass
-# --- END SENTENCE_OPERATOR_PLAN_SUPPORT_167G ---
-
