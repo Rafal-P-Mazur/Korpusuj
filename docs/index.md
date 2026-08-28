@@ -12,6 +12,7 @@ Dokumentacja obejmuje instalację, pierwsze uruchomienie, obsługę interfejsu g
 - [Interfejs graficzny](gui.md) — tworzenie i otwieranie korpusów, wyszukiwanie, statystyki, wykresy, kolokacje, sieć semantyczna, modelowanie tematyczne i eksport danych.
 - [Interfejs wiersza poleceń](cli.md) — tworzenie korpusów, zarządzanie indeksami, wyszukiwanie, analizy i eksport z terminala.
 - [Język zapytań CQL](cql.md) — składnia zapytań od podstawowych warunków tokenowych po relacje składniowe, NER, koreferencję, filtry zdań i metadane.
+- [Scalanie gotowych korpusów](corpus_merger.md)
 
 ## Architektura i rozwój
 

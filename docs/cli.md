@@ -807,7 +807,7 @@ python -m korpusuj.search.cli `
     --corpus-path korpus.parquet `
     --query '[base="wojna"]' `
     --analytics collocations `
-    --colloc-sort log-dice `
+    [consolidate_facet_reports_v4_1_5_fixed2.py](../consolidate_facet_reports_v4_1_5_fixed2.py)--colloc-sort log-dice `
     --pretty
 ```
 
