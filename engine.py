@@ -637,7 +637,7 @@ LINGUISTIC_COLUMNS_EXCLUDED_FROM_METADATA = {
     "Data publikacji", "Tytuł", "Autor", "tags", "Treść", "token_counts",
     "tokens", "lemmas", "deprels", "deprel", "postags", "pos", "full_postags",
     "word_ids", "sentence_ids", "head_ids", "start_ids", "start_id", "end_ids", "end_id",
-    "ners", "ner", "upostags", "upos", "corefs", "srl", "srls", "srl_frames",
+    "ners", "ner", "upostags", "upos", "corefs", "coref_mentions", "srl", "srls", "srl_frames",
 }
 
 
