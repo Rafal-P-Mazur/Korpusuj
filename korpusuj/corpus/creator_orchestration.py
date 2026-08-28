@@ -41,6 +41,14 @@ try:
 except Exception:
     herference = None
 from korpusuj.corpus.creator_core import CreatorRunOptions, NullProgressReporter, ProgressReporter
+from korpusuj.corpus.lemma_corrections import (
+    LemmaCorrectionsError,
+    apply_lemma_corrections,
+    disabled_lemma_corrections,
+    lemma_corrections_identity,
+    lemma_corrections_metadata,
+    load_lemma_corrections,
+)
 from korpusuj.corpus.creator_io import calculate_real_total_size, process_xlsx
 from korpusuj.corpus.creator_nlp import (
     CreatorModelState, initialize_spacy as _initialize_spacy,
@@ -101,6 +109,47 @@ def initialize_spacy(_label, _app):
     )
     _sync_models(); return bool(result)
 
+# Technical Unicode formatting characters observed in web-derived Polish text.
+# This explicit list is intentionally narrower than the whole Unicode Cf category.
+_NLP_UNSAFE_FORMAT_TRANSLATION = str.maketrans({
+    "\u00ad": None,
+    "\u200b": None,
+    "\u200c": None,
+    "\u200d": None,
+    "\u200e": None,
+    "\u2060": None,
+    "\u2063": None,
+    "\u2066": None,
+})
+_UNICODE_NORMALIZATION_STATS = {"documents": 0, "characters": 0}
+
+
+def _normalize_creator_text_for_nlp(text):
+    value = str(text or "")
+    normalized = value.translate(_NLP_UNSAFE_FORMAT_TRANSLATION)
+    removed = len(value) - len(normalized)
+    if removed:
+        _UNICODE_NORMALIZATION_STATS["documents"] += 1
+        _UNICODE_NORMALIZATION_STATS["characters"] += removed
+    return normalized
+
+
+def _reset_unicode_normalization_stats():
+    _UNICODE_NORMALIZATION_STATS["documents"] = 0
+    _UNICODE_NORMALIZATION_STATS["characters"] = 0
+
+
+def _log_unicode_normalization_summary():
+    documents = _UNICODE_NORMALIZATION_STATS["documents"]
+    characters = _UNICODE_NORMALIZATION_STATS["characters"]
+    if documents:
+        logging.warning(
+            "CREATOR_UNICODE_NORMALIZATION | documents=%d | removed_characters=%d",
+            documents,
+            characters,
+        )
+
+
 def _apply_optional_annotation_contract(processed_tokens):
     if processed_tokens is None:
         return None
@@ -129,6 +178,45 @@ def _schedule_creator_completion(_app, callback, success, output_file=None, erro
     if callback: callback(success=success, output_file=output_file, error_message=error_message)
 
 def _option(options, name, default=None): return getattr(options, name, default)
+
+
+_active_lemma_corrections = disabled_lemma_corrections()
+
+
+def _lemma_corrections_metadata():
+    return lemma_corrections_metadata(_active_lemma_corrections)
+
+
+def _read_declared_lemma_corrections(parquet_file):
+    try:
+        metadata = pq.read_metadata(parquet_file).metadata or {}
+        raw_meta = metadata.get(b"korpus_meta")
+        if not raw_meta:
+            return None
+        parsed = json.loads(raw_meta.decode("utf-8"))
+        value = parsed.get("lemma_corrections")
+        return value if isinstance(value, dict) else None
+    except Exception as exc:
+        logging.warning("Nie można odczytać lemma_corrections z %s: %s", parquet_file, exc)
+        return None
+
+
+def _validate_resume_lemma_corrections(parquet_file):
+    declared = _read_declared_lemma_corrections(parquet_file)
+    current = lemma_corrections_identity(_active_lemma_corrections)
+    if declared is None:
+        if current.get("enabled"):
+            raise ValueError(
+                "Niezgodna konfiguracja lemma_corrections dla resume: "
+                f"plik={parquet_file!r} nie deklaruje korekt, a bieżący przebieg je włącza."
+            )
+        return
+    declared_identity = {key: declared.get(key) for key in current}
+    if declared_identity != current:
+        raise ValueError(
+            "Niezgodna konfiguracja lemma_corrections dla resume: "
+            f"plik={parquet_file!r}, zapisane={declared_identity!r}, bieżące={current!r}."
+        )
 
 
 def _annotation_layers_metadata():
@@ -183,7 +271,10 @@ def _validate_resume_annotation_layers(parquet_file):
 def _write_creator_part(dataframe, part_file):
     table = pa.Table.from_pandas(dataframe)
     existing_meta = table.schema.metadata or {}
-    part_meta = {"annotation_layers": _annotation_layers_metadata()}
+    part_meta = {
+        "annotation_layers": _annotation_layers_metadata(),
+        "lemma_corrections": _lemma_corrections_metadata(),
+    }
     merged_meta = {
         **existing_meta,
         b"korpus_meta": json.dumps(part_meta, ensure_ascii=False).encode("utf-8"),
@@ -301,12 +392,18 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
                     yield {"skipped": True, "bytes_consumed": bytes_per_row, "filename": virt_fname}
                     continue
 
-                text = it["Treść"]
+                text = _normalize_creator_text_for_nlp(it["Treść"])
 
                 if model_name == "Stanza":
                     tokens = process_single_text(text, virt_fname, status_label, progress_bar, app)
                 else:
                     tokens = process_single_text_spacy(text, virt_fname, status_label, progress_bar, app)
+
+                if tokens is None:
+                    raise RuntimeError(
+                        "CREATOR_NLP_DOCUMENT_FAILURE | "
+                        f"document={virt_fname!r} | NLP returned no annotation"
+                    )
 
                 if tokens:
                     yield {
@@ -341,10 +438,17 @@ def process_file_global(file_path, status_label, progress_bar, app, model_name, 
                 text = process_pdf(file_path, status_label, app)
 
             if text.strip():
+                text = _normalize_creator_text_for_nlp(text)
                 if model_name == "Stanza":
                     tokens = process_single_text(text, file_base, status_label, progress_bar, app)
                 else:
                     tokens = process_single_text_spacy(text, file_base, status_label, progress_bar, app)
+
+                if tokens is None:
+                    raise RuntimeError(
+                        "CREATOR_NLP_DOCUMENT_FAILURE | "
+                        f"document={file_base!r} | NLP returned no annotation"
+                    )
 
                 if tokens:
                     yield {
@@ -477,6 +581,7 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
 
     # 3. WZNAWIANIE Z CHECKPOINTÓW
     BATCH_SIZE = 20  # Zmniejszony bufor: częstsze zapisy, mniejsze ryzyko utraty po przerwaniu
+    _reset_unicode_normalization_stats()
     batch_data = []
     temp_files_created = []
     batch_counter = 0
@@ -505,6 +610,7 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
             for p_file in existing_parts:
                 try:
                     _validate_resume_annotation_layers(p_file)
+                    _validate_resume_lemma_corrections(p_file)
                 except ValueError as exc:
                     error_message = str(exc)
                     logging.warning(error_message)
@@ -670,6 +776,7 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
                     if meta_override.get("Autor"): entry["Autor"] = meta_override["Autor"]
 
 
+                apply_lemma_corrections(processed_tokens, _active_lemma_corrections)
                 tokens_list = [t["token"] for t in processed_tokens]
                 lemmas_list = [t["lemma"] for t in processed_tokens]
 
@@ -746,6 +853,7 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
         return
 
     # 4. Merging
+    _log_unicode_normalization_summary()
     status_label.configure(text="Scalanie plików...")
     progress_bar_current.set(0)
     progress_bar_total.set(1.0)
@@ -758,6 +866,7 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
         "total_tokens": global_total_tokens,
         "monthly_token_counts": global_token_counts,
         "annotation_layers": _annotation_layers_metadata(),
+        "lemma_corrections": _lemma_corrections_metadata(),
     }
     meta_json_bytes = json.dumps(metadata_export, ensure_ascii=False).encode('utf-8')
 
@@ -849,12 +958,18 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
 def run_creator_job(options, reporter=None, *, model_state=None, models_dir=None, cancel_requested=None):
     """Run the existing creator workflow without Tkinter dependencies."""
     global _model_state, _reporter, _models_dir, _active_input_selection
-    global _enable_ner, _enable_coreference
+    global _enable_ner, _enable_coreference, _active_lemma_corrections
     _reporter = reporter or NullProgressReporter()
     _model_state = model_state or CreatorModelState()
     _models_dir = str(models_root(models_dir or _option(options, "models_dir", None)))
     _enable_ner = bool(_option(options, "enable_ner", True))
     _enable_coreference = bool(_option(options, "enable_coreference", True))
+    try:
+        _active_lemma_corrections = load_lemma_corrections(
+            _option(options, "lemma_corrections_path", None)
+        )
+    except LemmaCorrectionsError as exc:
+        return CreatorRunResult(False, error_message=str(exc))
     files = list(_option(options, "input_files", []) or [])
     if not files: return CreatorRunResult(False, error_message="Nie podano plików wejściowych.")
     if cancel_requested and cancel_requested(): return CreatorRunResult(False, error_message="Anulowano przed rozpoczęciem.")

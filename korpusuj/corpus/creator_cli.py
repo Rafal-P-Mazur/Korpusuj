@@ -93,6 +93,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--resume", action="store_true", help="Resume from compatible existing parts/output.")
     parser.add_argument(
+        "--lemma-corrections", default=None, metavar="FILE.json",
+        help="Optional UTF-8 JSON rules matching orth + lemma + UPOS; changes only lemmas.",
+    )
+    parser.add_argument(
         "--no-ner", action="store_false", dest="enable_ner", default=True,
         help="Disable named-entity recognition.",
     )
@@ -267,6 +271,16 @@ def main(argv: list[str] | None = None) -> int:
         metadata_path, excel_mappings = _build_metadata_configuration(
             args.metadata, args.mapping
         )
+        lemma_corrections_path = None
+        if args.lemma_corrections:
+            lemma_corrections_file = Path(args.lemma_corrections).expanduser().resolve()
+            if not lemma_corrections_file.is_file():
+                raise CreatorCliConfigurationError(
+                    f"Lemma corrections file does not exist: {lemma_corrections_file}"
+                )
+            if lemma_corrections_file.suffix.lower() != ".json":
+                raise CreatorCliConfigurationError("--lemma-corrections must point to a .json file.")
+            lemma_corrections_path = str(lemma_corrections_file)
         options = CreatorRunOptions(
             input_files=input_files,
             output_parquet_file=str(output),
@@ -276,6 +290,7 @@ def main(argv: list[str] | None = None) -> int:
             resume_mode=bool(args.resume),
             enable_ner=bool(args.enable_ner),
             enable_coreference=bool(args.enable_coreference),
+            lemma_corrections_path=lemma_corrections_path,
         )
     except CreatorCliConfigurationError as exc:
         payload = _configuration_error_payload(str(exc))

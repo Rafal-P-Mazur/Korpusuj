@@ -75,11 +75,14 @@ class CreatorRunOptions:
     processed_set: set[str] | None = None
     enable_ner: bool = True
     enable_coreference: bool = True
+    lemma_corrections_path: str | None = None
     def __post_init__(self) -> None:
         self.input_files = [str(path) for path in self.input_files]
         self.output_parquet_file = str(self.output_parquet_file)
         if self.metadata_path is not None:
             self.metadata_path = str(self.metadata_path)
+        if self.lemma_corrections_path is not None:
+            self.lemma_corrections_path = str(self.lemma_corrections_path)
         self.model_name = str(self.model_name or "stanza")
         if self.processed_set is not None:
             self.processed_set = {str(path) for path in self.processed_set}
