@@ -620,9 +620,11 @@ class SenseInducer:
                     "frame_type": frame_type,
                     "profile_type": frame_type,  # DODAJ TO
                     "label": cls._frame_label(
+                        members=sorted(biggest),
                         anchors=anchors,
                         background_markers=background,
-                        frame_type=frame_type
+                        G=G,
+                        frame_type=frame_type,
                     ),
                     "members": sorted(biggest),
                     "anchors": anchors[:5],

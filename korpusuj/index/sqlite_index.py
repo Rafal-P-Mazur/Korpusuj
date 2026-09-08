@@ -96,6 +96,39 @@ class SearchIndex:
         row = self.con.execute("SELECT postings FROM terms WHERE attr=? AND value=?", key).fetchone()
         return self.posting_cache.put(key, PostingList.decode(row["postings"]) if row else {})
     def get_doc_ids_for_term(self, attr, value): return set(self.get_postings(attr, value).keys())
+
+    # KORPUSUJ_PATCH_189V2_NER_HIGHLIGHTS_ON_DEMAND
+    def get_ner_labels(self, doc_id, token_count):
+        """Return token-aligned NER labels for one displayed document only."""
+        try:
+            doc_id = int(doc_id)
+            token_count = max(0, int(token_count))
+        except Exception:
+            return []
+        cache = getattr(self, "_ner_highlight_cache", None)
+        if cache is None:
+            cache = LRUCache(64)
+            self._ner_highlight_cache = cache
+        cached = cache.get(doc_id)
+        if cached is not None and len(cached) == token_count:
+            return list(cached)
+        labels = ["O"] * token_count
+        if token_count:
+            try:
+                rows = self.con.execute(
+                    "SELECT value, postings FROM terms WHERE attr=?", ("ner",)
+                ).fetchall()
+                for row in rows:
+                    positions = PostingList.decode(row["postings"]).get(doc_id, ())
+                    for position in positions:
+                        position = int(position)
+                        if 0 <= position < token_count:
+                            labels[position] = str(row["value"])
+            except Exception:
+                labels = ["O"] * token_count
+        cache.put(doc_id, tuple(labels))
+        return labels
+
     def get_doc(self, doc_id):
         doc_id = int(doc_id); cached = self.doc_cache.get(doc_id)
         if cached is not None: return cached
@@ -112,7 +145,7 @@ class SearchIndex:
             _row_keys = set(row.keys())
         except Exception:
             _row_keys = set()
-        for _col in ("deprels", "postags", "upostags", "full_postags", "corefs", "coref_mentions"):
+        for _col in ("deprels", "postags", "upostags", "full_postags", "ners", "corefs", "coref_mentions"):
             if _col in _row_keys:
                 doc[_col] = _json_zlib_loads(row[_col], []) or []
             else:
@@ -274,6 +307,10 @@ class SearchIndex:
 
 
     # KORPUSUJ_MIGRATION_036L4G8_BATCH_GET_DOCS
+    def get_docs_many(self, doc_ids, chunk_size=800):
+        """Stable public alias for the historical batch document loader."""
+        return self.get_docs_many_036l4g8(doc_ids, chunk_size=chunk_size)
+
     def get_docs_many_036l4g8(self, doc_ids, chunk_size=800):
         """Batch-load docs by doc_id with the same decoding contract as get_doc(...)."""
         ids = []
@@ -331,7 +368,7 @@ class SearchIndex:
                     _row_keys = set(row.keys())
                 except Exception:
                     _row_keys = set()
-                for _col in ("deprels", "postags", "upostags", "full_postags", "corefs", "coref_mentions"):
+                for _col in ("deprels", "postags", "upostags", "full_postags", "ners", "corefs", "coref_mentions"):
                     doc[_col] = (_json_zlib_loads(row[_col], []) or []) if _col in _row_keys else []
                 out[doc_id] = self.doc_cache.put(doc_id, doc)
         return out

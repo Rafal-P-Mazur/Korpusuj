@@ -1150,6 +1150,34 @@ def _collocate_occurrence_to_schema_result(occ, df, *, left_context=10, right_co
         "metadata": metadata,
         "raw_available": True,
     }
+
+# KORPUSUJ_PATCH_189A_CLI_ANALYTICS_RESOURCE_CLEANUP
+_ACTIVE_CLI_COLLOCATION_PROVIDERS = []
+
+
+def _cli_collocation_sqlite_provider(corpus_path):
+    """Create and register one SQLite collocation provider for this CLI run."""
+    from korpusuj.search.backend import LazyCorpus
+
+    parquet = Path(corpus_path)
+    search = parquet.with_suffix(".search")
+    if not search.is_file():
+        raise RuntimeError(f"Brak indeksu SQLite dla kolokacji: {search}")
+    provider = LazyCorpus(str(parquet), str(search))
+    _ACTIVE_CLI_COLLOCATION_PROVIDERS.append(provider)
+    return provider
+
+
+def _close_cli_collocation_providers():
+    """Close all collocation SQLite handles opened during the current CLI run."""
+    while _ACTIVE_CLI_COLLOCATION_PROVIDERS:
+        provider = _ACTIVE_CLI_COLLOCATION_PROVIDERS.pop()
+        try:
+            provider.close()
+        except Exception:
+            pass
+# END KORPUSUJ_PATCH_189A_CLI_ANALYTICS_RESOURCE_CLEANUP
+
 def _compute_cli_collocations_analytics(data, bundle):
     config = dict(_CLI_ANALYTICS_CONFIG or {})
     analytics_kind = str(config.get("analytics", "none") or "none").lower()
@@ -1183,9 +1211,8 @@ def _compute_cli_collocations_analytics(data, bundle):
     if not colloc_results:
         return _analytics_unavailable("no_results_with_doc_and_token_offsets_for_collocations", config=config)
     try:
-        import pandas as pd
         from korpusuj.search.collocations import CollocationOptions, CollocateFilterGroup, compute_collocations
-        df = pd.read_parquet(config.get("corpus_path"))
+        df = _cli_collocation_sqlite_provider(config.get("corpus_path"))
         filter_groups = [CollocateFilterGroup(**g) for g in (config.get("collocate_filter_groups") or [])]
         options = CollocationOptions(
             mode=config.get("colloc_mode", "Liniowe"), form_mode=config.get("colloc_form", "Lemat (base)"),
@@ -1197,7 +1224,7 @@ def _compute_cli_collocations_analytics(data, bundle):
             syn_dir=config.get("colloc_syn_dir", "Podrzędnik"),
             deprel_filter=config.get("colloc_deprel", "Wszystkie"),
         )
-        table = compute_collocations(colloc_results, df, _build_minimal_inverted_index_from_dataframe(df), options, feat_mapping={})
+        table = compute_collocations(colloc_results, df, df.background_index(), options, feat_mapping={})
         warnings = []
 
         _collocate_concordance_private = {}
@@ -1321,10 +1348,9 @@ def _build_selected_collocate_concordance_results(data, bundle, analytics, confi
             "source": source_info,
         }
 
-    import pandas as _selected_collocates_pd
     from korpusuj.search.collocations import CollocationOptions, CollocateFilterGroup, collect_collocate_occurrences
 
-    df = _selected_collocates_pd.read_parquet((config or {}).get("corpus_path"))
+    df = _cli_collocation_sqlite_provider((config or {}).get("corpus_path"))
     filter_groups = [CollocateFilterGroup(**g) for g in ((config or {}).get("collocate_filter_groups") or [])]
     options = CollocationOptions(
         mode=(config or {}).get("colloc_mode", "Liniowe"),
@@ -1450,10 +1476,9 @@ def _build_default_collocate_concordance_results(data, bundle, analytics, config
     else:
         return None, {"error": f"unsupported_analytics_scope: {scope}"}
 
-    import pandas as _default_collocates_pd
     from korpusuj.search.collocations import CollocationOptions, CollocateFilterGroup, collect_collocate_occurrences
 
-    df = _default_collocates_pd.read_parquet((config or {}).get("corpus_path"))
+    df = _cli_collocation_sqlite_provider((config or {}).get("corpus_path"))
     filter_groups = [CollocateFilterGroup(**g) for g in ((config or {}).get("collocate_filter_groups") or [])]
     options = CollocationOptions(
         mode=(config or {}).get("colloc_mode", "Liniowe"),
@@ -2351,18 +2376,20 @@ def _attach_cli_analytics_to_schema_data(data, bundle):
                 analytics.setdefault("warnings", []).append(f"default_collocate_concordance_runtime_error: {type(_default_collocate_concordance_exc).__name__}: {_default_collocate_concordance_exc}")
             except Exception:
                 pass
-    data["analytics"] = analytics
-    try:
-        if _CLI_ANALYTICS_CONFIG and not bool((_CLI_ANALYTICS_CONFIG or {}).get("include_analytics_payload", True)):
-            data.pop("analytics", None)
-            metadata["analytics_requested"] = []
-            metadata["analytics_included"] = []
-            metadata["analytics_payload_included"] = False
-    except Exception:
-        pass
     metadata = data.setdefault("metadata", {})
-    metadata["analytics_requested"] = analytics.get("requested", [])
-    metadata["analytics_included"] = analytics.get("included", [])
+    include_analytics_payload = bool(
+        (_CLI_ANALYTICS_CONFIG or {}).get("include_analytics_payload", True)
+    )
+    if include_analytics_payload:
+        data["analytics"] = analytics
+        metadata["analytics_requested"] = analytics.get("requested", [])
+        metadata["analytics_included"] = analytics.get("included", [])
+        metadata["analytics_payload_included"] = True
+    else:
+        data.pop("analytics", None)
+        metadata["analytics_requested"] = []
+        metadata["analytics_included"] = []
+        metadata["analytics_payload_included"] = False
     metadata["analytics_unavailable_reasons"] = analytics.get("unavailable_reasons", {})
     metadata["concordance_of"] = str(_CLI_ANALYTICS_CONFIG.get("concordance_of", "query") or "query")
     if (str(_CLI_ANALYTICS_CONFIG.get("concordance_of", "query") or "query").lower() == "collocates" and private_collocate_results is not None and not _CLI_ANALYTICS_CONFIG.get("analytics_only")):
@@ -3967,6 +3994,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_output(output, args.output)
         return 0
     finally:
+        _close_cli_collocation_providers()
         _progress_spinner.stop()
 
 # KORPUSUJ_PATCH_137C_DIAGNOSTIC_LOGGING_FLAGS_AND_CONFIG_CLI

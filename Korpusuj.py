@@ -1,6 +1,14 @@
 
 import os
 import sys
+import multiprocessing
+
+# KORPUSUJ_PATCH_190C_FROZEN_MULTIPROCESSING_ENTRYPOINT
+# Must run before tkinter and before importing engine/heavy ML libraries.
+# In a PyInstaller child process this diverts multiprocessing worker arguments
+# instead of starting a second copy of the GUI. It is a no-op in ordinary runs.
+multiprocessing.freeze_support()
+
 import tkinter as tk
 from korpusuj.runtime_paths import configure_ml_cache_environment as _configure_ml_cache_environment_182n
 _configure_ml_cache_environment_182n()

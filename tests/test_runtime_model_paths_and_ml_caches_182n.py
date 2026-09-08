@@ -9,6 +9,9 @@ import pytest
 import korpusuj.runtime_paths as runtime_paths
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 CACHE_RELATIVE = {
     "HF_HOME": Path(".huggingface"),
     "HF_HUB_CACHE": Path(".huggingface/hub"),

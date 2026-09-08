@@ -166,6 +166,15 @@ def _row_by_index(df: Any, row_idx: Any) -> Any:
     except Exception:
         idx = int(float(row_idx))
 
+    # SQLite document providers take precedence. Avoid hasattr/getattr probes
+    # that could activate a legacy broad __getattr__ implementation.
+    try:
+        get_doc = object.__getattribute__(df, "get_doc")
+    except (AttributeError, TypeError):
+        get_doc = None
+    if callable(get_doc):
+        return get_doc(idx)
+
     if hasattr(df, "iloc"):
         return df.iloc[idx]
 
@@ -178,6 +187,23 @@ def _row_by_index(df: Any, row_idx: Any) -> Any:
         if hasattr(df, "loc"):
             return df.loc[row_idx]
         raise
+
+
+def _prefetch_result_documents(provider: Any, results: Iterable[Any]) -> Any:
+    """Batch-load unique result documents when a SQLite provider supports it."""
+    try:
+        loader = object.__getattribute__(provider, "get_docs_many")
+    except (AttributeError, TypeError):
+        return provider
+    if not callable(loader):
+        return provider
+    doc_ids = []
+    seen = set()
+    for result in results:
+        doc_id = int(_result_indices(result)[0])
+        if doc_id not in seen:
+            seen.add(doc_id); doc_ids.append(doc_id)
+    return loader(doc_ids)
 
 def _row_value(row_data: Any, name: str, default: Any = None) -> Any:
     try:
@@ -319,11 +345,23 @@ def _sentence_bounds(start_idx: int, lemmas: list[Any], sentence_ids: Any, use_s
     return sent_start, sent_end
 
 
-def _background_frequency(inverted_index: dict[str, Any], form_mode: str, ignore_case: bool) -> tuple[dict[Any, int], int]:
-    bg_tf_raw = inverted_index.get("base_tf", {}) if form_mode == "Lemat (base)" else inverted_index.get("orth_tf", {})
+def _background_frequency(
+    inverted_index: dict[str, Any],
+    form_mode: str,
+    ignore_case: bool,
+    required_values: Iterable[Any] | None = None,
+) -> tuple[dict[Any, int], int]:
     total_tokens = int(inverted_index.get("total_tokens", 1) or 1)
     if total_tokens == 0:
         total_tokens = 1
+
+    provider = inverted_index.get("frequency_provider")
+    getter = getattr(provider, "get_background_frequencies", None)
+    if callable(getter) and required_values is not None:
+        attr = "base" if form_mode == "Lemat (base)" else "orth"
+        return dict(getter(attr, required_values, ignore_case=ignore_case) or {}), total_tokens
+
+    bg_tf_raw = inverted_index.get("base_tf", {}) if form_mode == "Lemat (base)" else inverted_index.get("orth_tf", {})
     if ignore_case:
         bg_tf: dict[str, int] = {}
         for k, v in (bg_tf_raw or {}).items():
@@ -468,13 +506,14 @@ def collect_collocate_occurrences(
     occurrences.
     """
     results_list = list(results or [])
+    row_source = _prefetch_result_documents(df, results_list)
     selected, ranks = _occurrence_selected_map(selected_collocates, ignore_case=options.ignore_case)
     rows: list[CollocateOccurrence] = []
     seen_slots: set[Any] = set()
 
     for res in results_list:
         row_idx, start_idx, end_idx = _result_indices(res)
-        row_data = _row_by_index(df, row_idx)
+        row_data = _row_by_index(row_source, row_idx)
         lemmas = _as_list(_row_value(row_data, "lemmas", []))
         tokens = _as_list(_row_value(row_data, "tokens", []))
         postags = _as_list(_row_value(row_data, "postags", []))
@@ -563,6 +602,7 @@ def compute_collocations(
     deduplication, total_actual_slots behavior, score formulas, and row sorting.
     """
     results_list = list(results or [])
+    row_source = _prefetch_result_documents(df, results_list)
     colloc_counter: Counter = Counter()
     colloc_doc_tracker: dict[Any, set] = {}
     total_actual_slots = 0
@@ -570,7 +610,7 @@ def compute_collocations(
 
     for res in results_list:
         row_idx, start_idx, end_idx = _result_indices(res)
-        row_data = _row_by_index(df, row_idx)
+        row_data = _row_by_index(row_source, row_idx)
         lemmas = _as_list(_row_value(row_data, "lemmas", []))
         tokens = _as_list(_row_value(row_data, "tokens", []))
         postags = _as_list(_row_value(row_data, "postags", []))
@@ -655,7 +695,12 @@ def compute_collocations(
                                             ignore_case=options.ignore_case,
                                         )
 
-    bg_tf, total_tokens = _background_frequency(inverted_index, options.form_mode, options.ignore_case)
+    bg_tf, total_tokens = _background_frequency(
+        inverted_index,
+        options.form_mode,
+        options.ignore_case,
+        required_values=colloc_counter.keys(),
+    )
     fn = len(results_list)
     if total_actual_slots == 0:
         total_actual_slots = 1

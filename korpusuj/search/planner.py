@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from korpusuj.search.parser import parse_single_condition, split_sentence_operator_query
+from korpusuj.search.parser import parse_single_condition, split_sentence_operator_query, extract_square_brackets
 
 from korpusuj.index.sqlite_index import DEFAULT_INDEXED_ATTRS
 
@@ -142,6 +142,28 @@ def _strip_balanced_outer_parentheses(query):
     return text[1:-1].strip()
 
 
+def normalize_plain_text_query(query):
+    """Convert a fully naked query to adjacent orth token brackets.
+
+    Existing CQL and mixed/structured syntax are left untouched. The conversion
+    reuses the public parser's escaping and tokenization contract.
+    """
+    text = str(query or '').strip()
+    if not text or '[' in text or ']' in text:
+        return text
+    # Do not reinterpret advanced syntax as plain text. Unsupported structures
+    # must retain their established logged fallback behavior.
+    if any(marker in text for marker in ('<', '>', '{', '}', '||')):
+        return text
+    try:
+        parts = extract_square_brackets(text)
+    except Exception:
+        return text
+    if not parts:
+        return text
+    normalized = ''.join(f'[{part}]' if part != '*' else '[*]' for part in parts)
+    return normalized or text
+
 class SearchPlanner:
     """Translate parsed CQL into executable indexed-search plans."""
     INDEXABLE_ATTRS = set(DEFAULT_INDEXED_ATTRS)
@@ -149,6 +171,7 @@ class SearchPlanner:
 
     def plan(self, query, index):
         """Create an executable plan, including native top-level OR unions."""
+        query = normalize_plain_text_query(query)
         plan = self._plan_non_union(query, index)
         if not (
             isinstance(plan, dict)

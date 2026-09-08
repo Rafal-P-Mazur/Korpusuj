@@ -14,6 +14,7 @@ class SearchCursorRuntime:
     put_dependency_ram_cache: Callable[[str, int, Any], None]
     preload_dependency_maps_for_candidates: Callable[..., int]
     dependency_maps_cache: Any
+    dependency_maps_cache_maxsize: int = 50000
     candidate_max_docs: int = 20000
     candidate_stream_batch_docs: int = 512
     full_context_size: int = 250
@@ -31,6 +32,7 @@ def configure_search_cursor_runtime(
     put_dependency_ram_cache: Callable[[str, int, Any], None],
     preload_dependency_maps_for_candidates: Callable[..., int],
     dependency_maps_cache: Any,
+    dependency_maps_cache_maxsize: int = 50000,
     candidate_max_docs: int = 20000,
     candidate_stream_batch_docs: int = 512,
     full_context_size: int = 250,
@@ -43,6 +45,7 @@ def configure_search_cursor_runtime(
         put_dependency_ram_cache=put_dependency_ram_cache,
         preload_dependency_maps_for_candidates=preload_dependency_maps_for_candidates,
         dependency_maps_cache=dependency_maps_cache,
+        dependency_maps_cache_maxsize=int(dependency_maps_cache_maxsize),
         candidate_max_docs=int(candidate_max_docs),
         candidate_stream_batch_docs=int(candidate_stream_batch_docs),
         full_context_size=int(full_context_size),

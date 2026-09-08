@@ -55,7 +55,7 @@ def configure_dependency_runtime_state(
 ) -> None:
     """Configure dependency runtime state from engine.py.
 
-    In 4e.1 this mirrors existing globals and does not change runtime behavior.
+    The configured object is the single mutable owner used by dependency runtime.
     """
     global _runtime_state
     _runtime_state = DependencyRuntimeState(

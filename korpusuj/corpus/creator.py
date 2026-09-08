@@ -250,23 +250,20 @@ from korpusuj.corpus.creator_chunking import (
 from korpusuj.corpus.creator_io import (
     calculate_real_total_size,
     process_xlsx,
+    safe_extract_zip,
 )
 
 
 def unpack_archive(file_path, status_label):
     temp_dir = tempfile.mkdtemp(prefix="archive_extract_", dir=str(writable_temp_root()))
-    extracted_files = []
     try:
-        if file_path.lower().endswith(".zip"):
-            with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                zip_ref.extractall(temp_dir)
-                for root, dirs, files in os.walk(temp_dir):
-                    for file in files:
-                        extracted_files.append(os.path.join(root, file))
+        extracted_files = safe_extract_zip(file_path, temp_dir) if file_path.lower().endswith(".zip") else []
         status_label.configure(text=f"Rozpakowano archiwum: {os.path.basename(file_path)}")
         return extracted_files
-    except Exception as e:
-        status_label.configure(text=f"Błąd rozpakowywania: {e}")
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logging.warning("Błąd bezpiecznego rozpakowywania %s: %s", file_path, exc)
+        status_label.configure(text="Nie udało się bezpiecznie rozpakować archiwum ZIP.")
         return []
 
 

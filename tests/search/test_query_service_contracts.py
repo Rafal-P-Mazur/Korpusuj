@@ -629,7 +629,9 @@ def test_word_profile_token_idx_must_not_be_shifted_by_node_offset(synthetic_cor
     """
     Regresja: res[12] jest indeksem tokenu w dokumencie.
     Nie wolno go przesuwać przez node_offset przed compute_word_profile().
-    Test pokazuje, że poprawny token_idx=1 dla lematu 'trwać' działa.
+    Test pokazu& ".\.venv-build-gpu-repro\Scripts\python.exe" `
+".\prepare_182z_final_gpu_onedir.py" --check
+je, że poprawny token_idx=1 dla lematu 'trwać' działa.
     """
     if compute_word_profile is None:
         pytest.fail(f"Nie udało się zaimportować compute_word_profile: {WORD_PROFILE_IMPORT_ERROR!r}")
@@ -892,4 +894,158 @@ def test_regex_legacy_escaped_dot_is_literal_dot_036l4g37f(tmp_path, monkeypatch
         assert _values_for_regex_036l4g37f(idx, r"\.") == {"."}
     finally:
         idx.close()
+
+
+def test_simple_dependency_match_modes_preserve_parser_semantics():
+    """Simple head/dependent must retain the parser's values and match mode."""
+    if SearchPlanner is None:
+        pytest.fail(f"Nie udało się zaimportować plannera: {PLANNER_IMPORT_ERROR!r}")
+
+    class MinimalIndex:
+        @staticmethod
+        def meta():
+            return {
+                "indexed_attrs": "base,orth,pos,upos,deprel,ner",
+            }
+
+    planner = SearchPlanner()
+    index = MinimalIndex()
+
+    regex_plan = planner.plan('[base="ryba" & head="zje.*"]', index)
+    regex_condition = regex_plan["token_groups"][0]["dep_conds"][0]
+    assert regex_condition["attr"] == "head"
+    assert regex_condition["values"] == ["zje.*"]
+    assert regex_condition["value"] == "zje.*"
+    assert regex_condition["match_type"] == "regex"
+
+    pipe_plan = planner.plan('[base="ryba" & head="zjeść|mieć"]', index)
+    pipe_condition = pipe_plan["token_groups"][0]["dep_conds"][0]
+    assert pipe_condition["attr"] == "head"
+    assert pipe_condition["values"] == ["zjeść", "mieć"]
+    assert pipe_condition["value"] == "zjeść"
+    assert pipe_condition["match_type"] == "exact"
+
+    search_plan = planner.plan('[base="ryba" & head="~jeś"]', index)
+    search_condition = search_plan["token_groups"][0]["dep_conds"][0]
+    assert search_condition["values"] == ["jeś"]
+    assert search_condition["match_type"] == "regex_search"
+
+    negative_plan = planner.plan('[base="ryba" & head!="zje.*"]', index)
+    group = negative_plan["token_groups"][0]
+    assert group["dep_conds"] == []
+    assert len(group["dep_neg_conds"]) == 1
+    assert group["dep_neg_conds"][0]["match_type"] == "regex"
+
+
+def test_simple_dependency_regex_matches_exact_control(synthetic_corpus):
+    """A dependency regex covering one exact head must return that hit."""
+    df, corpus_name = synthetic_corpus
+    exact = run_query('[base="ryba" & head="zjeść"]', df, corpus_name)
+    regex = run_query('[base="ryba" & head="zje.*"]', df, corpus_name)
+    assert exact
+    assert regex
+    assert len(regex) >= len(exact)
+
+
+def test_simple_dependency_pipe_contains_each_exact_branch(synthetic_corpus):
+    """Value-pipe on head is the union of its exact alternatives."""
+    df, corpus_name = synthetic_corpus
+    first = run_query('[base="ryba" & head="zjeść"]', df, corpus_name)
+    second = run_query('[base="ryba" & head="mieć"]', df, corpus_name)
+    combined = run_query('[base="ryba" & head="zjeść|mieć"]', df, corpus_name)
+    assert len(combined) >= max(len(first), len(second))
+    assert combined
+
+
+def test_dependency_value_matcher_honors_all_match_modes():
+    """Resolved head/dependent lemmas use exact, regex and regex_search alike."""
+    from korpusuj.search.cursor import SearchCursor
+
+    cursor = object.__new__(SearchCursor)
+    assert cursor._dep_value_ok("zająć", {
+        "values": ["zająć", "okupować"],
+        "match_type": "exact",
+    })
+    assert cursor._dep_value_ok("zająć", {
+        "values": ["zają.*"],
+        "match_type": "regex",
+    })
+    assert cursor._dep_value_ok("okupować", {
+        "values": ["zają.*|okupowa.*|anektowa.*|podbi.*"],
+        "match_type": "regex",
+    })
+    assert cursor._dep_value_ok("okupować", {
+        "values": ["kup"],
+        "match_type": "regex_search",
+    })
+    assert not cursor._dep_value_ok("zająć", {
+        "values": ["okupowa.*"],
+        "match_type": "regex",
+    })
+    assert not cursor._dep_value_ok("zająć", {
+        "values": ["("],
+        "match_type": "regex",
+    })
+
+
+def test_dependency_regex_postings_reuse_ordinary_base_matcher():
+    """Dependency seed postings preserve regex mode instead of exact lookup."""
+    from korpusuj.search.cursor import SearchCursor
+
+    captured = []
+    cursor = object.__new__(SearchCursor)
+
+    def condition_postings(condition):
+        captured.append(condition)
+        return {7: [3, 5]}
+
+    cursor._condition_postings = condition_postings
+    result = cursor._dependency_value_postings({
+        "attr": "head",
+        "values": ["zają.*|okupowa.*"],
+        "value": "zają.*|okupowa.*",
+        "match_type": "regex",
+    })
+    assert result == {7: [3, 5]}
+    assert captured == [{
+        "attr": "base",
+        "values": ["zają.*|okupowa.*"],
+        "value": "zają.*|okupowa.*",
+        "match_type": "regex",
+    }]
+
+
+def test_grouped_sentence_rhs_is_context_local():
+    """Only adjacent groups inside sentence RHS receive conjunction semantics."""
+    from korpusuj.search.cursor import _split_grouped_sentence_rhs_conjunction
+
+    assert _split_grouped_sentence_rhs_conjunction(
+        '([base="pomoc|wspierać"]) ([base="Ukraina"])'
+    ) == ['[base="pomoc|wspierać"]', '[base="Ukraina"]']
+    assert _split_grouped_sentence_rhs_conjunction(
+        '([base="Ukraina"])   ([base="pomoc"])'
+    ) == ['[base="Ukraina"]', '[base="pomoc"]']
+
+    # Ordinary top-level OR remains ordinary top-level OR.
+    assert _split_grouped_sentence_rhs_conjunction(
+        '([orth="władza"] [orth="mediów"]) || '
+        '([base="władza"] [base="partia"])'
+    ) is None
+    # Ungrouped multi-token RHS remains a sequence.
+    assert _split_grouped_sentence_rhs_conjunction(
+        '[base="pomoc"] [base="Ukraina"]'
+    ) is None
+    # One parenthesized branch alone is not the documented multi-group form.
+    assert _split_grouped_sentence_rhs_conjunction('([base="Ukraina"])') is None
+
+
+def test_ordinary_parenthesized_or_is_not_grouped_sentence_rhs():
+    """The local RHS recognizer must never consume ordinary top-level ||."""
+    from korpusuj.search.cursor import _split_grouped_sentence_rhs_conjunction
+
+    ordinary_or = (
+        '([orth="władza"] [orth="mediów"]) || '
+        '([base="władza"] [base="partia"])'
+    )
+    assert _split_grouped_sentence_rhs_conjunction(ordinary_or) is None
 

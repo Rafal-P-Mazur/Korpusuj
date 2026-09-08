@@ -182,6 +182,12 @@ def materialize_searchcursor_results_036l4g48e(
             len(materialized_results),
         )
 
+    # KORPUSUJ_PATCH_189N2_SEARCH_RESOURCE_LIFECYCLE
+    try:
+        from korpusuj.search.cursor import release_materialized_searchcursor_caches_189n2
+        release_materialized_searchcursor_caches_189n2(results)
+    except Exception:
+        pass
     return {
         "results": materialized_results,
         "cancelled": False,

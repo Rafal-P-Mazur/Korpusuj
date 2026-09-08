@@ -969,9 +969,12 @@ def make_lazy_fulltext_ref_111(index, doc_id, start, end, left_context_size=10, 
         full_context_size = int(full_context_size or 250)
     except Exception:
         full_context_size = 250
+    # KORPUSUJ_PATCH_189N2_SEARCH_RESOURCE_LIFECYCLE
+    # Result rows must not own SearchIndex and its document/posting caches.
+    index_locator = str(getattr(index, "index_path", index or ""))
     return (
         LAZY_FULLTEXT_MARKER_111,
-        index,
+        index_locator,
         doc_id,
         start,
         end,
@@ -1014,7 +1017,8 @@ def resolve_lazy_fulltext_ref_111(full_text_or_ref, context=None):
     if not is_lazy_fulltext_ref_111(full_text_or_ref):
         return full_text_or_ref
     try:
-        _marker, index, doc_id, start, end, left_ctx, right_ctx, full_ctx = full_text_or_ref[:8]
+        _marker, index_or_locator, doc_id, start, end, left_ctx, right_ctx, full_ctx = full_text_or_ref[:8]
+        index = index_or_locator
         doc_id = int(doc_id)
         start = int(start)
         end = int(end)
@@ -1076,8 +1080,20 @@ def resolve_lazy_fulltext_ref_111(full_text_or_ref, context=None):
             pass
 
     try:
-        getter = getattr(index, "get_doc", None)
-        doc = getter(doc_id) if callable(getter) else None
+        # KORPUSUJ_PATCH_189N3_FULLTEXT_LOCATOR_RESOLUTION
+        # cursor.py did not import pathlib.Path. Referencing Path here raised
+        # NameError, which the resolver's broad fallback silently swallowed.
+        if isinstance(index, (str, bytes)):
+            from korpusuj.index.sqlite_index import SearchIndex
+            reader = SearchIndex(str(index), posting_cache_size=0, doc_cache_size=0)
+            try:
+                doc = reader.get_doc(doc_id)
+            finally:
+                reader.close()
+        else:
+            # Backward compatibility for result/history rows created before 189N2.
+            getter = getattr(index, "get_doc", None)
+            doc = getter(doc_id) if callable(getter) else None
         doc = doc or {}
         tokens = doc.get("tokens", []) or []
         starts = doc.get("start_ids", []) or []
@@ -2283,6 +2299,7 @@ class SearchCursor:
         search_diag_log("DEP_STREAM_ANCHOR kind=head corpus=%r docs=%s yielded=%s batches=%s preloaded=%s",
                         self.corpus_name, len(parent_postings), yielded, getattr(self, "_dep_stream_batches", 0), getattr(self, "_dep_stream_preloaded", 0))
 
+
     def _candidate_preload_dependency_docs(self, doc_ids, reason=""):
         if _get_dependency_cache_ram_mode() != "candidate":
             return 0
@@ -2311,6 +2328,7 @@ class SearchCursor:
 
 
     def _dependency_maps(self, doc_id):
+        # KORPUSUJ_PATCH_189I_DEPENDENCY_PERSISTENT_CACHE
         doc_id = int(doc_id)
         cached = self._dep_maps_cache.get(doc_id)
         if cached is not None:
@@ -2318,8 +2336,9 @@ class SearchCursor:
 
         mode = _get_dependency_cache_ram_mode()
         cache_key = (self.corpus_name, doc_id)
-        if mode != "none":
-            cached = get_dependency_maps_cache().get(cache_key)
+        global_cache = get_dependency_maps_cache()
+        if mode == "all":
+            cached = global_cache.get(cache_key)
             if cached is not None:
                 self._dep_maps_cache.put(doc_id, cached)
                 return cached
@@ -2329,16 +2348,27 @@ class SearchCursor:
                 return None
             try:
                 self._dep_cache = DependencyMapDiskCache(self.corpus_path)
-            except Exception as e:
-                search_diag_log("DEP_CACHE_OPEN_FAIL corpus_path=%r reason=%r", self.corpus_path, e)
+            except Exception as exc:
+                search_diag_log("DEP_CACHE_OPEN_FAIL corpus_path=%r reason=%r", self.corpus_path, exc)
                 return None
+
         dep_maps = self._dep_cache.get(doc_id)
         if dep_maps is not None:
             self._dep_maps_cache.put(doc_id, dep_maps)
-            # Candidate ma trzymać w globalnym RAM tylko jawnie preloadowany podzbiór.
-            # All może dopisywać brakujące rekordy, none nie zapisuje nic.
             if mode == "all":
-                _put_dependency_ram_cache(cache_key, dep_maps)
+                # Persistent cache-on-demand. Avoid the legacy dependency-runtime
+                # wrapper here: its globals update can mutate module state while
+                # a dependency generator is active.
+                global_cache[cache_key] = dep_maps
+                try:
+                    maxsize = max(1, int(get_search_cursor_runtime().dependency_maps_cache_maxsize))
+                except Exception:
+                    maxsize = 50000
+                while len(global_cache) > maxsize:
+                    try:
+                        global_cache.pop(next(iter(global_cache)))
+                    except Exception:
+                        break
         return dep_maps
 
     def _dependency_condition_matches(self, doc_id, pos, cond, doc):
@@ -5356,3 +5386,22 @@ SearchCursor._exact_coref_m_canonical_sidecar_available = True
 # --- END EXACT_COREF_M_CANONICAL_AND_FLAT_COMPATIBILITY_RUNTIME ---
 
 
+
+
+def release_materialized_searchcursor_caches_189n2(results):
+    """Release request-only cursor structures after independent rows exist."""
+    try:
+        for name in ("_result_cache", "_doc_cache_036l4g7", "_posting_cache_local"):
+            value = getattr(results, name, None)
+            if hasattr(value, "clear"):
+                value.clear()
+        dep_cache = getattr(results, "_dep_maps_cache", None)
+        dep_data = getattr(dep_cache, "data", None)
+        if hasattr(dep_data, "clear"):
+            dep_data.clear()
+        hits = getattr(results, "_hits", None)
+        if hasattr(hits, "clear"):
+            hits.clear()
+        results._hit_iter = None
+    except Exception:
+        pass

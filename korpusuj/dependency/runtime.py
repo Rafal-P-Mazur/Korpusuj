@@ -8,6 +8,16 @@ import threading
 
 from korpusuj.dependency.policy import DEPENDENCY_CACHE_PRELOAD_BATCH_SIZE
 
+# KORPUSUJ_PATCH_189P2_DEPENDENCY_RUNTIME_NATIVE_IMPORTS
+# These are package-owned implementation dependencies, not engine state.
+import pyarrow.parquet as pq
+from korpusuj.dependency.disk_cache import (
+    DependencyMapDiskCache,
+    _dependency_cache_path_for_corpus_path,
+)
+from korpusuj.dependency.maps import build_dependency_maps
+from korpusuj.search.backend import LazyCorpus
+
 
 # KORPUSUJ_PATCH_145C3A_LOGGING_GATES_IMPORT
 try:
@@ -21,6 +31,89 @@ except Exception:
     def korpusuj_verbose_diagnostics_enabled_145c1(config_obj=None):
         return False
 # END KORPUSUJ_PATCH_145C3A_LOGGING_GATES_IMPORT
+
+
+
+# KORPUSUJ_PATCH_189P_EXPLICIT_DEPENDENCY_RUNTIME_STATE
+_runtime_bindings_configured_189p = False
+
+def configure_dependency_runtime_bindings_189p(*, state, config_provider,
+        corpus_path_provider, loaded_corpus_provider, ram_mode_provider,
+        ram_cache_size_provider, progress_reporter, legacy_index_ensurer,
+        diagnostics_enabled, verbose_diagnostics_enabled):
+    """Bind the narrow engine services required by dependency runtime once."""
+    global dependency_maps_cache, dependency_disk_caches
+    global dependency_warmup_threads, dependency_warmup_stop_flags, dependency_warmup_lock
+    global DEPENDENCY_MAPS_CACHE_MAXSIZE, DEPENDENCY_CANDIDATE_MAX_DOCS
+    global DEPENDENCY_CANDIDATE_STREAM_BATCH_DOCS, DEPENDENCY_CANDIDATE_RAM_BUDGET_MB
+    global DEPENDENCY_CACHE_PRELOAD_BATCH_SIZE
+    global config, files, dataframes
+    global _get_dependency_cache_ram_mode, _dependency_ram_cache_size_for_corpus
+    global _safe_dependency_progress, ensure_legacy_inverted_index_for_corpus
+    global korpusuj_diagnostics_enabled_145c1, korpusuj_verbose_diagnostics_enabled_145c1
+    global _runtime_bindings_configured_189p
+
+    dependency_maps_cache = state.dependency_maps_cache
+    dependency_disk_caches = state.dependency_disk_caches
+    dependency_warmup_threads = state.dependency_warmup_threads
+    dependency_warmup_stop_flags = state.dependency_warmup_stop_flags
+    dependency_warmup_lock = state.dependency_warmup_lock
+    DEPENDENCY_MAPS_CACHE_MAXSIZE = int(state.maps_cache_maxsize)
+    DEPENDENCY_CANDIDATE_MAX_DOCS = int(state.candidate_max_docs)
+    DEPENDENCY_CANDIDATE_STREAM_BATCH_DOCS = int(state.candidate_stream_batch_docs)
+    DEPENDENCY_CANDIDATE_RAM_BUDGET_MB = int(state.candidate_ram_budget_mb)
+    DEPENDENCY_CACHE_PRELOAD_BATCH_SIZE = int(state.cache_preload_batch_size)
+
+    class _ProviderMap189P:
+        def __init__(self, provider): self._provider = provider
+        def get(self, key, default=None):
+            value = self._provider(key)
+            return default if value is None else value
+
+    class _ConfigView189P(dict):
+        def get(self, key, default=None):
+            try: return config_provider().get(key, default)
+            except Exception: return default
+
+    config = _ConfigView189P()
+    files = _ProviderMap189P(corpus_path_provider)
+    dataframes = _ProviderMap189P(loaded_corpus_provider)
+    _get_dependency_cache_ram_mode = ram_mode_provider
+    _dependency_ram_cache_size_for_corpus = ram_cache_size_provider
+    _safe_dependency_progress = progress_reporter
+    ensure_legacy_inverted_index_for_corpus = legacy_index_ensurer
+    korpusuj_diagnostics_enabled_145c1 = diagnostics_enabled
+    korpusuj_verbose_diagnostics_enabled_145c1 = verbose_diagnostics_enabled
+    _runtime_bindings_configured_189p = True
+
+def _require_dependency_runtime_bindings_189p():
+    if not _runtime_bindings_configured_189p:
+        raise RuntimeError("Dependency runtime bindings are not configured")
+
+def _cfg_bool(name, default=False):
+    try:
+        value = config.get(name, default)
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "tak", "on")
+        return bool(value)
+    except Exception:
+        return bool(default)
+
+
+def _as_list_for_warmup(value):
+    if value is None:
+        return []
+    try:
+        if hasattr(value, "tolist"):
+            value = value.tolist()
+    except Exception:
+        pass
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
 
 def _get_dependency_disk_cache_for_corpus_impl(corpus_name):
     try:
@@ -149,29 +242,10 @@ def _preload_dependency_maps_for_candidates_impl(corpus_name, doc_ids, diag=None
     return loaded
 
 def _preload_all_dependency_maps_for_corpus_impl(corpus_name, disk_cache=None, diag=None):
-    """Tryb Duże: wczytuje cały .dep_cache do RAM po ładowaniu korpusu."""
-    if _get_dependency_cache_ram_mode() != "all":
-        return 0
-    if disk_cache is None:
-        disk_cache = get_dependency_disk_cache_for_corpus(corpus_name)
-    if disk_cache is None:
-        return 0
-    t0 = time.perf_counter()
-    maps = disk_cache.get_all()
-    loaded = 0
-    for doc_id, dep_maps in maps.items():
-        if _put_dependency_ram_cache((corpus_name, int(doc_id)), dep_maps):
-            loaded += 1
-    elapsed = time.perf_counter() - t0
+    """Compatibility no-op: maximum mode now fills a bounded cache on demand."""
     if diag is not None:
-        diag["dep_maps_all_preload_loaded"] = loaded
-        diag["time_dep_maps_all_preload"] = diag.get("time_dep_maps_all_preload", 0.0) + elapsed
-    if korpusuj_diagnostics_enabled_145c1():
-        logging.info(
-            "[DIAG dependency.cache] corpus=%s loaded=%s disk_rows=%s ram_cache_size=%s time=%.6fs",
-            corpus_name, loaded, disk_cache.row_count(), len(dependency_maps_cache), elapsed
-        )
-    return loaded
+        diag["dep_maps_all_preload_loaded"] = 0
+    return 0
 
 def __cache_dependency_maps_for_row_impl(corpus_name, row, diag=None, disk_cache=None, store_ram=False, commit=True):
     try:
@@ -490,52 +564,52 @@ def _start_dependency_cache_warmup_impl(corpus_name, build_maps=None, materializ
     dependency_warmup_threads[corpus_name] = t
     t.start()
 
-def get_dependency_disk_cache_for_corpus(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def get_dependency_disk_cache_for_corpus(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _get_dependency_disk_cache_for_corpus_impl(*args, **kwargs)
 
 
-def _clear_dependency_ram_cache_for_corpus(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def _clear_dependency_ram_cache_for_corpus(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return __clear_dependency_ram_cache_for_corpus_impl(*args, **kwargs)
 
 
-def _put_dependency_ram_cache(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def _put_dependency_ram_cache(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return __put_dependency_ram_cache_impl(*args, **kwargs)
 
 
-def preload_dependency_maps_for_candidates(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def preload_dependency_maps_for_candidates(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _preload_dependency_maps_for_candidates_impl(*args, **kwargs)
 
 
-def preload_all_dependency_maps_for_corpus(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def preload_all_dependency_maps_for_corpus(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _preload_all_dependency_maps_for_corpus_impl(*args, **kwargs)
 
 
-def _cache_dependency_maps_for_row(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def _cache_dependency_maps_for_row(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return __cache_dependency_maps_for_row_impl(*args, **kwargs)
 
 
-def _select_dependency_parquet_columns(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def _select_dependency_parquet_columns(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return __select_dependency_parquet_columns_impl(*args, **kwargs)
 
 
-def build_dependency_cache_from_parquet_batches(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def build_dependency_cache_from_parquet_batches(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _build_dependency_cache_from_parquet_batches_impl(*args, **kwargs)
 
 
-def warm_dependency_cache_for_corpus(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def warm_dependency_cache_for_corpus(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _warm_dependency_cache_for_corpus_impl(*args, **kwargs)
 
 
-def start_dependency_cache_warmup(engine_globals, *args, **kwargs):
-    globals().update(engine_globals)
+def start_dependency_cache_warmup(*args, **kwargs):
+    _require_dependency_runtime_bindings_189p()
     return _start_dependency_cache_warmup_impl(*args, **kwargs)
 

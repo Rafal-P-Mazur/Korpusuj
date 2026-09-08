@@ -27,6 +27,7 @@ def test_creator_run_options_defaults_and_normalization():
     assert options.excel_mappings is None
     assert options.resume_mode is False
     assert options.processed_set is None
+    assert options.lemma_corrections_path is None
 
 
 def test_creator_run_options_preserves_explicit_values():
@@ -34,13 +35,14 @@ def test_creator_run_options_preserves_explicit_values():
         input_files=["a.txt"], output_parquet_file="out.parquet",
         metadata_path="meta.xlsx", model_name="spacy",
         excel_mappings={"Treść": "body"}, resume_mode=True,
-        processed_set={"done.txt"},
+        processed_set={"done.txt"}, lemma_corrections_path="rules.json",
     )
     assert options.metadata_path == "meta.xlsx"
     assert options.model_name == "spacy"
     assert options.excel_mappings == {"Treść": "body"}
     assert options.resume_mode is True
     assert options.processed_set == {"done.txt"}
+    assert options.lemma_corrections_path == "rules.json"
 
 
 def test_creator_model_state_defaults_are_empty():

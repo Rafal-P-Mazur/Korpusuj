@@ -1,0 +1,7 @@
+﻿
+
+# Python runtime cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest_work/

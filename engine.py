@@ -693,6 +693,16 @@ def _make_lazy_corpus_for_search(selected_corpus, fallback_df=None):
             corpus_path = (globals().get("files", {}) or {}).get(selected_corpus)
         except Exception:
             corpus_path = None
+        # KORPUSUJ_PATCH_189N2_SEARCH_RESOURCE_LIFECYCLE
+        # Reuse the canonical loaded LazyCorpus instead of creating a new
+        # SearchIndex for every GUI request.
+        if isinstance(fallback_df, LazyCorpus):
+            try:
+                expected_search = str(_search_sidecar_path(getattr(fallback_df, "parquet_path", "")))
+                if str(getattr(fallback_df, "search_path", "")) == expected_search:
+                    return fallback_df
+            except Exception:
+                pass
         if not corpus_path:
             search_diag_log(
                 "LAZYCORPUS_SKIP corpus=%r reason=no_files_path fallback_type=%s",
@@ -905,6 +915,8 @@ def ensure_legacy_inverted_index_for_corpus(corpus_name, df):
     inverted_indexes[corpus_name] = idx
 
 
+
+
 # =========================================================================
 from korpusuj.dependency.runtime_state import configure_dependency_runtime_state
 # BACKGROUND DEPENDENCY CACHE WARMUP
@@ -1094,34 +1106,23 @@ from korpusuj.dependency.policy import DEPENDENCY_DISK_CACHE_VERSION, DEPENDENCY
 
 
 def _dependency_runtime_call(func_name, *args, **kwargs):
-    impl_map = {
-        "get_dependency_disk_cache_for_corpus": "_get_dependency_disk_cache_for_corpus_impl",
-        "_clear_dependency_ram_cache_for_corpus": "__clear_dependency_ram_cache_for_corpus_impl",
-        "_put_dependency_ram_cache": "__put_dependency_ram_cache_impl",
-        "preload_dependency_maps_for_candidates": "_preload_dependency_maps_for_candidates_impl",
-        "preload_all_dependency_maps_for_corpus": "_preload_all_dependency_maps_for_corpus_impl",
-        "_cache_dependency_maps_for_row": "__cache_dependency_maps_for_row_impl",
-        "_select_dependency_parquet_columns": "__select_dependency_parquet_columns_impl",
-        "build_dependency_cache_from_parquet_batches": "_build_dependency_cache_from_parquet_batches_impl",
-        "warm_dependency_cache_for_corpus": "_warm_dependency_cache_for_corpus_impl",
-        "start_dependency_cache_warmup": "_start_dependency_cache_warmup_impl",
-    }
-    impl_name = impl_map.get(func_name)
-    if impl_name and hasattr(_dependency_runtime, impl_name):
-        impl = getattr(_dependency_runtime, impl_name)
-        try:
-            _dependency_runtime.__dict__.update(globals())
-        except Exception:
-            pass
-        return impl(*args, **kwargs)
+    """Call explicitly configured dependency runtime without namespace copying."""
+    # KORPUSUJ_PATCH_189P_EXPLICIT_DEPENDENCY_RUNTIME_STATE
+    from korpusuj.dependency.runtime_state import get_dependency_runtime_state
+    state = get_dependency_runtime_state()
+    _dependency_runtime.configure_dependency_runtime_bindings_189p(
+        state=state,
+        config_provider=lambda: globals().get("config", {}) or {},
+        corpus_path_provider=lambda name: (globals().get("files", {}) or {}).get(name),
+        loaded_corpus_provider=lambda name: (globals().get("dataframes", {}) or {}).get(name),
+        ram_mode_provider=_get_dependency_cache_ram_mode,
+        ram_cache_size_provider=_dependency_ram_cache_size_for_corpus,
+        progress_reporter=_safe_dependency_progress,
+        legacy_index_ensurer=ensure_legacy_inverted_index_for_corpus,
+        diagnostics_enabled=korpusuj_diagnostics_enabled_145c1,
+        verbose_diagnostics_enabled=korpusuj_verbose_diagnostics_enabled_145c1,
+    )
     func = getattr(_dependency_runtime, func_name)
-    import inspect
-    try:
-        params = list(inspect.signature(func).parameters)
-        if params and params[0] == "engine_globals":
-            return func(globals(), *args, **kwargs)
-    except Exception:
-        pass
     return func(*args, **kwargs)
 
 def get_dependency_disk_cache_for_corpus(corpus_name):
@@ -1150,6 +1151,7 @@ configure_search_cursor_runtime(
     put_dependency_ram_cache=_put_dependency_ram_cache,
     preload_dependency_maps_for_candidates=preload_dependency_maps_for_candidates,
     dependency_maps_cache=dependency_maps_cache,
+    dependency_maps_cache_maxsize=DEPENDENCY_MAPS_CACHE_MAXSIZE,
     candidate_max_docs=DEPENDENCY_CANDIDATE_MAX_DOCS,
     candidate_stream_batch_docs=DEPENDENCY_CANDIDATE_STREAM_BATCH_DOCS,
     full_context_size=globals().get("kontekst", 250),
@@ -3764,6 +3766,8 @@ def find_lemma_context(query, df, selected_corpus, left_context_size=10, right_c
         extra={"df_type": type(df).__name__},
     )
 
+
+
 selected_tag = None
 original_colors = {}
 
@@ -5304,6 +5308,8 @@ def _prepare_and_find_search_backend_results(
         "t_find_done_035d": t_find_done_035d,
     }
 
+
+
 # END KORPUSUJ_MIGRATION_036L4G39D_BACKEND_PREPARE_AND_FIND
 
 
@@ -5349,6 +5355,13 @@ def _count_searchcursor_hits_with_fast_estimate(results, *, search_token=None):
         out.setdefault("gui_count_wrapper_154", True)
         return out
     except Exception as _final_count_exc_154:
+        if bool((getattr(results, "plan", {}) or {}).get("uses_dependency")):
+            logging.error(
+                "Dependency exact-count failed; partial cursor hits will not be published. token=%r",
+                search_token,
+                exc_info=True,
+            )
+            raise
         # Conservative fallback: preserve the pre-154 exact-count helper behavior.
         try:
             if korpusuj_diagnostics_enabled_145c1():
@@ -5369,6 +5382,8 @@ def _count_searchcursor_hits_with_fast_estimate(results, *, search_token=None):
             logger=logging,
             perf_counter=time.perf_counter,
         )
+
+
 
 # END KORPUSUJ_MIGRATION_036L4G39F_SEARCHCURSOR_COUNT_HITS
 
@@ -7314,8 +7329,12 @@ def search():
             logging.exception("Error in search thread [request_id=%s]", search_token)
 
             if search_token == active_search_token:
-                # To samo tutaj - zapisujemy sformatowany tekst przed wrzuceniem do lambdy
-                error_msg = f"Nie udało się wykonać wyszukiwania.\nSzczegóły: {e}"
+                # Szczegóły techniczne pozostają w pełnym tracebacku w logu.
+                # GUI nie ujawnia nazw backendów, ścieżek ani komunikatów wewnętrznych.
+                error_msg = (
+                    "Nie udało się wykonać wyszukiwania.\n"
+                    "Sprawdź poprawność zapytania i spróbuj ponownie."
+                )
                 _schedule_search_thread_error_display_036l4g55d(
                     app_obj=app,
                     label_results_count_widget=label_results_count,
@@ -8351,8 +8370,23 @@ def show_dependency_graph():
     FigureCanvasAgg = plot_stack["FigureCanvasAgg"]
     plt = plot_stack["plt"]
 
-    # Pobranie danych o zdaniu
-    df = dataframes[global_selected_corpus]
+    # Dokument dla grafu pobieramy wyłącznie z SQLite .search.
+    # Brak sidecaru nie może powodować awaryjnego odczytu Parquet.
+    df = _make_lazy_corpus_for_search(global_selected_corpus, fallback_df=None)
+    if not isinstance(df, LazyCorpus):
+        search_diag_log(
+            "DEPENDENCY_GRAPH_SQLITE_REQUIRED corpus=%r provider_type=%s",
+            global_selected_corpus,
+            type(df).__name__ if df is not None else None,
+        )
+        try:
+            messagebox.showwarning(
+                "Brak indeksu SQLite",
+                "Nie można wyświetlić grafu zależności bez poprawnego indeksu .search.",
+            )
+        except Exception:
+            pass
+        return
     _gui_highlight_runtime_diag_137u(
         "show_dependency_graph.before_resolve",
         df_obj=df,
@@ -8425,6 +8459,65 @@ def show_dependency_graph():
 
     długość_zdania = end - start
 
+    # KORPUSUJ_PATCH_188B_DEP_GRAPH_ADAPTIVE_SPACING
+    # Tokeny nie są rozmieszczane w sztywnej siatce. Odstęp między środkami
+    # uwzględnia przybliżoną szerokość obu sąsiednich słów i ich etykiet UPOS.
+    sentence_tokens = [str(tokens[i]) for i in range(start, end)]
+    sentence_upos = [str(upostags[i]) for i in range(start, end)]
+    # KORPUSUJ_PATCH_188E_DEP_GRAPH_UNCOMPRESSED_CANVAS
+    # KORPUSUJ_PATCH_188G_DEP_GRAPH_EXACT_PIXEL_SPACING
+    # Mierzymy dokładną szerokość tekstu tym samym rendererem Agg i przy tym
+    # samym DPI, które są używane do końcowego PNG. Współrzędne x są pikselami,
+    # więc nie ma współczynników zależnych od długości słowa ani zgadywania.
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.backends.backend_agg import FigureCanvasAgg as _DepFigureCanvasAgg
+
+    graph_dpi = 100
+    _measure_fig = Figure(figsize=(1, 1), dpi=graph_dpi)
+    _measure_canvas = _DepFigureCanvasAgg(_measure_fig)
+    _measure_canvas.draw()
+    _measure_renderer = _measure_canvas.get_renderer()
+    _word_font = FontProperties(size=12, weight='bold')
+    _tag_font = FontProperties(size=10)
+    _label_font = FontProperties(size=9)
+
+    def _text_width_px_188g(text, font_properties, minimum=1.0):
+        try:
+            width, _height, _descent = _measure_renderer.get_text_width_height_descent(
+                str(text or ''), font_properties, ismath=False
+            )
+            return max(float(minimum), float(width))
+        except Exception:
+            return max(float(minimum), 7.5 * len(str(text or '')))
+
+    sentence_tokens = [str(tokens[i]) for i in range(start, end)]
+    sentence_upos = [str(upostags[i]) for i in range(start, end)]
+    token_half_widths = [
+        0.5 * max(
+            _text_width_px_188g(word, _word_font, 8.0),
+            _text_width_px_188g(tag, _tag_font, 8.0),
+        )
+        for word, tag in zip(sentence_tokens, sentence_upos)
+    ]
+    token_x = []
+    token_gap_px = 12.0
+    for local_idx, half_width in enumerate(token_half_widths):
+        if local_idx == 0:
+            token_x.append(0.0)
+        else:
+            token_x.append(
+                token_x[-1]
+                + token_half_widths[local_idx - 1]
+                + half_width
+                + token_gap_px
+            )
+    side_margin_px = 16.0
+    graph_x_min = (token_x[0] - token_half_widths[0] - side_margin_px) if token_x else -16.0
+    graph_x_max = (token_x[-1] + token_half_widths[-1] + side_margin_px) if token_x else 16.0
+    graph_x_span = max(100.0, graph_x_max - graph_x_min)
+    # END KORPUSUJ_PATCH_188G_DEP_GRAPH_EXACT_PIXEL_SPACING
+    # END KORPUSUJ_PATCH_188B_DEP_GRAPH_ADAPTIVE_SPACING
+
     # Pobranie aktualnego motywu
     theme = THEMES.get(motyw.get(), THEMES["jasny"])
     bg_color = theme["app_bg"]
@@ -8452,15 +8545,25 @@ def show_dependency_graph():
                 break
 
         if head_idx is not None:
-            left = min(head_idx, dep_idx)
-            right = max(head_idx, dep_idx)
+            head_x = token_x[head_idx]
+            dep_x = token_x[dep_idx]
+            left = min(head_x, dep_x)
+            right = max(head_x, dep_x)
+            label_text = str(deprels[i])
+            label_half_width = 0.5 * _text_width_px_188g(label_text, _label_font, 8.0)
+            # Zakres poziomu obejmuje dokładną szerokość labela oraz 4 px marginesu.
+            occupied_left = min(left, ((head_x + dep_x) / 2.0) - label_half_width - 4.0)
+            occupied_right = max(right, ((head_x + dep_x) / 2.0) + label_half_width + 4.0)
             edges.append({
                 'head': head_idx,
                 'dep': dep_idx,
-                'left': left,
-                'right': right,
+                'head_x': head_x,
+                'dep_x': dep_x,
+                'left': occupied_left,
+                'right': occupied_right,
                 'dist': right - left,
-                'label': deprels[i]
+                'label': label_text,
+                'label_half_width': label_half_width,
             })
 
     edges.sort(key=lambda e: e['dist'])
@@ -8499,7 +8602,9 @@ def show_dependency_graph():
 
     # Obliczamy "fizyczny" rozmiar płótna Matplotlib.
     # Mnożnik * 1.2 wymusza odpowiednio szeroki margines na każde słowo!
-    width_in_inches = max(12, długość_zdania * 1.2)
+    # Współrzędne x są pikselami. Figura ma dokładnie tę samą szerokość
+    # rastrową, a minimum 1200 px zachowuje czytelny widok krótkich zdań.
+    width_in_inches = max(12.0, graph_x_span / float(graph_dpi))
     height_in_inches = max(5, max_height + 1.0)
 
     # 3. UTWORZENIE OKNA Z PASKAMI PRZEWIJANIA (SCROLLBAR)
@@ -8536,8 +8641,13 @@ def show_dependency_graph():
     inner_frame.bind("<Configure>", configure_scrollregion)
 
     # 4. RYSOWANIE MATPLOTLIB
-    fig = Figure(figsize=(width_in_inches, height_in_inches), dpi=100)
+    fig = Figure(figsize=(width_in_inches, height_in_inches), dpi=graph_dpi)
     ax = fig.add_subplot(111)
+    # Bez domyślnych marginesów subplotu. Wcześniej obszar osi zajmował tylko
+    # część figury, przez co współrzędne tokenów były ściskane, choć sam obraz
+    # miał pozornie wystarczającą szerokość.
+    fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+    ax.set_position([0.0, 0.0, 1.0, 1.0])
 
     fig.patch.set_facecolor(bg_color)
     ax.set_facecolor(bg_color)
@@ -8545,7 +8655,7 @@ def show_dependency_graph():
 
     # Słowa
     for i in range(start, end):
-        x = i - start
+        x = token_x[i - start]
         word = tokens[i]
         tag = upostags[i]
 
@@ -8553,20 +8663,47 @@ def show_dependency_graph():
         ax.text(x, -0.3, tag, ha='center', va='top', fontsize=10, color=tag_color, zorder=3)
 
     # Krawędzie
+    level_label_spans = {}
     for edge in edges:
         head_idx = edge['head']
         dep_idx = edge['dep']
+        head_x = edge['head_x']
+        dep_x = edge['dep_x']
+        level = edge['level']
 
-        h = base_h + (edge['level'] * step_h)
+        h = base_h + (level * step_h)
 
-        ax.plot([head_idx, head_idx], [0.3, h], color=line_color, lw=1.5, zorder=1)
-        ax.plot([head_idx, dep_idx], [h, h], color=line_color, lw=1.5, zorder=1)
+        ax.plot([head_x, head_x], [0.3, h], color=line_color, lw=1.5, zorder=1)
+        ax.plot([head_x, dep_x], [h, h], color=line_color, lw=1.5, zorder=1)
 
-        ax.annotate("", xy=(dep_idx, 0.3), xytext=(dep_idx, h),
+        ax.annotate("", xy=(dep_x, 0.3), xytext=(dep_x, h),
                     arrowprops=dict(arrowstyle="->", color=line_color, lw=1.5), zorder=1)
 
-        mid_x = (head_idx + dep_idx) / 2
-        ax.text(mid_x, h, edge['label'], ha='center', va='center', fontsize=9, color=text_color,
+        mid_x = (head_x + dep_x) / 2.0
+        label_text = str(edge['label'])
+        label_half_width = edge['label_half_width']
+        min_x = mid_x - label_half_width
+        max_x = mid_x + label_half_width
+
+        level_spans = level_label_spans.setdefault(level, [])
+        if dep_x < head_x:
+            scan = range(len(level_spans) - 1, -1, -1)
+        else:
+            scan = range(len(level_spans))
+        for idx in scan:
+            s_min, s_max = level_spans[idx]
+            if max(min_x, s_min) < min(max_x, s_max):
+                shift = (s_max - min_x + 4.0) if dep_x >= head_x else (s_min - max_x - 4.0)
+                mid_x += shift
+                min_x += shift
+                max_x += shift
+        level_spans.append((min_x, max_x))
+
+        label_y = h + 0.15
+        if dep_x < head_x:
+            label_y += 0.12
+        label_y += 0.10 * (level % 2)
+        ax.text(mid_x, label_y, label_text, ha='center', va='bottom', fontsize=9, color=text_color,
                 bbox=dict(boxstyle="round,pad=0.2", fc=label_bg, ec=line_color, lw=1, alpha=1.0),
                 zorder=2)
 
@@ -8574,17 +8711,18 @@ def show_dependency_graph():
     root_h = max_height
     for r in roots:
         dep_idx = r['dep']
-        ax.annotate("", xy=(dep_idx, 0.3), xytext=(dep_idx, root_h),
+        dep_x = token_x[dep_idx]
+        ax.annotate("", xy=(dep_x, 0.3), xytext=(dep_x, root_h),
                     arrowprops=dict(arrowstyle="->", color=tag_color, lw=2.0), zorder=1)
-        ax.text(dep_idx, root_h, r['label'], ha='center', va='center', fontsize=10, fontweight='bold', color=text_color,
+        ax.text(dep_x, root_h + 0.15, r['label'], ha='center', va='bottom', fontsize=10, fontweight='bold', color=text_color,
                 bbox=dict(boxstyle="round,pad=0.3", fc=label_bg, ec=tag_color, lw=1.5, alpha=1.0),
                 zorder=2)
 
     # Skalowanie obszaru rysowania
-    ax.set_xlim(-0.5, długość_zdania - 0.5)
+    ax.set_xlim(graph_x_min, graph_x_max)
     ax.set_ylim(-1, max_height + 0.5)
 
-    plt.tight_layout()
+    # 188E: nie używamy tight_layout(), bo ponownie kompresowałby obszar osi.
 
     # 5. OSADZENIE W INTERFEJSIE
     # 5. OSADZENIE W INTERFEJSIE (Wersja stabilna - renderowanie do obrazu)
@@ -8593,7 +8731,9 @@ def show_dependency_graph():
 
     # Renderujemy graf do pliku tymczasowego
     canvas_render = FigureCanvasAgg(fig)
-    fig.savefig(temp_graph_path, bbox_inches='tight', facecolor=fig.get_facecolor())
+    # Zapis bez bbox_inches='tight': zachowuje dokładnie skalę poziomą,
+    # według której obliczono pozycje tokenów i ramion zależności.
+    fig.savefig(temp_graph_path, facecolor=fig.get_facecolor(), pad_inches=0)
 
     # Wczytujemy jako CTkImage, aby zachować skalowanie DPI
     img_pil = Image.open(temp_graph_path)
@@ -8713,9 +8853,29 @@ def update_highlights():
             return
     except Exception:
         return
-    end_ids = row_data.end_ids
-    ners = row_data.ners
+    # KORPUSUJ_PATCH_189V_GUI_HIGHLIGHT_ARRAYS
+    end_ids = getattr(row_data, "end_ids", []) or []
+    ners = getattr(row_data, "ners", []) or []
     corefs = getattr(row_data, "corefs", None)
+    token_count = len(getattr(row_data, "tokens", []) or [])
+    # KORPUSUJ_PATCH_189V2_NER_HIGHLIGHTS_ON_DEMAND
+    # The docs table intentionally omits ners. Resolve them only after the user
+    # enables NER for the one displayed document, never during ordinary search.
+    if show_ner_active and (not ners or not any(str(value) not in ("0", "O", "_", "", "None") for value in ners)):
+        try:
+            loader = getattr(df, "get_ner_labels", None)
+            if callable(loader):
+                ners = loader(current_display_row_idx, token_count) or []
+        except Exception:
+            logging.exception(
+                "[APP gui.highlight.ner.error] corpus=%s doc_id=%s",
+                global_selected_corpus, current_display_row_idx
+            )
+            ners = []
+    if len(ners) < token_count:
+        ners = list(ners) + ["O"] * (token_count - len(ners))
+    if corefs is not None and len(corefs) < token_count:
+        corefs = list(corefs) + [None] * (token_count - len(corefs))
     suppressed_coref_clusters_137y = _suppressed_coref_clusters_for_row_137y(corefs) if corefs is not None else set()
 
     # Funkcja dobierająca kolor w zależności od motywu
@@ -10558,8 +10718,10 @@ def calculate_collocs():
 
     def worker():
         try:
-            df = dataframes[global_selected_corpus]
-            inv_idx_data = inverted_indexes[global_selected_corpus]
+            df = _make_lazy_corpus_for_search(global_selected_corpus, fallback_df=None)
+            if not isinstance(df, LazyCorpus):
+                raise RuntimeError("Brak poprawnego indeksu SQLite .search dla kolokacji.")
+            inv_idx_data = df.background_index()
             table = compute_collocations(
                 full_results_sorted,
                 df,

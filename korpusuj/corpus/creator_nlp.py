@@ -277,7 +277,25 @@ def initialize_spacy(
             try:
                 reporter.status("Podpinam model herference (koreferencje)...")
                 reporter.tick()
-                state.nlp_spacy.add_pipe("herference")
+                # KORPUSUJ_PATCH_190D_HERFERENCE_MPS_ON_MACOS
+                herference_config = {}
+                herference_device = "default"
+                try:
+                    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+                    if sys.platform == "darwin" and mps_backend is not None and mps_backend.is_available():
+                        herference_config = {"device": "mps"}
+                        herference_device = "mps"
+                except Exception:
+                    herference_config = {}
+                    herference_device = "default"
+                logging.info(
+                    "[APP ml.device] component=herference selected=%s",
+                    herference_device,
+                )
+                if herference_config:
+                    state.nlp_spacy.add_pipe("herference", config=herference_config)
+                else:
+                    state.nlp_spacy.add_pipe("herference")
             except Exception as exc:
                 logging.exception(
                     "SpaCy załadowano, ale podpinanie Herference zakończyło się błędem"
