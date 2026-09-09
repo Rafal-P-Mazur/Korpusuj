@@ -22,7 +22,7 @@ Instalator pobiera około 2,42 GiB oficjalnych komponentów PyTorch dla CUDA 12.
 
 ### macOS ARM64
 
-Kod źródłowy można uruchamiać na komputerach Mac z procesorami Apple Silicon przy użyciu Pythona 3.11. Obsługiwane modele mogą korzystać z akceleracji MPS. Gotowy pakiet aplikacji dla macOS może nie być dołączony do każdego wydania.
+Korpusuj jest dostępny również jako gotowy pakiet aplikacji dla komputerów Mac z procesorami Apple Silicon. Obsługiwane modele mogą korzystać z akceleracji MPS. Aplikację można także uruchomić ze źródeł przy użyciu Pythona 3.11.
 
 ## Uruchamianie gotowej aplikacji
 

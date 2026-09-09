@@ -7,7 +7,7 @@ Ten przewodnik pokazuje najkrótszą drogę od uruchomienia aplikacji do pierwsz
 - **Windows CPU, instalator:** uruchom program ze skrótu albo przez `Korpusuj.exe`.
 - **Windows CPU, wersja portable:** rozpakuj całe archiwum ZIP i uruchom `Korpusuj.exe`.
 - **Windows GPU, instalator:** uruchom program ze skrótu albo przez `Korpusuj.exe`. Instalacja wymaga pobrania dodatkowych komponentów obsługi GPU.
-- **macOS ARM64:** uruchom aplikację ze źródeł w środowisku Python 3.11 albo użyj gotowego pakietu, jeżeli został dołączony do wydania.
+- **macOS ARM64:** pobierz pakiet przeznaczony dla komputerów Mac z procesorami Apple Silicon, rozpakuj go i uruchom aplikację Korpusuj.
 
 Jeżeli komputer z systemem Windows nie ma zgodnej karty NVIDIA, wybierz wersję CPU.
 
