@@ -14,13 +14,18 @@ Dokumentacja obejmuje instalację, pierwsze uruchomienie, obsługę interfejsu g
 - [Język zapytań CQL](cql.md) — składnia zapytań od podstawowych warunków tokenowych po relacje składniowe, NER, koreferencję, filtry zdań i metadane.
 - [Scalanie gotowych korpusów](corpus_merger.md)
 
-## Architektura i rozwój
+### Architektura
 
-Dokumenty w tej części są przeznaczone dla osób rozwijających i utrzymujących aplikację.
-
-- [Architektura aplikacji](architecture/overview.md)
-- [Mapa modułów](architecture/modules.md)
-- [Korpus i artefakty indeksowe](architecture/corpus-and-index-artifacts.md)
-- [Przepływ wyszukiwania](architecture/search-pipeline.md)
-- [Przepływ tworzenia korpusu](architecture/creator-pipeline.md)
-- [Rozwój i testowanie](architecture/development.md)
+- [Spis dokumentacji architektury](architecture/index.md)
+- [Obraz systemu](architecture/overview.md)
+- [Uruchamianie i stan aplikacji](architecture/application-runtime.md)
+- [Format korpusu](architecture/corpus-format.md)
+- [Otwieranie korpusu](architecture/corpus-loading.md)
+- [Tworzenie korpusu](architecture/creator-pipeline.md)
+- [Indeks wyszukiwania i pamięć zależnościowa](architecture/index-lifecycle.md)
+- [Wykonanie zapytania](architecture/search-execution.md)
+- [Dostęp do relacji zależnościowych](architecture/dependency-runtime.md)
+- [Wyniki, liczba trafień i eksport](architecture/result-materialization.md)
+- [Połączenie modułów z GUI](architecture/gui-integration.md)
+- [Mapa pakietów i ważnych modułów](architecture/modules.md)
+- [Referencja modułów i symboli](architecture/source-reference.md)

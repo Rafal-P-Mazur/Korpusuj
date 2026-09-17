@@ -1,35 +1,72 @@
-# Architektura aplikacji
+# Obraz systemu
 
-## Obraz całości
+## Punkty wejścia
 
-`Korpusuj.py` uruchamia GUI. `engine.py` jest rozbudowaną warstwą integracji i orkiestracji GUI: zarządza stanem interfejsu, `app.after`, wątkami i prezentacją. GUI i CLI korzystają ze wspólnego rdzenia `korpusuj/`.
+`Korpusuj.py` uruchamia interfejs graficzny. `engine.py` tworzy okno aplikacji, przechowuje stan otwartego projektu i łączy zdarzenia interfejsu z modułami pakietu `korpusuj`.
+
+Polecenia CLI uruchamiają bezpośrednio moduły pakietu:
 
 ```text
-pliki -> creator -> korpus.parquet
-                    |-> korpus.search
-                    |-> korpus.dep_cache
-CQL -> parser -> planner -> backend/SearchCursor -> materializacja -> GUI/CLI
+python -m korpusuj.corpus.creator_cli
+python -m korpusuj.corpus.merger_cli
+python -m korpusuj.index.cli
+python -m korpusuj.search.cli
 ```
 
-## Wspólny rdzeń
+GUI i CLI korzystają z tych samych modułów tworzenia korpusu, indeksowania i wyszukiwania. `engine.py` nadal zawiera część kodu zgodnościowego oraz konfigurację obiektów runtime potrzebnych przez wyszukiwarkę.
 
-Creator GUI i creator CLI wywołują `run_creator_job`. Wyszukiwanie korzysta ze wspólnych modułów parsera, planera, backendu, `SearchCursor` i materializacji. Interfejsy nie utrzymują dwóch niezależnych silników domenowych.
+## Pliki należące do korpusu
 
-## Dane i subsystemy
+```text
+korpus.parquet
+korpus.search
+korpus.dep_cache
+```
 
-Parquet jest kanonicznym magazynem korpusu. `.search` i `.dep_cache` są odtwarzalnymi artefaktami. `korpusuj/semantic/` obsługuje analizy semantyczne, a `korpusuj/topics/` modelowanie BERTopic.
+`korpus.parquet` przechowuje dokumenty, tokeny, anotacje i metadane. Jest jedynym z tych trzech plików, którego nie można odtworzyć bez ponownego przygotowania korpusu.
 
-## Katalogi runtime
+`korpus.search` jest indeksem SQLite używanym do wyboru dokumentów i pozycji tokenowych pasujących do warunków zapytania.
 
-- `logs/` — logi;
-- `models/` — modele NLP;
-- `temp/` — zasoby aplikacji i pomoc HTML;
-- `fiszki/` — dane fiszek.
+`korpus.dep_cache` jest bazą SQLite z mapami relacji nadrzędnik-podrzędnik. Korzystają z niej zapytania składniowe i kolokacje składniowe.
 
-## Dalsza lektura
+## Tworzenie korpusu
 
-- [Mapa modułów](modules.md)
-- [Artefakty](corpus-and-index-artifacts.md)
-- [Wyszukiwanie](search-pipeline.md)
-- [Creator](creator-pipeline.md)
-- [Rozwój](development.md)
+```text
+pliki źródłowe
+  -> odczyt tekstu i metadanych
+  -> normalizacja technicznych znaków Unicode
+  -> podział długich tekstów
+  -> analiza Stanza albo spaCy
+  -> opcjonalne NER i koreferencja
+  -> opcjonalne korekty lematów
+  -> zapis częściowy
+  -> finalny Parquet
+```
+
+GUI creatora i creator CLI wywołują `run_creator_job` z obiektem `CreatorRunOptions`. Różnią się sposobem zbierania opcji i prezentowania postępu, ale nie przebiegiem anotacji.
+
+## Otwieranie korpusu
+
+`prepare_loaded_corpus_bundle` odczytuje schemat Parquet i metadane `korpus_meta`. Następnie sprawdza plik `.search`. Brakujący lub nieaktualny indeks zostaje zbudowany przed zwróceniem `LoadedCorpusBundle`.
+
+Bundle zawiera `LazyCorpus`, dlatego otwarcie projektu nie wymaga wczytania wszystkich dokumentów do jednego DataFrame. Dokumenty są odczytywane z Parquet wtedy, gdy potrzebuje ich wyszukiwanie, widok pełnego tekstu albo analiza.
+
+## Wyszukiwanie
+
+```text
+CQL
+  -> parser
+  -> planner
+  -> executor
+  -> SearchCursor
+  -> dokładne sprawdzenie kandydatów
+  -> wyniki dla GUI albo CLI
+```
+
+Indeks wskazuje kandydatów do sprawdzenia. `SearchCursor` sprawdza na danych dokumentu warunki, których sam posting nie rozstrzyga, na przykład sekwencję tokenów, relacje składniowe lub warunki zdaniowe.
+
+`_legacy_find_lemma_context` jest fallbackiem zgodnościowym. Jest używany tylko wtedy, gdy routing odrzuci wykonanie przez ścieżkę indeksowaną. Nie jest drugim standardowym backendem wyszukiwania.
+
+## Analizy i eksport
+
+Statystyki i kolokacje znajdują się w `korpusuj.search`. Eksport tabel i podkorpusów znajduje się w `korpusuj.export`. Sieć semantyczna i raport semantyczny znajdują się w `korpusuj.semantic`, a modelowanie tematyczne w `korpusuj.topics`.

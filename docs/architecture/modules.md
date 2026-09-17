@@ -1,53 +1,68 @@
-# Mapa modułów
+# Mapa pakietów i ważnych modułów
 
-## GUI
+## Uruchamianie i konfiguracja
 
-- `Korpusuj.py` — punkt uruchomienia interfejsu graficznego;
-- `engine.py` — integracja interfejsu graficznego ze wspólnym rdzeniem aplikacji;
-- `korpusuj/ui/` — komponenty widoków.
+- `Korpusuj.py`: punkt wejścia GUI.
+- `engine.py`: stan GUI, obsługa zdarzeń, konfiguracja runtime'u i prezentacja wyników.
+- `korpusuj.runtime_paths`: ścieżki konfiguracji, logów, modeli, pamięci podręcznych i zasobów.
+- `korpusuj.config`: wspólne ustawienia aplikacji.
 
-## `korpusuj/corpus/`
+## `korpusuj.corpus`
 
-Tworzenie korpusu z poziomu GUI i CLI, opcje uruchomienia, odczyt i zapis danych, przetwarzanie porcjami, modele NLP, `run_creator_job`, obsługa postępu, odczyt korpusu i informacje techniczne.
+- `creator.py`: okno creatora oraz adapter istniejącego GUI.
+- `creator_core.py`: `CreatorRunOptions` i kontrakt reportera.
+- `creator_gui_adapter.py`: reporter dla interfejsu graficznego.
+- `creator_orchestration.py`: `run_creator_job` i przebieg całego zadania.
+- `creator_io.py`: odczyt wejść, XLSX i bezpieczne rozpakowywanie ZIP.
+- `creator_chunking.py`: podział dokumentów na fragmenty.
+- `creator_nlp.py`: inicjalizacja i stan modeli NLP.
+- `lemma_corrections.py`: reguły korekty lematów.
+- `loading.py`: `LoadedCorpusBundle`, kontrola `.search` i utworzenie `LazyCorpus`.
+- `info.py`: dane prezentowane w informacji o korpusie.
+- `merger.py`: walidacja i scalanie zgodnych korpusów.
+- `merger_cli.py`: interfejs terminalowy mergera.
 
-## `korpusuj/index/`
+## `korpusuj.index`
 
-Tworzenie i udostępnianie indeksu `.search`:
+- `builder.py`: budowa `.search` z Parquet.
+- `sqlite_index.py`: schemat SQLite, `SearchIndex` i `LazyTermIndex`.
+- `postings.py`: kodowanie i odczyt postingów.
+- `status.py`: kontrola świeżości i integralności `.search`.
+- `cli.py`: polecenia `create`, `status` i `rebuild` dla pary sidecarów.
+- `lru.py`: ograniczone pamięci podręczne indeksu.
 
-- `builder.py`;
-- `sqlite_index.py`;
-- `status.py`;
-- `cli.py`;
-- `postings.py`;
-- `lru.py`.
+## `korpusuj.dependency`
 
-## `korpusuj/dependency/`
+- `maps.py`: mapy nadrzędników i podrzędników.
+- `disk_cache.py`: baza `.dep_cache`.
+- `lifecycle.py`: budowa, walidacja i publikacja `.search` oraz `.dep_cache`.
+- `runtime_state.py`: kolekcje i parametry dependency runtime.
+- `runtime.py`: odczyt, preładowanie i warmup map.
+- `policy.py`: stałe formatu i ustawienia techniczne.
 
-Tworzenie map zależności składniowych i pliku `.dep_cache`:
+## `korpusuj.search`
 
-- `maps.py`;
-- `disk_cache.py`;
-- `lifecycle.py`;
-- `runtime.py`.
-
-## `korpusuj/search/`
-
-- `parser.py` — analiza składni CQL;
-- `planner.py` — przygotowanie planu wykonania zapytania;
-- `backend.py` — dostęp do korpusu Parquet i indeksu `.search`;
-- `cursor.py` — udostępnianie wyników przez `SearchCursor`;
-- `result_materialization.py` — zliczanie i materializacja wyników;
-- `statistics.py` i `collocations.py` — statystyki i kolokacje;
-- `cli.py` — publiczny interfejs wiersza poleceń;
-- `output_schema.py`, `diagnostics.py` i `errors.py` — schemat wyników, diagnostyka oraz obsługa błędów.
+- `parser.py`: składnia CQL.
+- `planner.py`: plan wykonania zapytania.
+- `executor.py`: wykonanie planu.
+- `backend.py`: `LazyCorpus` i odczyt dokumentów.
+- `cursor.py`: `SearchCursor`, stronicowanie i leniwe konteksty.
+- `cursor_runtime.py`: funkcje dependency przekazywane kursorowi.
+- `result_materialization.py`: dokładne liczenie i przygotowanie wyników.
+- `statistics.py`: statystyki trafień.
+- `collocations.py`: kolokacje liniowe i składniowe.
+- `models.py`: modele stanu wyszukiwania.
+- `output_schema.py`: publiczny format wyniku CLI.
+- `headless_runner.py`: wykonanie bez GUI.
+- `legacy_adapter.py`: wywołanie fallbacku zgodnościowego.
+- `cli.py`: wyszukiwanie, analizy i eksport z terminala.
 
 ## Pozostałe pakiety
 
-- `korpusuj/export/` — eksport wyników i podkorpusów;
-- `korpusuj/semantic/` — sieci semantyczne, wektory, profile i raporty;
-- `korpusuj/topics/` — modelowanie tematyczne za pomocą BERTopic;
-- `korpusuj/utils/` — współdzielone narzędzia pomocnicze.
+- `korpusuj.export`: eksport tabel i tworzenie podkorpusów.
+- `korpusuj.semantic`: model i raporty semantyczne oraz widok sieci.
+- `korpusuj.topics`: integracja BERTopic.
+- `korpusuj.ui`: komponenty interfejsu, tabele, podpowiedzi, fiszki i widoki pomocnicze.
+- `korpusuj.utils`: małe funkcje współdzielone przez kilka pakietów.
 
-## Podział odpowiedzialności
-
-Nowa logika powinna trafiać do modułu odpowiedzialnego za daną funkcję. Plik `engine.py` integruje funkcje z interfejsem graficznym, ale nie jest domyślnym miejscem dla nowej logiki dziedzinowej.
+`legacy_engine.py` jest historyczną kopią aplikacji sprzed indeksów SQLite i modularyzacji. Nie uczestniczy w uruchomieniu aktualnej wersji.
