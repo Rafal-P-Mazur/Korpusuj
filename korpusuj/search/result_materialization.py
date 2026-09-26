@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# KORPUSUJ_FINALIZED_LAZY_SEARCH_PIPELINE
 """Shared helpers for exact hit counting and SearchCursor materialization.
 
 The functions in this module are GUI-independent and preserve cursor-produced
@@ -22,6 +23,7 @@ except Exception:
 __all__ = [
     "count_searchcursor_hits_036l4g48e",
     "materialize_searchcursor_results_036l4g48e",
+    "materialize_searchcursor_statistics_rows",
 ]
 
 
@@ -124,6 +126,52 @@ def count_final_searchcursor_hits(
     data["source"] = "final_count"
     data["strategy"] = "exact_materialization"
     return data
+
+
+def materialize_searchcursor_statistics_rows(
+    results: Any,
+    *,
+    cancel_check: Optional[Callable[[], bool]] = None,
+    search_token: Any = None,
+    logger: Any = None,
+    perf_counter: Optional[Callable[[], float]] = None,
+) -> dict[str, Any]:
+    """Materialize only the four semantic fields needed by statistics.
+
+    Full concordance contexts, full-text references and presentation metadata
+    are deliberately skipped. Unsupported cursors return ``supported=False``
+    so callers can retain the established full-materialization fallback.
+    """
+    logger = logger if logger is not None else _logging
+    perf_counter = perf_counter if perf_counter is not None else _time.perf_counter
+    started = perf_counter()
+
+    def cancelled() -> bool:
+        try:
+            return bool(cancel_check()) if cancel_check is not None else False
+        except Exception:
+            return False
+
+    materializer = getattr(results, "materialize_statistics_rows", None)
+    if not callable(materializer):
+        return {
+            "supported": False, "cancelled": False, "results": None,
+            "t_materialize_start_035d": started,
+            "t_materialize_done_035d": perf_counter(),
+        }
+    rows = materializer(cancel_check=cancelled)
+    if rows is None:
+        _logger_info_036l4g48e(logger, "Lekka materializacja statystyk przerwana [token=%s]", search_token)
+        return {
+            "supported": True, "cancelled": True, "results": None,
+            "t_materialize_start_035d": started,
+            "t_materialize_done_035d": perf_counter(),
+        }
+    return {
+        "supported": True, "cancelled": False, "results": rows,
+        "t_materialize_start_035d": started,
+        "t_materialize_done_035d": perf_counter(),
+    }
 
 
 def materialize_searchcursor_results_036l4g48e(

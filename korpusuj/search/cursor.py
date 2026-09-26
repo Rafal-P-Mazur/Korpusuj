@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# KORPUSUJ_FINALIZED_LAZY_SEARCH_PIPELINE
 """Lazy search cursors for discovering, counting, paging and materializing query matches."""
 from __future__ import annotations
 # KORPUSUJ_PATCH_138Y_INLINE_COREF_SEMANTICS_INTO_CURSOR_BEGIN
@@ -1431,10 +1432,97 @@ class SearchCursor:
                 and len(groups[0].get("conds", [])) == 1
                 and not self.plan.get("metadata_filters"))
 
+    # KORPUSUJ_PATCH_036L4G81_EXACT_INDEXED_SEQUENCE_COUNT
+    def _exact_indexed_sequence_groups_036l4g81(self):
+        """Return normalized groups only when postings prove the exact hit count."""
+        try:
+            if self._plan_uses_dependency():
+                return None
+            if self.plan.get("metadata_filters") or self.plan.get("sentence_operator"):
+                return None
+            groups = list(self.plan.get("token_groups") or [])
+            if len(groups) < 2:
+                return None
+            normalized = []
+            for group in groups:
+                if not isinstance(group, dict) or group.get("type", "token") != "token":
+                    return None
+                if group.get("neg_conds") or group.get("dep_conds") or group.get("dep_neg_conds"):
+                    return None
+                conditions = list(group.get("conds") or [])
+                if not conditions:
+                    return None
+                normalized_group = []
+                for condition in conditions:
+                    if not isinstance(condition, dict):
+                        return None
+                    if str(condition.get("match_type") or "exact") != "exact":
+                        return None
+                    if str(condition.get("attr") or "") not in self._INDEXED_ATTRS_036L4F2:
+                        return None
+                    values = list(condition.get("values") or [])
+                    if not values and condition.get("value") is not None:
+                        values = [condition.get("value")]
+                    if not values:
+                        return None
+                    normalized_group.append(condition)
+                normalized.append(normalized_group)
+            return normalized
+        except Exception:
+            return None
+
+    def _try_count_exact_indexed_sequence_036l4g81(self):
+        """Count an eligible adjacent sequence by shifted posting intersections."""
+        groups = self._exact_indexed_sequence_groups_036l4g81()
+        if groups is None:
+            return None
+        group_postings = []
+        for conditions in groups:
+            current = None
+            for condition in conditions:
+                postings = self._condition_postings(condition)
+                if current is None:
+                    current = {
+                        int(doc_id): set(map(int, positions))
+                        for doc_id, positions in postings.items()
+                    }
+                else:
+                    narrowed = {}
+                    for doc_id in set(current).intersection(postings):
+                        positions = current[int(doc_id)].intersection(
+                            map(int, postings[doc_id])
+                        )
+                        if positions:
+                            narrowed[int(doc_id)] = positions
+                    current = narrowed
+                if not current:
+                    return 0
+            group_postings.append(current)
+
+        common_docs = set(group_postings[0])
+        for postings in group_postings[1:]:
+            common_docs.intersection_update(postings)
+
+        total = 0
+        for doc_id in common_docs:
+            starts = set(group_postings[0][doc_id])
+            for offset, postings in enumerate(group_postings[1:], 1):
+                starts.intersection_update(
+                    int(position) - offset for position in postings[doc_id]
+                )
+                if not starts:
+                    break
+            total += len(starts)
+        return int(total)
+
     def count_hits(self, exact=False):
         """Return the hit count, using exact final-match counting when exact is true."""
         if exact and self._count_cache is None:
-            self._ensure_all()
+            fast_count = self._try_count_exact_indexed_sequence_036l4g81()
+            if fast_count is not None:
+                self._count_cache = int(fast_count)
+            else:
+                self._ensure_all()
         return self._count_cache if self._count_cache is not None else max(len(self._hits), int(self.count_hits_estimate() or 0))
     def get_page(self, page=0, page_size=100):
         start = int(page) * int(page_size); return self.get_range(start, start + int(page_size))
@@ -1847,24 +1935,42 @@ class SearchCursor:
 
     def _condition_matches_pos(self, cond, doc_id, pos):
         # COREF_CQL_SEARCHCURSOR_ENABLED: coref doc-array post-filter.
+        # KORPUSUJ_PATCH_036L4G80_COREF_HOTPATH_GUARD
+        # Ordinary indexed and morphological conditions are the hot path. Enter
+        # the coreference compatibility stack only for a coreference attribute.
         try:
-            _coref_138i3 = _match_coref_condition_at_pos(self, cond, doc_id, pos)
-            if _coref_138i3 is not None:
-                return bool(_coref_138i3)
+            _cond_attr_036l4g80 = str(
+                (cond or {}).get("attr") or (cond or {}).get("key") or ""
+            ).strip().lower()
         except Exception:
-            pass
+            _cond_attr_036l4g80 = ""
+        if _cond_attr_036l4g80.startswith("coref"):
+            try:
+                _coref_138i3 = _match_coref_condition_at_pos(self, cond, doc_id, pos)
+                if _coref_138i3 is not None:
+                    return bool(_coref_138i3)
+            except Exception:
+                pass
         if self._is_morph_feature_condition_036l1b(cond):
             return self._morph_feature_condition_matches_pos_036l1b(cond, doc_id, pos)
         return int(pos) in self._condition_positions(cond, doc_id)
 
     def _condition_positions(self, cond, doc_id):
         # COREF_CQL_SEARCHCURSOR_ENABLED: coref positions.
+        # KORPUSUJ_PATCH_036L4G80_COREF_HOTPATH_GUARD
         try:
-            _coref_pos_138i3 = _coref_condition_positions(self, cond, doc_id)
-            if _coref_pos_138i3 is not None:
-                return _coref_pos_138i3
+            _cond_attr_036l4g80 = str(
+                (cond or {}).get("attr") or (cond or {}).get("key") or ""
+            ).strip().lower()
         except Exception:
-            pass
+            _cond_attr_036l4g80 = ""
+        if _cond_attr_036l4g80.startswith("coref"):
+            try:
+                _coref_pos_138i3 = _coref_condition_positions(self, cond, doc_id)
+                if _coref_pos_138i3 is not None:
+                    return _coref_pos_138i3
+            except Exception:
+                pass
         return set(self._condition_postings(cond).get(int(doc_id), []))
     def _condition_df(self, cond):
         # COREF_CQL_SEARCHCURSOR_138N: coref is a docs-payload post-filter, not an anchor.
@@ -2574,6 +2680,81 @@ class SearchCursor:
         )
         res = (publication_date, [left_context, matched_text_actual, right_context], full_text_ref_111, matched_text_actual, matched_lemmas, month_key, title, author, additional_metadata, left_context, right_context, doc_id, start, end)
         self._result_cache[i] = res; return res
+
+    def _statistics_result_from_doc(self, hit, doc):
+        """Build one lightweight statistics row from a preloaded narrow document."""
+        doc_id, start, end = (int(hit[0]), int(hit[1]), int(hit[2]))
+        doc = doc or {}
+        tokens = doc.get("tokens", []) or []
+        lemmas = doc.get("lemmas", []) or tokens
+        meta = doc.get("metadata", {}) or {}
+        starts = doc.get("start_ids", []) or []
+        ends = doc.get("end_ids", []) or []
+        text = doc.get("text", "") or ""
+
+        def _int_at(seq, idx, fallback):
+            try:
+                return int(seq[idx])
+            except Exception:
+                return int(fallback)
+
+        char_start = _int_at(starts, start, start)
+        char_end_excl = _int_at(ends, end - 1, end - 1) + 1 if end > 0 else char_start
+        char_start = max(0, min(char_start, len(text)))
+        char_end_excl = max(char_start, min(char_end_excl, len(text)))
+        matched_text = text[char_start:char_end_excl] if text else " ".join(tokens[start:end])
+        matched_lemmas = " ".join(lemmas[start:end]) if lemmas else matched_text
+        publication_date = str(meta.get("Data publikacji", ""))
+        month_key = publication_date[:7] if re.match(r"\d{4}-\d{2}", publication_date) else "Unknown"
+        return (
+            publication_date, None, None, matched_text, matched_lemmas,
+            month_key, None, None, None, None, None,
+            doc_id, start, end,
+        )
+
+    def _statistics_result(self, i):
+        """Compatibility single-row path used only when batched loading is unavailable."""
+        self._ensure_until(i + 1)
+        hit = self._hits[i]
+        doc = _get_doc_cached_036l4g7(self, int(hit[0])) or {}
+        return self._statistics_result_from_doc(hit, doc)
+
+    def materialize_statistics_rows_for_indices(self, indices, cancel_check=None):
+        """Build lightweight rows with one narrow batched SQLite read per document set."""
+        normalized = [int(i) for i in indices]
+        if not normalized:
+            return []
+        self._ensure_until(max(normalized) + 1)
+        hits = [self._hits[i] for i in normalized]
+        doc_ids = [int(hit[0]) for hit in hits]
+
+        docs = None
+        loader = getattr(self.index, "get_docs_many_for_results_036l4g9", None)
+        if callable(loader):
+            try:
+                docs = loader(doc_ids, chunk_size=800)
+            except Exception:
+                docs = None
+        if docs is None:
+            docs = {}
+            for doc_id in dict.fromkeys(doc_ids):
+                if cancel_check is not None and cancel_check():
+                    return None
+                docs[int(doc_id)] = _get_doc_cached_036l4g7(self, int(doc_id)) or {}
+
+        rows = []
+        for hit in hits:
+            if cancel_check is not None and cancel_check():
+                return None
+            rows.append(self._statistics_result_from_doc(hit, docs.get(int(hit[0]))))
+        return rows
+
+    def materialize_statistics_rows(self, cancel_check=None):
+        """Return all lightweight statistics rows using narrow batched document loading."""
+        self._ensure_all()
+        return self.materialize_statistics_rows_for_indices(
+            range(len(self._hits)), cancel_check=cancel_check
+        )
 
     def _sentence_operator_document(self, doc_id):
         """Return one document through the ordinary cursor document cache."""
@@ -4091,6 +4272,33 @@ class UnionSearchCursor:
         start = int(page) * int(page_size)
         return self.get_range(start, start + int(page_size))
 
+    def materialize_statistics_rows(self, cancel_check=None):
+        """Batch lightweight reads per child and restore deduplicated union order."""
+        self._ensure_items()
+        child_indices = {}
+        for child, child_index, _key in list(self._items or []):
+            child_indices.setdefault(child, []).append(int(child_index))
+
+        child_rows = {}
+        for child, indices in child_indices.items():
+            if cancel_check is not None and cancel_check():
+                return None
+            batch = getattr(child, "materialize_statistics_rows_for_indices", None)
+            if callable(batch):
+                rows = batch(indices, cancel_check=cancel_check)
+            else:
+                rows = [child._statistics_result(i) for i in indices]
+            if rows is None:
+                return None
+            child_rows[child] = dict(zip(indices, rows))
+
+        out = []
+        for child, child_index, _key in list(self._items or []):
+            if cancel_check is not None and cancel_check():
+                return None
+            out.append(child_rows[child][int(child_index)])
+        return out
+
     def count_hits_estimate(self):
         # Sum child estimates cheaply. Dedupe requires _ensure_items().
         """Return the combined inexpensive estimate for the union branches."""
@@ -4873,6 +5081,18 @@ _previous_condition_matches_pos_for_mixed_coref = SearchCursor._condition_matche
 
 def _coref_exact_mixed_condition_eligible(condition):
     if not isinstance(condition, dict):
+        return False
+    # KORPUSUJ_PATCH_036L4G80_COREF_HOTPATH_GUARD
+    # This helper is reached for every positional condition through a class-level
+    # compatibility wrapper. Reject ordinary attributes before the deeper coref
+    # predicates and role normalization are invoked.
+    try:
+        attr = str(
+            condition.get("attr") or condition.get("key") or ""
+        ).strip().lower()
+    except Exception:
+        return False
+    if not attr.startswith("coref"):
         return False
     exact_helper = globals().get("_coref_exact_positive_condition")
     role_helper = globals().get("_coref_exact_role_kind")

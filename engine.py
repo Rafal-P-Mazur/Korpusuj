@@ -573,6 +573,11 @@ if file_path.exists():
 current_page = 0
 rows_per_page = 100
 full_results_sorted = []
+# KORPUSUJ_FINALIZED_LAZY_SEARCH_PIPELINE
+# Natural-order cursor and the unsorted full list produced once for statistics.
+_active_natural_search_cursor = None
+_materialized_natural_results = None
+_pending_global_sort_option = None
 global_query = ""
 global_selected_corpus = ""
 search_status = 0
@@ -3830,7 +3835,10 @@ def restore_from_history(state: SearchState):
         current_state = state
         global_query = state.query
         global_selected_corpus = state.corpus
-        full_results_sorted = list(state.results)
+        full_results_sorted = state.results if _is_searchcursor_like(state.results) else list(state.results)
+        globals()['_active_natural_search_cursor'] = state.results if _is_searchcursor_like(state.results) else None
+        globals()['_materialized_natural_results'] = None if _is_searchcursor_like(state.results) else list(state.results)
+        globals()['_pending_global_sort_option'] = None
         monthly_lemma_freq = dict(state.monthly_lemma_freq)
         monthly_freq_for_use = dict(state.monthly_freq_for_use)
         monthly_tfidf_for_use = dict(state.monthly_tfidf_for_use)
@@ -4359,7 +4367,23 @@ def filter_by_selected_sense(choice):
         loading_win.destroy()
 
 
+def _is_no_sort_option(choice):
+    return str(choice or "").strip().lower() in {"", "brak"}
+
+
+
+def _materialize_searchcursor_for_explicit_operation(results, *, operation="operation"):
+    """Materialize all rows only when an explicit user operation requires them."""
+    if not _is_searchcursor_like(results):
+        return results
+    payload = _materialize_searchcursor_results_with_cancel_check(results, cancel_check=None, search_token=None)
+    if payload.get("cancelled"):
+        raise RuntimeError(f"Anulowano przygotowanie wyników dla operacji: {operation}")
+    return payload.get("results", [])
+
 def sort_search_results_in_place(results, choice):
+    if _is_no_sort_option(choice):
+        return
     if _is_searchcursor_like(results):
         return
     """
@@ -4725,14 +4749,77 @@ def _try_prepare_alpha_sorted_searchcursor_preview(cursor, sort_option, query):
 
 def resort_results(choice):
     global full_results_sorted, current_page, global_query, global_selected_corpus
+    global _active_natural_search_cursor, _materialized_natural_results
+    global _pending_global_sort_option
 
-    if not full_results_sorted:
+    choice = str(choice or "").strip()
+
+    # Natural order is always restored from the original cursor, never by research.
+    if _is_no_sort_option(choice):
+        _pending_global_sort_option = None
+        if _active_natural_search_cursor is not None:
+            full_results_sorted = _active_natural_search_cursor
+            current_page = 0
+            display_page(global_query, global_selected_corpus)
         return
 
-    sort_search_results_in_place(full_results_sorted, choice)
+    def apply_cached_sort(sort_choice):
+        global full_results_sorted, current_page
+        base_results = _materialized_natural_results
+        if base_results is None:
+            return False
+        sorted_results = list(base_results)
+        sort_search_results_in_place(sorted_results, sort_choice)
+        full_results_sorted = sorted_results
+        current_page = 0
+        label_results_count.configure(
+            text=f"Znaleziono trafień: {len(sorted_results):,}".replace(',', ' ')
+        )
+        display_page(global_query, global_selected_corpus)
+        return True
 
-    current_page = 0
-    display_page(global_query, global_selected_corpus)
+    if apply_cached_sort(choice):
+        _pending_global_sort_option = None
+        return
+
+    # The statistics worker is already materializing this same cursor. Wait for
+    # its shared natural-order list instead of launching another materialization.
+    if _active_natural_search_cursor is not None:
+        _pending_global_sort_option = choice
+        try:
+            label_results_count.configure(
+                text="Przygotowuję pełną listę do sortowania..."
+            )
+        except Exception:
+            pass
+
+        def wait_for_materialized_results():
+            global _pending_global_sort_option
+            pending = _pending_global_sort_option
+            if pending is None:
+                return
+            if _materialized_natural_results is None:
+                try:
+                    materialized = _materialize_searchcursor_for_explicit_operation(
+                        _active_natural_search_cursor,
+                        operation=f"sortowanie: {pending}",
+                    )
+                    globals()['_materialized_natural_results'] = list(materialized or [])
+                except Exception as exc:
+                    _pending_global_sort_option = None
+                    messagebox.showerror("Błąd sortowania", str(exc))
+                    return
+            _pending_global_sort_option = None
+            apply_cached_sort(pending)
+
+        app.after(150, wait_for_materialized_results)
+        return
+
+    # Compatibility for an already materialized legacy result.
+    if full_results_sorted:
+        _materialized_natural_results = list(full_results_sorted)
+        apply_cached_sort(choice)
+
 
 # Funkcja obsługująca wyszukiwanie
 
@@ -5402,6 +5489,14 @@ def _materialize_searchcursor_results_with_cancel_check(results, *, cancel_check
         perf_counter=time.perf_counter,
     )
 
+def _materialize_searchcursor_statistics_rows(results, *, cancel_check=None, search_token=None):
+    """Build lightweight rows used only by frequency/statistics calculations."""
+    from korpusuj.search.result_materialization import materialize_searchcursor_statistics_rows
+    return materialize_searchcursor_statistics_rows(
+        results, cancel_check=cancel_check, search_token=search_token,
+        logger=logging, perf_counter=time.perf_counter,
+    )
+
 # END KORPUSUJ_MIGRATION_036L4G39G_SEARCHCURSOR_MATERIALIZE_CANCEL_CHECK
 
 def _gui_headless_find_lemma_context_adapter_036l4g51f2(
@@ -5836,8 +5931,46 @@ def _try_run_gui_search_via_headless_service(
             except Exception:
                 pass
 
+        # The service returns the native SearchCursor. For the explicit no-sort
+        # mode, hand it directly to the existing lazy GUI continuation instead
+        # of materializing all hits in the headless postprocessor.
+        raw_results = bundle.results
+        if _is_no_sort_option(sort_option) and _is_searchcursor_like(raw_results):
+            if korpusuj_diagnostics_enabled_145c1():
+                logging.info(
+                    "[DIAG search.backend] status=used_lazy_cursor data=%r",
+                    {
+                        "token": search_token,
+                        "query": query,
+                        "corpus": selected_corpus,
+                        "sort_option": sort_option,
+                        "result_type": type(raw_results).__name__,
+                        "raw_total_hits": raw_total,
+                        "materialized_rows": 0,
+                    },
+                )
+            return {
+                "used": True,
+                "status": "used_lazy_cursor",
+                "results": raw_results,
+                "df": df,
+                "search_df": search_df,
+                "warnings_list": warnings_list if warnings_list is not None else [],
+                "bundle": bundle,
+                "postprocess": {
+                    "results": raw_results,
+                    "cancelled": False,
+                    "was_cursor": True,
+                    "count_payload": None,
+                    "materialize_payload": None,
+                    "shadow_materialized_len": 0,
+                    "shadow_sample_order": "native_searchcursor_order",
+                    "postprocess_stage": "lazy_bypass_036L4G82B",
+                },
+            }
+
         post = _postprocess_headless_shadow_results(
-            shadow_results=bundle.results,
+            shadow_results=raw_results,
             sort_option=sort_option,
             search_token=search_token,
             cancel_check=None,
@@ -6637,31 +6770,20 @@ def search():
                 df = headless_payload["df"]
                 search_df = headless_payload["search_df"]
                 warnings_list = headless_payload.get("warnings_list", locals().get("warnings_list", []))
-                # Prepare local state expected by the downstream GUI result pipeline.
-                # The legacy backend path normally prepares local_state.
-                # When the headless service path is used, the legacy backend block is skipped,
-                # so the downstream GUI result pipeline still needs local_state.
+                # The service-backed path must publish the same complete state contract
+                # as the native backend path. A dict/SimpleNamespace lacks statistics
+                # fields read by restore_from_history(), even when lazy ``Brak`` does
+                # not compute those statistics. SearchState supplies safe empty defaults.
+                local_state = SearchState()
+                local_state.query = query
+                local_state.corpus = selected_corpus
+                local_state.left_context_size = left_context_size
+                local_state.right_context_size = right_context_size
+                local_state.sort_option = sort_option
                 try:
-                    local_state = ui_state
-                    local_state.query = query
-                    local_state.corpus = selected_corpus
-                    local_state.left_context_size = left_context_size
-                    local_state.right_context_size = right_context_size
-                    local_state.sort_option = sort_option
+                    local_state.search_request = _get_current_gui_search_request()
                 except Exception:
-                    from types import SimpleNamespace
-                    try:
-                        state_dict = dict(getattr(ui_state, "__dict__", {}) or {})
-                    except Exception:
-                        state_dict = {}
-                    state_dict.update({
-                        "query": query,
-                        "corpus": selected_corpus,
-                        "left_context_size": left_context_size,
-                        "right_context_size": right_context_size,
-                        "sort_option": sort_option,
-                    })
-                    local_state = SimpleNamespace(**state_dict)
+                    pass
             else:
                 _log_gui_headless_boundary_fallback(
                     headless_payload,
@@ -6707,6 +6829,46 @@ def search():
                 t_count_fast_start_035d = count_payload["t_count_fast_start_035d"]
                 t_count_fast_done_035d = count_payload["t_count_fast_done_035d"]
 
+                if _is_no_sort_option(sort_option):
+                    globals()['_active_natural_search_cursor'] = results
+                    globals()['_materialized_natural_results'] = None
+                    globals()['_pending_global_sort_option'] = None
+                    local_state.results = results
+                    try:
+                        local_state.sort_option = "Brak"
+                    except Exception:
+                        pass
+                    globals()["last_search_warnings"] = warnings_list
+                    with state_lock:
+                        _publish_current_search_state_aliases(local_state, include_identity=True, include_results=True, results_override=results, reset_page=True, set_status=True)
+
+                    def show_lazy_no_sort_results():
+                        if search_token != active_search_token:
+                            return
+                        globals()["search_status"] = 0
+                        label_results_count.configure(text=f"Znaleziono trafień: {total_hits:,}".replace(',', ' '))
+                        t_display_ui = time.perf_counter()
+                        display_page(local_state.query, local_state.corpus)
+                        try:
+                            app.update_idletasks()
+                        except Exception:
+                            pass
+                        t_display_ui_done = time.perf_counter()
+                        show_search_warnings(warnings_list)
+                        try:
+                            add_to_history(local_state)
+                            push_nav_state(local_state)
+                        except Exception:
+                            if korpusuj_diagnostics_enabled_145c1():
+                                logging.info("[DIAG lazy_no_sort.history] token=%r", search_token, exc_info=True)
+
+                    app.after(0, show_lazy_no_sort_results)
+                    # Do not end the worker here. The already published SearchCursor
+                    # keeps the first page responsive, while the existing downstream
+                    # materialization/statistics pipeline continues in this background
+                    # thread and later builds chart labels, tables and plots.
+                    # The query is not executed again; the same cursor is consumed.
+
                 local_state.results = results
                 # Try to prepare a metadata-sorted first-page preview without full materialization.
                 metadata_sorted_first_page_ready = _try_prepare_metadata_sorted_searchcursor_preview(
@@ -6731,7 +6893,7 @@ def search():
                     if search_token != active_search_token:
                         return
                     label_results_count.configure(
-                        text=f"Znaleziono trafień: {total_hits:,} (przygotowuję listę wyników...)".replace(',', ' ')
+                        text=f"Znaleziono trafień: {total_hits:,}. Przygotowuję statystyki...".replace(',', ' ')
                     )
 
                 def show_searchcursor_warnings_if_current():
@@ -6777,15 +6939,31 @@ def search():
                 else:
                     pass
 
-                # Materialize SearchCursor results with cancellation support before final sorting/statistics.
-                materialize_payload = _materialize_searchcursor_results_with_cancel_check(
-                    results,
-                    cancel_check=lambda: search_token != active_search_token,
-                    search_token=search_token,
-                )
-                if materialize_payload.get("cancelled"):
-                    return
-                results = materialize_payload["results"]
+                cursor_before_materialization = results
+                if _is_no_sort_option(sort_option):
+                    materialize_payload = _materialize_searchcursor_statistics_rows(
+                        results,
+                        cancel_check=lambda: search_token != active_search_token,
+                        search_token=search_token,
+                    )
+                else:
+                    materialize_payload = {"supported": False}
+                if not materialize_payload.get("supported", False):
+                    materialize_payload = _materialize_searchcursor_results_with_cancel_check(
+                        results,
+                        cancel_check=lambda: search_token != active_search_token,
+                        search_token=search_token,
+                    )
+                    if materialize_payload.get("cancelled"):
+                        return
+                    results = materialize_payload["results"]
+                    if globals().get('_active_natural_search_cursor') is cursor_before_materialization:
+                        globals()['_materialized_natural_results'] = list(results)
+                else:
+                    if materialize_payload.get("cancelled"):
+                        return
+                    results = materialize_payload["results"]
+                    globals()['_materialized_natural_results'] = None
                 t_materialize_start_035d = materialize_payload["t_materialize_start_035d"]
                 t_materialize_done_035d = materialize_payload["t_materialize_done_035d"]
 
@@ -6848,7 +7026,10 @@ def search():
             if results_sorted:
                 # wyniki najpierw w lokalnym stanie:
                 t_state_alias_start = time.perf_counter()
-                local_state.results = results_sorted
+                if _is_no_sort_option(sort_option) and globals().get('_active_natural_search_cursor') is not None:
+                    local_state.results = globals()['_active_natural_search_cursor']
+                else:
+                    local_state.results = results_sorted
 
                 # atomowa podmiana stanu i TYLKO wtedy aktualizacja GUI
                 with state_lock:
@@ -6873,6 +7054,10 @@ def search():
 
                     t_display_page_start = time.perf_counter()
                     display_page(local_state.query, local_state.corpus)
+                    try:
+                        app.update_idletasks()
+                    except Exception:
+                        pass
                     t_display_page_done = time.perf_counter()
 
                     # Compute and apply the available publication-date range without blocking the first render.
@@ -9543,7 +9728,8 @@ def export_to_subcorpus():
             from korpusuj.export.subcorpus import select_rows_from_search_results, export_dataframe_to_subcorpus_parquet
 
             df = dataframes[global_selected_corpus]
-            sub_df = select_rows_from_search_results(df, full_results_sorted)
+            export_results = _materialize_searchcursor_for_explicit_operation(full_results_sorted, operation="eksport podkorpusu")
+            sub_df = select_rows_from_search_results(df, export_results)
 
             if sub_df.empty:
                 raise ValueError("Brak poprawnych wierszy wyników do eksportu podkorpusu.")
@@ -9586,8 +9772,9 @@ def export_data():
             "Lewy kontekst", "Prawy kontekst", "row_index", "start_idx", "end_idx"
         ]
 
+        export_results = _materialize_searchcursor_for_explicit_operation(full_results_sorted, operation="eksport tabeli wyników")
         df_export_slice = build_search_results_export_df(
-            _resolve_lazy_fulltext_rows_for_export_111(full_results_sorted),
+            _resolve_lazy_fulltext_rows_for_export_111(export_results),
             all_columns=all_columns,
         )
 
@@ -11966,10 +12153,10 @@ entry_right_context.insert(0, "10")
 # Sort options
 label_sort = ctk.CTkLabel(top_frame_container, text="Sortuj wyniki:", font=("Verdana", 12, 'bold'), text_color="white")
 label_sort.grid(row=1, column=6, padx=1, pady=1, sticky="w")
-sort_option_var = tk.StringVar(value="Alfabetycznie")
+sort_option_var = tk.StringVar(value="Brak")
 option_sort = ctk.CTkOptionMenu(
     top_frame_container,
-    values=["Alfabetycznie", "Lewy kontekst", "Prawy kontekst", "Autor", "Tytuł", "Data publikacji", "Frekwencja base","Frekwencja orth"],
+    values=["Brak", "Alfabetycznie", "Lewy kontekst", "Prawy kontekst", "Autor", "Tytuł", "Data publikacji", "Frekwencja base","Frekwencja orth"],
     variable=sort_option_var,
     command=resort_results,
     font=("Verdana", 12, 'bold'),
