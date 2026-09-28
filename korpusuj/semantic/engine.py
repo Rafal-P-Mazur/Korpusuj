@@ -1,4 +1,6 @@
 """Semantic analysis services for artifact loading, neighbor indexes, hubness, frame induction, graph expansion and report generation."""
+# D20_FASTTEXT_SUBWORD_CONTROLS
+# D21_FASTTEXT_DEFAULT_5_6
 
 import os
 import sys
@@ -14,7 +16,6 @@ import pandas as pd
 import customtkinter as ctk
 from tkinter import messagebox
 
-from korpusuj.semantic.sense_inducer import SenseInducer
 
 try:
     from korpusuj.search.diagnostics import korpusuj_diagnostics_enabled_145c1
@@ -48,6 +49,9 @@ def _default_launcher_script() -> str:
 
 
 class SemanticEngine:
+    # D19_RANKING_CONTRACT
+    # D18_NO_WSD
+    # D16_MUTUAL_5NN_EXPLORATION
     """Klasa zarządzająca logiką, ładowaniem i pamięcią sieci semantycznej."""
 
     def __init__(self, launcher_script=None):
@@ -55,12 +59,7 @@ class SemanticEngine:
         self.index = None
         self.knn_set = None
 
-        # Nowe zmienne dla WSD
         self.vectors = None
-        self.senses_cache = {}
-
-        # NOWE: Cache dla kontekstu grafowego, żeby nie zamrozić UI
-        self.graph_sense_cache = {}
 
         self.hubness_index = {}  # Dodane: cache na preobliczoną hubowość\n        self.launcher_script = launcher_script or _default_launcher_script()
 
@@ -83,7 +82,7 @@ class SemanticEngine:
 
         setup_win = ctk.CTkToplevel(parent_app)
         setup_win.title("Konfiguracja sieci semantycznej")
-        setup_win.geometry("450x450")
+        setup_win.geometry("500x560")
         setup_win.configure(fg_color=theme["app_bg"])
         setup_win.attributes("-topmost", True)
 
@@ -108,6 +107,16 @@ class SemanticEngine:
 
         # Parametry
         algo_var = add_param("Algorytm (--algo):", "fasttext", True, ["fasttext", "word2vec"])
+        min_n_var = add_param("FastText min_n:", "5")
+        max_n_var = add_param("FastText max_n:", "6")
+        ctk.CTkLabel(
+            frame,
+            text="min_n i max_n sterują długością znakowych n-gramów tylko w FastText. Word2Vec ignoruje te pola.",
+            wraplength=430,
+            justify="left",
+            text_color="gray",
+            font=("Verdana", 9),
+        ).pack(fill="x", pady=(0, 5))
         min_count_var = add_param("Min. wystąpień (--min-count):", "10")
         epochs_var = add_param("Epoki (--epochs):", "20")
         window_var = add_param("Rozmiar okna (--window):", "15")
@@ -115,8 +124,21 @@ class SemanticEngine:
         precomp_var = add_param("Zapisz top N (--precompute...):", "200")
 
         def on_start():
+            try:
+                min_n = int(min_n_var.get())
+                max_n = int(max_n_var.get())
+                if min_n < 0 or max_n < 0:
+                    raise ValueError("wartości nie mogą być ujemne")
+                if min_n > max_n:
+                    raise ValueError("min_n musi być mniejsze lub równe max_n")
+            except ValueError as exc:
+                messagebox.showerror("Niepoprawne subwordy FastText", str(exc), parent=setup_win)
+                return
+
             params = {
                 "algo": algo_var.get(),
+                "fasttext_min_n": min_n,
+                "fasttext_max_n": max_n,
                 "min_count": min_count_var.get(),
                 "epochs": epochs_var.get(),
                 "window": window_var.get(),
@@ -162,6 +184,8 @@ class SemanticEngine:
             cmd.extend([
                 "--parquet", corpus_path_safe,
                 "--algo", params["algo"],
+                "--fasttext-min-n", str(params["fasttext_min_n"]),
+                "--fasttext-max-n", str(params["fasttext_max_n"]),
                 "--min-count", str(params["min_count"]),  # Zawsze bezpieczniej wymusić str()
                 "--epochs", str(params["epochs"]),
                 "--window", str(params["window"]),
@@ -224,8 +248,6 @@ class SemanticEngine:
             return
 
         params = params or {}
-        report_top_k = str(params.get("report_top_k", params.get("top_k", 0)))
-        min_similarity = str(params.get("min_similarity", 0.30))
 
         safe_lemma = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(lemma).strip())
         corpus_base = Path(current_corpus_path).with_suffix("")
@@ -296,31 +318,13 @@ class SemanticEngine:
             else:
                 cmd = [sys.executable, getattr(self, "launcher_script", _default_launcher_script()), "--run-semantic-report"]
 
-            report_top_k = str(params.get("report_top_k", params.get("top_k", 0)))
-            min_similarity = str(params.get("min_similarity", 0.30))
 
             cmd.extend([
                 "--artifacts", corpus_path_safe,
                 "--lemma", str(lemma).strip(),
                 "--output-dir", report_dir_safe,
 
-                "--top-k-neighbors", report_top_k,
-                "--min-similarity", min_similarity,
-
-                "--top-core", "12",
-                "--top-distinctive", "12",
-                "--top-interpretive", "12",
-
-                "--table-size", "40",
-                "--tail-size", "20",
-                "--orphan-size", "50",
-
-                "--globality-threshold", "0.40",
-                "--frame-edge-threshold", "0.42",
-                "--bridge-similarity-threshold", "0.45",
-                "--frame-assignment-min-similarity", "0.10",
-                "--core-quantile", "0.60",
-                "--max-plot-words", "120",
+                # D14d: zakres raportu pozostaje pełny; nie przekazujemy historycznych limitów prezentacyjnych.
             ])
 
             # SEMANTIC_REPORT_DIAG_007B: log komendy przed Popen.
@@ -389,8 +393,6 @@ class SemanticEngine:
             self.index = None
             self.knn_set = None
             self.vectors = None
-            self.senses_cache = {}
-            self.graph_sense_cache = {}
             self.hubness_index = {}  # <--- POPRAWKA 5: Reset przy braku korpusu
             return
 
@@ -446,15 +448,13 @@ class SemanticEngine:
             self.vectors = None
             logging.warning("Sieć semantyczna załadowana, ale brakuje wektorów (WSD nie będzie działać).")
 
-        self.senses_cache = {}
-        self.graph_sense_cache = {}
 
         if loaded_df is not None:
             self.index = {}
             self.knn_set = {}
             has_freq = 'neighbor_freq' in loaded_df.columns
             loaded_df = loaded_df.sort_values(by=['lemma', 'similarity'], ascending=[True, False])
-            MUTUAL_M = 50
+            MUTUAL_M = 5  # D16: mutual 5-NN
 
             for lemma, group in loaded_df.groupby('lemma'):
                 neighbors = group['neighbor'].tolist()
@@ -482,10 +482,9 @@ class SemanticEngine:
         # listach sąsiadów INNYCH słów. Liczymy globalną frekwencję.
         hub_counts = {}
         for lemma, neighbors in self.index.items():
-            for n_word, n_score, _ in neighbors:
-                # Bierzemy pod uwagę tylko w miarę silne relacje (>0.40)
-                if float(n_score) >= 0.40:
-                    hub_counts[n_word] = hub_counts.get(n_word, 0) + 1
+            for n_word, _n_score, _ in neighbors:
+                # D16: wszystkie zapisane listy, bez progu podobieństwa.
+                hub_counts[n_word] = hub_counts.get(n_word, 0) + 1
 
         counts = list(hub_counts.values())
         if not counts:
@@ -539,96 +538,14 @@ class SemanticEngine:
             return False
         return (v in self.knn_set.get(u, set())) and (u in self.knn_set.get(v, set()))
 
-    @staticmethod
-    def dynamic_bridge_threshold(freq_u: int, freq_v: int, base: float = 0.55) -> float:
-        # [BEZ ZMIAN]
-        import math
-        fu, fv = max(0, int(freq_u or 0)), max(0, int(freq_v or 0))
-        if fu == 0 and fv == 0: return base
-        hub = max(fu, fv)
-        boost = 0.06 * max(0.0, math.log10(hub / 2000)) if hub > 0 else 0.0
-        return max(0.55, min(0.78, base + boost))
-
     # ==========================================
     # NOWE METODY DO OBSŁUGI SENSÓW (WSD)
     # ==========================================
 
-    def get_or_create_senses(self, lemma):
-        """Pobiera wygenerowane sensy z cache lub liczy je na żądanie."""
-        if not self.vectors or not self.index:
-            return []
-
-        # Używamy nowej metody do normalizacji klucza
-        actual_lemma = self._resolve_key(lemma, self.index)
-
-        # Sprawdzamy czy znormalizowane słowo jest też w wektorach
-        if not actual_lemma or actual_lemma not in self.vectors:
-            return []
-
-        # Jeśli już wcześniej policzyliśmy klastry dla tego słowa
-        if actual_lemma in self.senses_cache:
-            return self.senses_cache[actual_lemma]
-
-        # Liczymy klastry i zapisujemy do cache
-        from korpusuj.semantic.sense_inducer import SenseInducer
-        debug_semantic_frames = False
-        senses = SenseInducer.induce(
-            actual_lemma,
-            self.vectors,
-            self.index,
-            debug=debug_semantic_frames
-        )
-        self.senses_cache[actual_lemma] = senses
-
-        return senses
-
-    def get_cached_senses(self, lemma):
-        """
-        Zwraca sensy tylko wtedy, gdy są już w cache.
-        NIE uruchamia indukcji sensów.
-        """
-        if not self.vectors or not self.index:
-            return []
-
-        actual_lemma = self._resolve_key(lemma, self.index)
-
-        if not actual_lemma or actual_lemma not in self.vectors:
-            return []
-
-        return self.senses_cache.get(actual_lemma, [])
 
 
 
-    def disambiguate_instance(self, sentence_tokens, target_idx, lemma):
-        """Zwraca ID sensu dla podanego słowa w zdaniu. (Oczekuje tokenów w formie słowników np. {'lemma': '...'})"""
-        senses = self.get_or_create_senses(lemma)
-        if not senses:
-            return None
 
-        # Zbuduj wektor kontekstu omijając badane słowo
-        ctx = []
-        for i, tok in enumerate(sentence_tokens):
-            if i == target_idx:
-                continue
-            tok_lemma = tok.get("lemma", "").lower()
-            if tok_lemma in self.vectors:
-                ctx.append(self.vectors[tok_lemma])
-
-        if not ctx:
-            return None
-
-        ctx_vec = np.mean(ctx, axis=0)
-
-        best_sid = None
-        best_score = -1
-
-        for s in senses:
-            score = np.dot(ctx_vec, s["vector"]) / (np.linalg.norm(ctx_vec) * np.linalg.norm(s["vector"]) + 1e-9)
-            if score > best_score:
-                best_sid = s["sense_id"]
-                best_score = score
-
-        return best_sid
 
     # ==========================================
     # GRAPH-CONDITIONED EXPANSION (GRAPH-WSD)
@@ -643,203 +560,62 @@ class SemanticEngine:
                 return candidate
         return None
 
-    def get_representation_vector(self, lemma, sense_id=None):
-        actual_lemma = self._resolve_key(lemma, self.vectors)
-        if not actual_lemma:
-            return None
+    def get_representation_vector(self, lemma):
+        """Zwraca podstawowy wektor lematu."""
+        actual = self._resolve_key(lemma, self.vectors)
+        return self.vectors.get(actual) if actual and self.vectors else None
 
-        if sense_id is None:
-            return self.vectors[actual_lemma]
-
-        senses = self.get_or_create_senses(actual_lemma)
-        for s in senses:
-            if s["sense_id"] == sense_id:
-                return s["vector"]
-        return self.vectors[actual_lemma]
-
-    def build_graph_context_vector(self, root_lemma, parent_lemma, root_sense_id=None, parent_sense_id=None,
-                                   local_neighbor_lemmas=None, alpha=0.45, beta=0.40, gamma=0.10, delta=0.05):
-        vecs = []
-        v_root = self.get_representation_vector(root_lemma, root_sense_id)
-        v_parent = self.get_representation_vector(parent_lemma, parent_sense_id)
-        v_parent_base = self.get_representation_vector(parent_lemma, None)
-
-        if v_root is not None: vecs.append((alpha, v_root))
-        if v_parent is not None: vecs.append((beta, v_parent))
-        if v_parent_base is not None: vecs.append((delta, v_parent_base))
-
-        if gamma > 0 and local_neighbor_lemmas and self.vectors:
-            local_vecs = []
-            for w in local_neighbor_lemmas:
-                norm_w = self._resolve_key(w, self.vectors)
-                if norm_w: local_vecs.append(self.vectors[norm_w])
-
-            if local_vecs:
-                v_local = np.mean(local_vecs, axis=0)
-                vecs.append((gamma, v_local))
-
-        if not vecs: return None
-        ctx = sum(weight * vec for weight, vec in vecs)
-        norm = np.linalg.norm(ctx) + 1e-9
-        return ctx / norm
 
     def _cos(self, u, v):
         if u is None or v is None: return -1.0
         return float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9))
 
-    def choose_graph_sense(
-            self,
-            child_lemma,
-            root_lemma,
-            parent_lemma,
-            root_sense_id=None,
-            parent_sense_id=None,
-            local_neighbor_lemmas=None,
-            allow_induce=True
-    ):
-        actual_child = self._resolve_key(child_lemma, self.vectors)
-        actual_root = self._resolve_key(root_lemma, self.vectors) if root_lemma else None
-        actual_parent = self._resolve_key(parent_lemma, self.vectors) if parent_lemma else None
-
-        if not actual_child:
-            return None, None, -1.0
-
-        # allow_induce w kluczu cache, żeby nie mieszać:
-        # - fallbacku bez indukcji
-        # - pełnego wyniku po indukcji
-        cache_key = (
-            actual_child,
-            actual_root,
-            actual_parent,
-            root_sense_id,
-            parent_sense_id,
-            bool(allow_induce)
-        )
-
-        if cache_key in self.graph_sense_cache:
-            return self.graph_sense_cache[cache_key]
-
-        ctx_vec = self.build_graph_context_vector(
-            root_lemma,
-            parent_lemma,
-            root_sense_id,
-            parent_sense_id,
-            local_neighbor_lemmas
-        )
-        v_child_base = self.vectors.get(actual_child)
-
-        if ctx_vec is None:
-            res = (None, v_child_base, -1.0)
-            self.graph_sense_cache[cache_key] = res
-            return res
-
-        # KLUCZOWA ZMIANA:
-        # allow_induce=False -> tylko cache, bez odpalania SenseInducer
-        if allow_induce:
-            senses = self.get_or_create_senses(actual_child)
-        else:
-            senses = self.get_cached_senses(actual_child)
-
-        if not senses:
-            score = self._cos(ctx_vec, v_child_base) if v_child_base is not None else -1.0
-            res = (None, v_child_base, score)
-            self.graph_sense_cache[cache_key] = res
-            return res
-
-        best_sid, best_vec, best_score = None, None, -float("inf")
-        for s in senses:
-            sc = self._cos(ctx_vec, s["vector"])
-            if sc > best_score:
-                best_sid, best_vec, best_score = s["sense_id"], s["vector"], sc
-
-        res = (best_sid, best_vec, best_score)
-        self.graph_sense_cache[cache_key] = res
-        return res
 
 
-    def get_or_create_frames(self, lemma):
-        return self.get_or_create_senses(lemma)
 
-    def choose_graph_frame(
-            self,
-            child_lemma,
-            root_lemma,
-            parent_lemma,
-            root_sense_id=None,
-            parent_sense_id=None,
-            local_neighbor_lemmas=None
-    ):
-        return self.choose_graph_sense(
-            child_lemma,
-            root_lemma,
-            parent_lemma,
-            root_sense_id=root_sense_id,
-            parent_sense_id=parent_sense_id,
-            local_neighbor_lemmas=local_neighbor_lemmas
-        )
 
-    def get_halo_candidates(self, center_lemma, top_n=150, min_sim=0.35):
-        """Pobiera kandydatów do tła semantycznego (Halo) bez naruszania struktury grafu Core."""
-        if not self.index:
-            return []
 
-        matched_center = self._resolve_key(center_lemma, self.index)
-        if not matched_center:
-            return []
-
-        raw = self.index.get(matched_center, [])
-        candidates = []
-        for u, base_sim, _ in raw[:top_n]:
-            sim = float(base_sim)
-            if sim >= min_sim:
-                candidates.append((u, sim))
-
-        return candidates
-
-    def get_contextual_neighbors(self, center_lemma, top_n=25, root_lemma=None, parent_lemma=None, root_sense_id=None,
-                                 parent_sense_id=None, local_neighbor_lemmas=None, base_weight=0.45, parent_weight=0.30,
-                                 root_weight=0.20, local_weight=0.00, domain_lambda=0.20):
+    def get_contextual_neighbors(self, center_lemma, top_n=25, root_lemma=None, parent_lemma=None,
+                                 base_weight=0.50, parent_weight=0.30,
+                                 root_weight=0.20, domain_lambda=0.20):
         matched_center = self._resolve_key(center_lemma, self.index)
         if not matched_center: return center_lemma, []
 
         raw = self.index[matched_center]
-        root_vec = self.get_representation_vector(root_lemma, root_sense_id) if root_lemma else None
-        parent_vec = self.get_representation_vector(parent_lemma, parent_sense_id) if parent_lemma else None
-        local_vec = None
-
-        if local_weight > 0 and local_neighbor_lemmas and self.vectors:
-            local_vecs = [self.vectors[self._resolve_key(w, self.vectors)] for w in local_neighbor_lemmas if
-                          self._resolve_key(w, self.vectors)]
-            if local_vecs: local_vec = np.mean(local_vecs, axis=0)
+        root_vec = self.get_representation_vector(root_lemma) if root_lemma else None
+        matched_parent = self._resolve_key(parent_lemma, self.index) if parent_lemma else None
+        parent_vec = self.get_representation_vector(matched_parent) if matched_parent else None
+        initial_context = matched_parent is None
+        ranking_context = "initial" if initial_context else "path"
 
         out = []
-        # Przekazujemy lokalnych sąsiadów TYLKO gdy ich waga w eksperymencie jest > 0
-        effective_local = local_neighbor_lemmas if local_weight > 0 else None
 
         for u, base_sim, freq in raw:
             actual_u = self._resolve_key(u, self.vectors)
-            if not actual_u: continue
+            if not actual_u:
+                continue
 
-            child_sid, child_vec, sense_score = self.choose_graph_sense(
-                actual_u,
-                root_lemma or matched_center,
-                parent_lemma or matched_center,
-                root_sense_id,
-                parent_sense_id,
-                effective_local,
-                allow_induce=False
-            )
+            # Bezpośredni powrót A -> B -> A nie dodaje nowej informacji do grafu.
+            candidate_index_key = self._resolve_key(u, self.index)
+            if matched_parent is not None and candidate_index_key == matched_parent:
+                continue
+
+            child_sid = None
+            child_vec = self.get_representation_vector(actual_u)
+            sense_score = 0.0
             s_parent = self._cos(parent_vec, child_vec) if parent_vec is not None else 0.0
             s_root = self._cos(root_vec, child_vec) if root_vec is not None else 0.0
-            s_local = self._cos(local_vec, child_vec) if local_vec is not None else 0.0
 
-            # 1. Baza do karania - to Twoje dotychczasowe obliczenia
-            contextual_score = (
+            # Pierwszy krok wykorzystuje tylko podobieństwo do rozwijanego lematu.
+            # Kolejne kroki zachowują odrębną informację rodzica i korzenia.
+            if initial_context:
+                contextual_score = float(base_sim)
+            else:
+                contextual_score = (
                     base_weight * float(base_sim)
                     + parent_weight * s_parent
                     + root_weight * s_root
-                    + local_weight * s_local
-            )
+                )
 
             # 2. Pobranie hubności dla słowa 'u' z indeksu
             actual_candidate = self._resolve_key(u, self.hubness_index) or u
@@ -848,12 +624,21 @@ class SemanticEngine:
             # 3. Nałożenie kary na ostateczny wynik (z ujemnym score na selektywnych listach)
             final_score = contextual_score - (domain_lambda * hubness_penalty)
 
+            generality_penalty = float(domain_lambda * hubness_penalty)
             out.append({
                 "lemma": u,
                 "base_similarity": float(base_sim),
+                "parent_similarity": float(s_parent),
+                "root_similarity": float(s_root),
+                "contextual_similarity": float(contextual_score),
+                "ranking_context": ranking_context,
+                "generality": float(hubness_penalty),
+                "generality_penalty": generality_penalty,
+                "selection_score": float(final_score),
+                "semantic_edge_weight": float(contextual_score),
                 "contextual_score": float(contextual_score),
-                "score": float(final_score),  # Ukarany score do rankingu
-                "graph_weight": float(contextual_score),  # Prawdziwe podobieństwo do krawędzi
+                "score": float(final_score),
+                "graph_weight": float(contextual_score),
                 "freq": int(freq),
                 "sense_id": child_sid,
                 "sense_score": float(sense_score)

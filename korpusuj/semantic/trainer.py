@@ -1,4 +1,6 @@
 from __future__ import annotations
+# D20_FASTTEXT_SUBWORD_CONTROLS
+# D21_FASTTEXT_DEFAULT_5_6
 import argparse
 import ast
 import json
@@ -252,6 +254,8 @@ class TrainingConfig:
     negative: int = 10
     sample: float = 1e-5
     seed: int = 42
+    fasttext_min_n: int = 5
+    fasttext_max_n: int = 6
     lower: bool = True
     keep_punct: bool = False
     keep_numeric: bool = False
@@ -548,7 +552,20 @@ def train_embedding_model(sentences: Iterable[List[str]], config: TrainingConfig
     if algo == "word2vec":
         model = Word2Vec(**common_kwargs)
     elif algo == "fasttext":
-        model = FastText(**common_kwargs)
+        if config.fasttext_min_n < 0 or config.fasttext_max_n < 0:
+            raise ValueError("FastText min_n i max_n nie mogą być ujemne")
+        if config.fasttext_min_n > config.fasttext_max_n:
+            raise ValueError("FastText wymaga min_n <= max_n")
+        model = FastText(
+            **common_kwargs,
+            min_n=config.fasttext_min_n,
+            max_n=config.fasttext_max_n,
+        )
+        logging.info(
+            "FastText subwords: min_n=%s, max_n=%s",
+            config.fasttext_min_n,
+            config.fasttext_max_n,
+        )
     else:
         raise ValueError("Nieobsługiwany algorytm. Użyj: word2vec albo fasttext")
 
@@ -739,6 +756,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--negative", type=int, default=10, help="Liczba negatywnych próbek")
     parser.add_argument("--sample", type=float, default=1e-5, help="Subsampling częstych słów")
     parser.add_argument("--seed", type=int, default=42, help="Seed treningu")
+    parser.add_argument("--fasttext-min-n", type=int, default=5,
+                        help="Minimalna długość znaku n-gramu FastText; ignorowana przez Word2Vec")
+    parser.add_argument("--fasttext-max-n", type=int, default=6,
+                        help="Maksymalna długość znaku n-gramu FastText; ignorowana przez Word2Vec")
     parser.add_argument("--keep-punct", action="store_true", help="Nie usuwaj interpunkcji")
     parser.add_argument("--keep-numeric", action="store_true", help="Nie usuwaj tokenów liczbowych")
     parser.add_argument("--allowed-upos", nargs="+", default=None, help="Lista dozwolonych UPOS")
@@ -824,6 +845,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         negative=args.negative,
         sample=args.sample,
         seed=args.seed,
+        fasttext_min_n=args.fasttext_min_n,
+        fasttext_max_n=args.fasttext_max_n,
         lower=not args.no_lower,
         keep_punct=args.keep_punct,
         keep_numeric=args.keep_numeric,

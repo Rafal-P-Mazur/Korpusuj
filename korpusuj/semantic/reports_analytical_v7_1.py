@@ -251,32 +251,123 @@ def minmax_scale_dict(values: Dict[str, float]) -> Dict[str, float]:
 class ReportConfigV7_1:
     lemma: str
     output_dir: str
-    top_k_neighbors: int = 0
-    min_similarity: float = 0.30
-    top_n_core_words: int = 15
-    top_n_distinctive_words: int = 15
-    top_n_interpretive_words: int = 15
-    members_table_size: int = 50
-    tail_table_size: int = 24
-    orphan_table_size: int = 60
     use_sense_inducer: bool = True
     export_csv: bool = True
-    hubness_similarity_threshold: float = 0.40
-    frame_edge_threshold: float = 0.42
-    bridge_similarity_threshold: float = 0.45
-    frame_assignment_min_similarity: float = 0.10
-    core_quantile: float = 0.60
-    max_plot_words: int = 120
-    local_neighbor_window: int = 80
+    # SEMANTIC_MUTUAL_KNN_D1: jawna konstrukcja grafu klasteryzacji.
+    frame_graph_mode: str = "mutual_knn"
+    frame_graph_knn_k: int = 5
+    frame_graph_seed: int = 42
+    frame_graph_iterations: int = 100
 
 
+# KORPUSUJ_PATCH_D14E_FULL_ARTIFACT_FIELD_AND_REVERSE_FIELD_EXPLANATION
+# KORPUSUJ_PATCH_D14D_FULL_PCA_AND_REMOVE_LEGACY_PRESENTATION_LIMITS
+# KORPUSUJ_PATCH_D14C_COMPACT_RUNTIME_DISCLOSURE
+# KORPUSUJ_PATCH_D14B_METHOD_CONTRACT_CLARIFICATION
+# KORPUSUJ_PATCH_D14_RELATIONAL_MEASURES_AND_REPORT_POLISH
 class AnalyticalSemanticReportBuilderV7_1:
+    # SEMANTIC_METHOD_CONTRACT_V1: metadata-only contract; baseline calculations stay unchanged.
+    ANALYSIS_METHOD_VERSION = "semantic_report_v7_2"
+    # D13_REMOVE_THRESHOLDS_AND_HELPER_GRAPH: globality bez progu; usunięto pomocniczy graf progowy raportu.
+    # D11_CHINESE_WHISPERS_CONVERGENCE: CW kończy się po zbieżności; limit iteracji jest zabezpieczeniem.
+    # D9A_REMOVE_FRAME_SALIENCE: brak zagregowanej nośności ramowej; pozostają miary bezpośrednie.
+    # D10_REMOVE_FIELD_SALIENCE_DISCLOSE_CONTRACT: usunięto nośność pola i ujawniono granice pola oraz filtr rozmiaru ram.
+    CLUSTERING_GRAPH_NAME = "mutual_knn_clustering_graph"
+
+    def build_method_contract(self, key: str) -> Dict[str, object]:
+        """Return the effective, serializable method contract used by this report.
+
+        This method records existing runtime behavior only. It does not select
+        parameters, rebuild frames, or change any numerical result.
+        """
+        inducer_available = bool(self.config.use_sense_inducer and SenseInducer is not None)
+        inducer = SenseInducer if inducer_available else None
+        return {
+            "schema_version": 1,
+            "analysis_method_version": self.ANALYSIS_METHOD_VERSION,
+            "lemma": key,
+            "selection": {
+                "selection_rule": "full_available_neighbor_list",
+                "neighbor_artifact_capacity": int(self.bundle.max_neighbors_for(key)),
+                "boundary_interpretation": "artifact_capacity_not_semantic_cutoff",
+                "similarity_threshold": None,
+                "technical_validation_only": True,
+            },
+            "candidate_pool_construction": {
+                "builder": "semantic_field_selection",
+                "population": "all_report_field_lemmas_with_vectors",
+                "same_population_as_report_field": True,
+                "similarity_threshold": None,
+            },
+            "clustering_graph": {
+                "name": (self.CLUSTERING_GRAPH_NAME if self.config.frame_graph_mode == "mutual_knn" else "legacy_threshold_clustering_graph"),
+                "purpose": "frame_clustering",
+                "builder": ("mutual_knn" if self.config.frame_graph_mode == "mutual_knn" else "SenseInducer_legacy_threshold") if inducer_available else "fallback_greedy_modularity",
+                "mode": self.config.frame_graph_mode,
+                "similarity_threshold": (None if self.config.frame_graph_mode == "mutual_knn" else (float(inducer.DEFAULT_SIM_THRESHOLD) if inducer else None)),
+                "knn_k": (int(self.config.frame_graph_knn_k) if self.config.frame_graph_mode == "mutual_knn" else None),
+                "mutual_required": (True if self.config.frame_graph_mode == "mutual_knn" else None),
+                "edge_weight_mode": "cosine",
+                "minimum_cluster_size": (int(inducer.MIN_CLUSTER_SIZE) if inducer else 2),
+                "small_cluster_policy": "clusters_below_minimum_are_not_presented_as_frames_but_are_reported_in_diagnostics",
+            },
+            "clustering": {
+                "algorithm": "chinese_whispers" if inducer_available else "greedy_modularity",
+                "implementation": "korpusuj.semantic.sense_inducer.SenseInducer.chinese_whispers" if inducer_available else "networkx.greedy_modularity_communities",
+                "reference_seed": int(self.config.frame_graph_seed) if inducer_available else None,
+                "maximum_iterations": int(self.config.frame_graph_iterations) if inducer_available else None,
+                "stopping_rule": "full_iteration_without_label_changes" if inducer_available else None,
+                "uses_edge_weights": True,
+                "early_stopping": True if inducer_available else None,
+            },
+            "assignment": {
+                "mode": "best_normalized_frame_centroid",
+                "operation": "nonmember_relation_description",
+                "similarity_threshold": None,
+                "all_nonmember_lemmas_described": True,
+                "centroid_recomputed_after_assignment": False,
+                "relation_changes_frame_membership": False,
+                "relation_changes_frame_centroid": False,
+                "membership_sources_recorded": True,
+            },
+            "nonmember_relation": {
+                "mode": "two_nearest_normalized_frame_centroids",
+                "reference_frame": "nearest_frame_centroid",
+                "competing_frame": "second_nearest_frame_centroid",
+                "typicality": "similarity_to_nearest_frame_centroid",
+                "distinctiveness": "nearest_similarity_minus_second_nearest_similarity",
+                "changes_frame_membership": False,
+                "changes_frame_centroid": False,
+            },
+            "description": {
+                "globality_method": "threshold_free_in_degree_over_all_stored_neighbor_lists",
+                "similarity_threshold": None,
+            },
+            "reported_measures": {
+                "frame_level": ["typicality", "distinctiveness"],
+                "field_level": ["field_typicality", "globality", "field_distinctiveness"],
+                "descriptive": ["frequency", "similarity_to_lemma"],
+                "aggregated_indices": False,
+            },
+            "export": {"csv": bool(self.config.export_csv)},
+        }
+
     def __init__(self, bundle: ArtifactBundle, config: ReportConfigV7_1):
         self.bundle = bundle
         self.config = config
         self.output_dir = Path(config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._globality_index: Optional[Dict[str, float]] = None
+        # SEMANTIC_DIAGNOSTICS_D2: diagnostyka nie zmienia wynikow.
+        # SEMANTIC_FRAME_RELATIONS_D4: centroid opisuje zwiazek, nie czlonkostwo.
+        # SEMANTIC_PRESENTATION_D4B: spojne nazwy, statusy i eksporty.
+        # SEMANTIC_UNIFIED_FRAME_TABLE_D4C: jedna tabela bez redundantnych zakladek.
+        # SEMANTIC_FULL_FIELD_KNN5_D6: klasteryzacja calego pola, domyslne k=5.
+        # SEMANTIC_HIDE_LOCAL_STRENGTH_D6B: kolumna ukryta w HTML; obliczenia i CSV bez zmian.
+        # SEMANTIC_REMOVE_RESOLVED_PARAMETERS_D7: pelna lista sasiadow, relacje bez progu, bez core/periphery.
+        # SEMANTIC_D7_HTML_REPAIR_V3: przywrocono kod JS usuniety przez zbyt szeroka kotwice.
+        self._clustering_graph_diagnostics: Dict[str, object] = {}
+        self._assignment_diagnostics: Dict[str, Dict[str, object]] = {}
 
     # -----------------------------------------------------
     # Silnik analityczny
@@ -285,10 +376,11 @@ class AnalyticalSemanticReportBuilderV7_1:
         if self._globality_index is not None:
             return self._globality_index
         counts: Dict[str, int] = {}
+        # D13: in-degree po pełnych listach zapisanych w artefakcie.
+        # Podobieństwo nie jest ponownie odcinane arbitralnym progiem.
         for _, neighbors in self.bundle.index.items():
-            for n_word, n_score, _ in neighbors:
-                if float(n_score) >= self.config.hubness_similarity_threshold:
-                    counts[n_word] = counts.get(n_word, 0) + 1
+            for n_word, _n_score, _ in neighbors:
+                counts[n_word] = counts.get(n_word, 0) + 1
         if not counts:
             self._globality_index = {}
             return self._globality_index
@@ -311,11 +403,10 @@ class AnalyticalSemanticReportBuilderV7_1:
         return float(self.build_globality_index().get(key, 0.0))
 
     def collect_semantic_field(self, key: str) -> List[Dict]:
-        top_k = self.config.top_k_neighbors if self.config.top_k_neighbors > 0 else self.bundle.max_neighbors_for(key)
+        top_k = self.bundle.max_neighbors_for(key)
         rows = []
         seen = set()
-        for neighbor, sim, freq in self.bundle.neighbors_of(key, top_k=top_k,
-                                                            min_similarity=self.config.min_similarity):
+        for neighbor, sim, freq in self.bundle.neighbors_of(key, top_k=top_k, min_similarity=0.0):
             nkey = self.bundle.resolve_key(neighbor)
             if not nkey or nkey == key or nkey in seen or nkey not in self.bundle.vectors:
                 continue
@@ -329,33 +420,31 @@ class AnalyticalSemanticReportBuilderV7_1:
         rows.sort(key=lambda x: (x["similarity_to_lemma"], x["freq"]), reverse=True)
         return rows
 
-    def _build_local_graph(self, key: str, field_rows: List[Dict]) -> nx.Graph:
-        words = [row["lemma"] for row in field_rows]
-        local_set = set(words)
-        G = nx.Graph()
-        G.add_node(key, kind="root")
-        for row in field_rows:
-            G.add_node(row["lemma"], kind="word", freq=int(row["freq"]))
-            G.add_edge(key, row["lemma"], weight=float(row["similarity_to_lemma"]), edge_type="root")
-        for word in words:
-            for n_word, sim, _ in self.bundle.neighbors_of(word, top_k=self.config.local_neighbor_window,
-                                                           min_similarity=self.config.frame_edge_threshold):
-                n_key = self.bundle.resolve_key(n_word)
-                if not n_key or n_key == key or n_key not in local_set or n_key == word:
-                    continue
-                if G.has_edge(word, n_key):
-                    G[word][n_key]["weight"] = max(float(G[word][n_key]["weight"]), float(sim))
-                else:
-                    G.add_edge(word, n_key, weight=float(sim), edge_type="local")
-        return G
+    def _build_fallback_mutual_knn_graph(self, candidate_words: List[str]) -> nx.Graph:
+        """Threshold-free mutual kNN graph used only by the fallback path."""
+        words = sorted({word for word in candidate_words if word in self.bundle.vectors})
+        graph = nx.Graph()
+        graph.add_nodes_from(words)
+        if len(words) < 2:
+            return graph
+        matrix = np.vstack([np.asarray(self.bundle.vectors[word], dtype=float) for word in words])
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = np.divide(matrix, norms, out=np.zeros_like(matrix), where=norms != 0)
+        similarities = matrix @ matrix.T
+        np.fill_diagonal(similarities, -np.inf)
+        effective_k = min(max(1, int(self.config.frame_graph_knn_k)), len(words) - 1)
+        selected = []
+        for i in range(len(words)):
+            indices = np.argpartition(-similarities[i], effective_k - 1)[:effective_k]
+            selected.append(set(int(j) for j in indices))
+        for i in range(len(words)):
+            for j in selected[i]:
+                if i < j and i in selected[j]:
+                    graph.add_edge(words[i], words[j], weight=float(similarities[i, j]))
+        return graph
 
     def _fallback_frames(self, key: str, candidate_words: List[str]) -> List[Dict]:
-        dummy_rows = [{"lemma": w, "similarity_to_lemma": 0.0, "freq": self.bundle.lemma_freq(w)} for w in
-                      candidate_words]
-        sub = self._build_local_graph(key, dummy_rows).subgraph(candidate_words).copy()
-        weak_edges = [(u, v) for u, v, d in sub.edges(data=True) if
-                      float(d.get("weight", 0.0)) < self.config.frame_edge_threshold]
-        sub.remove_edges_from(weak_edges)
+        sub = self._build_fallback_mutual_knn_graph(candidate_words)
         if sub.number_of_nodes() == 0:
             return []
         if sub.number_of_edges() == 0:
@@ -384,11 +473,103 @@ class AnalyticalSemanticReportBuilderV7_1:
             })
         return frames
 
+    def _induce_mutual_knn_frames(self, key: str, candidate_words: List[str]) -> List[Dict]:
+        """Buduje wazony mutual k-NN bez globalnego progu cosinusowego."""
+        if SenseInducer is None:
+            return []
+        k = max(1, int(self.config.frame_graph_knn_k))
+        # D6: kazdy lemat pola raportu ma taka sama mozliwosc wejscia do ramy.
+        words = sorted({
+            w for w in candidate_words
+            if w != key and w in self.bundle.vectors
+        })
+        if len(words) < 2:
+            return []
+        matrix = np.vstack([np.asarray(self.bundle.vectors[w], dtype=float) for w in words])
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        matrix = np.divide(matrix, norms, out=np.zeros_like(matrix), where=norms != 0)
+        similarities = matrix @ matrix.T
+        np.fill_diagonal(similarities, -np.inf)
+        effective_k = min(k, len(words) - 1)
+        selected = []
+        for i, word in enumerate(words):
+            idx = np.argpartition(-similarities[i], effective_k - 1)[:effective_k]
+            selected.append(set(int(j) for j in idx))
+        graph = nx.Graph()
+        graph.add_nodes_from(words)
+        nodes_before_isolate_removal = len(words)
+        for i in range(len(words)):
+            for j in selected[i]:
+                if i < j and i in selected[j]:
+                    graph.add_edge(words[i], words[j], weight=float(similarities[i, j]))
+        isolates = [node for node in graph.nodes() if graph.degree(node) == 0]
+        graph.remove_nodes_from(isolates)
+        self._clustering_graph_diagnostics = {
+            "mode": "mutual_knn",
+            "population_source": "semantic_field",
+            "full_field_population": True,
+            "pool_nodes": int(nodes_before_isolate_removal),
+            "field_nodes_with_vectors": int(nodes_before_isolate_removal),
+            "nodes_after_isolate_removal": int(graph.number_of_nodes()),
+            "edges": int(graph.number_of_edges()), "isolates_removed": int(len(isolates)),
+            "knn_k": int(k), "mutual_required": True, "edge_weight_mode": "cosine",
+        }
+        if graph.number_of_nodes() == 0:
+            self._clustering_graph_diagnostics.update({
+                "minimum_cluster_size": int(SenseInducer.MIN_CLUSTER_SIZE),
+                "clusters_before_min_size_filter": 0,
+                "retained_frames": 0,
+                "discarded_small_clusters": 0,
+                "discarded_small_cluster_members": [],
+                "discarded_small_cluster_nodes": 0,
+            })
+            return []
+        clusters, cw_diagnostics = SenseInducer.chinese_whispers(
+            graph,
+            iters=int(self.config.frame_graph_iterations),
+            seed=int(self.config.frame_graph_seed),
+            stop_on_convergence=True,
+            return_diagnostics=True,
+        )
+        self._clustering_graph_diagnostics["chinese_whispers"] = cw_diagnostics
+        frames = []
+        minimum = int(SenseInducer.MIN_CLUSTER_SIZE)
+        discarded_small_cluster_members = []
+        for cluster in clusters:
+            members = sorted(set(cluster))
+            if len(members) < minimum:
+                discarded_small_cluster_members.append(members)
+                continue
+            centroid = normalized_centroid([self.bundle.vectors[w] for w in members])
+            ranked = sorted(members, key=lambda w: cosine_similarity(self.bundle.vectors[w], centroid), reverse=True)
+            frames.append({
+                "members": members, "anchors": ranked[:4],
+                "label": ", ".join(ranked[:3]),
+                "frame_type": "semantic",
+                "graph_mode": "mutual_knn",
+            })
+        frames.sort(key=lambda fr: (-len(fr["members"]), fr["members"][0]))
+        self._clustering_graph_diagnostics.update({
+            "minimum_cluster_size": int(minimum),
+            "clusters_before_min_size_filter": int(len(clusters)),
+            "retained_frames": int(len(frames)),
+            "retained_graph_members": int(sum(len(fr["members"]) for fr in frames)),
+            "discarded_small_clusters": int(len(discarded_small_cluster_members)),
+            "discarded_small_cluster_members": discarded_small_cluster_members,
+            "discarded_small_cluster_nodes": int(sum(len(members) for members in discarded_small_cluster_members)),
+        })
+        return frames
+
     def induce_frames(self, key: str, candidate_words: List[str]) -> List[Dict]:
         frames_raw = []
+        if self.config.frame_graph_mode not in {"mutual_knn", "legacy_threshold"}:
+            raise ValueError(f"Nieznany frame_graph_mode: {self.config.frame_graph_mode}")
         if self.config.use_sense_inducer and SenseInducer is not None:
             try:
-                frames_raw = SenseInducer.induce(key, self.bundle.vectors, self.bundle.index, debug=False) or []
+                if self.config.frame_graph_mode == "mutual_knn":
+                    frames_raw = self._induce_mutual_knn_frames(key, candidate_words)
+                else:
+                    frames_raw = SenseInducer.induce(key, self.bundle.vectors, self.bundle.index, debug=False) or []
             except Exception as exc:
                 LOGGER.warning("SenseInducer nie powiódł się: %s", exc)
                 frames_raw = []
@@ -408,8 +589,11 @@ class AnalyticalSemanticReportBuilderV7_1:
                 centroid = normalized_centroid([self.bundle.vectors[m] for m in members])
                 if centroid is None:
                     continue
+                member_set = set(members)
                 anchors = [self.bundle.resolve_key(a) or a for a in (fr.get("anchors", []) or [])]
-                anchors = [a for a in anchors if isinstance(a, str)] or members[:4]
+                anchors = [a for a in anchors if isinstance(a, str) and a in member_set]
+                if not anchors:
+                    anchors = sorted(members, key=lambda w: cosine_similarity(self.bundle.vectors[w], centroid), reverse=True)[:4]
 
                 frame_type = str(fr.get("frame_type", fr.get("type", "semantic")))
 
@@ -438,27 +622,46 @@ class AnalyticalSemanticReportBuilderV7_1:
                     "label": label,
                     "type": frame_type,
                     "members": members,
+                    "graph_members": list(members),
+                    "centroid_assigned_members": [],
                     "centroid": centroid,
                     "anchors": anchors[:4],
                 })
 
         if not frames:
             frames = self._fallback_frames(key, candidate_words)
+        self._assignment_diagnostics = {}
         assigned = set()
         for fr in frames:
+            fr.setdefault("graph_members", list(fr["members"]))
+            fr.setdefault("centroid_assigned_members", [])
             assigned.update(fr["members"])
+            for member in fr.get("graph_members", []):
+                self._assignment_diagnostics[member] = {
+                    "best_frame_id": str(fr.get("id", "")),
+                    "best_similarity": float(cosine_similarity(self.bundle.vectors[member], fr["centroid"])),
+                    "second_frame_id": None, "second_similarity": None,
+                    "assignment_margin": None, "assignment_status": "graph_cluster",
+                }
         leftovers = [w for w in candidate_words if w not in assigned and w in self.bundle.vectors]
         for word in leftovers:
             wv = self.bundle.vectors[word]
-            best_frame = None
-            best_sim = -1.0
-            for fr in frames:
-                sim = cosine_similarity(wv, fr["centroid"])
-                if sim > best_sim:
-                    best_sim = sim
-                    best_frame = fr
-            if best_frame is not None and best_sim >= self.config.frame_assignment_min_similarity:
-                best_frame["members"].append(word)
+            ranked_frames = sorted(
+                ((float(cosine_similarity(wv, fr["centroid"])), fr) for fr in frames),
+                key=lambda item: (-item[0], str(item[1].get("id", ""))),
+            )
+            best_sim, best_frame = ranked_frames[0] if ranked_frames else (-1.0, None)
+            second_sim, second_frame = ranked_frames[1] if len(ranked_frames) > 1 else (None, None)
+            accepted = bool(best_frame is not None)
+            self._assignment_diagnostics[word] = {
+                "best_frame_id": str(best_frame.get("id", "")) if best_frame is not None else None,
+                "best_similarity": float(best_sim) if best_frame is not None else None,
+                "second_frame_id": str(second_frame.get("id", "")) if second_frame is not None else None,
+                "second_similarity": float(second_sim) if second_sim is not None else None,
+                "assignment_margin": float(best_sim-second_sim) if second_sim is not None else None,
+                "assignment_status": "frame_relation" if accepted else "unassigned",
+            }
+            # D4: relacja centroidowa nie zmienia skladu ramy.
         clean = []
         for i, fr in enumerate(frames, start=1):
             members = sorted(set([m for m in fr["members"] if m in self.bundle.vectors and m != key]))
@@ -475,59 +678,62 @@ class AnalyticalSemanticReportBuilderV7_1:
                 "label": label,
                 "type": str(fr.get("type", "semantyczna")),
                 "members": members,
+                "graph_members": sorted(set(fr.get("graph_members", []))),
+                "centroid_assigned_members": sorted(set(fr.get("centroid_assigned_members", []))),
                 "centroid": centroid,
                 "anchors": anchors[:4],
             })
         return clean
 
-    def compute_word_metrics(self, key: str, field_rows: List[Dict], frames: List[Dict],
-                             local_graph: nx.Graph) -> pd.DataFrame:
+    def compute_word_metrics(self, key: str, field_rows: List[Dict], frames: List[Dict]) -> pd.DataFrame:
         if not field_rows:
             return pd.DataFrame()
         field_words = [r["lemma"] for r in field_rows]
         field_centroid = normalized_centroid([self.bundle.vectors[w] for w in field_words if w in self.bundle.vectors])
         frame_by_word, frame_centroids = {}, {}
+        assignment_source_by_word = {}
         for fr in frames:
             frame_centroids[str(fr["id"])] = fr["centroid"]
+            graph_members = set(fr.get("graph_members", []))
+            centroid_members = set(fr.get("centroid_assigned_members", []))
             for m in fr["members"]:
                 frame_by_word[m] = str(fr["id"])
-        degree_strength = {
-            n: float(sum(float(local_graph[n][nbr].get("weight", 0.0)) for nbr in local_graph.neighbors(n)))
-            for n in local_graph.nodes() if n != key
-        }
-        degree_strength_scaled = minmax_scale_dict(degree_strength)
-        log_freq_scaled = minmax_scale_dict({r["lemma"]: math.log1p(max(0, int(r["freq"]))) for r in field_rows})
-        sim_to_lemma_scaled = minmax_scale_dict({r["lemma"]: float(r["similarity_to_lemma"]) for r in field_rows})
-        try:
-            betweenness = nx.betweenness_centrality(local_graph, weight="weight")
-        except Exception:
-            betweenness = {}
+                if m in graph_members:
+                    assignment_source_by_word[m] = "graph_cluster"
+                elif m in centroid_members:
+                    assignment_source_by_word[m] = "centroid_assignment"
+                else:
+                    assignment_source_by_word[m] = "unknown_baseline_source"
         records = []
         for row in field_rows:
             word = row["lemma"]
             vec = self.bundle.vectors.get(word)
             frame_id = frame_by_word.get(word, "")
+            assignment_diag = self._assignment_diagnostics.get(word, {})
+            assignment_status = assignment_diag.get(
+                "assignment_status", assignment_source_by_word.get(word, "none")
+            )
+            # D14: członkostwo grafowe i rama odniesienia to dwa różne pojęcia.
+            # Członek klastra jest mierzony względem własnej ramy grafowej,
+            # a lemat spoza klastrów względem najbliższej ramy wskazanej przez centroid.
+            metric_frame_id = frame_id
+            if not metric_frame_id and assignment_status == "frame_relation":
+                metric_frame_id = str(assignment_diag.get("best_frame_id") or "")
 
             # ---------------------------
-            # MIARY RAMOWE (zostają)
+            # MIARY RAMOWE
             # ---------------------------
-            frame_typicality = cosine_similarity(vec, frame_centroids[frame_id]) if frame_id in frame_centroids else (
-                cosine_similarity(vec, field_centroid) if field_centroid is not None else 0.0
+            frame_typicality = (
+                cosine_similarity(vec, frame_centroids[metric_frame_id])
+                if metric_frame_id in frame_centroids
+                else 0.0
             )
             other_sims = [
                 cosine_similarity(vec, centroid)
                 for fid, centroid in frame_centroids.items()
-                if fid != frame_id
+                if fid != metric_frame_id
             ]
             frame_distinctiveness = frame_typicality - (max(other_sims) if other_sims else 0.0)
-            frame_salience = (
-                    0.40 * frame_typicality
-                    + 0.30 * frame_distinctiveness
-                    + 0.15 * log_freq_scaled.get(word, 0.0)
-                    + 0.10 * degree_strength_scaled.get(word, 0.0)
-                    + 0.05 * sim_to_lemma_scaled.get(word, 0.0)
-                    - 0.15 * float(row["globality"])
-            )
 
             # ---------------------------
             # NOWE MIARY FIELD-LEVEL
@@ -539,35 +745,26 @@ class AnalyticalSemanticReportBuilderV7_1:
             # im bardziej siedzi w centrum pola i im mniej jest globalnym hubem
             field_distinctiveness = field_typicality * (1.0 - float(row["globality"]))
 
-            # "Nośność pola":
-            # interpretacyjna nośność dla całego pola semantycznego,
-            # a nie dla pojedynczej ramy
-            field_salience = (
-                    0.45 * field_typicality
-                    + 0.20 * field_distinctiveness
-                    + 0.15 * log_freq_scaled.get(word, 0.0)
-                    + 0.10 * degree_strength_scaled.get(word, 0.0)
-                    + 0.10 * sim_to_lemma_scaled.get(word, 0.0)
-            )
-
             records.append({
                 "lemma": word,
                 "frame_id": frame_id,
+                "assignment_source": assignment_status,
+                "best_frame_id": self._assignment_diagnostics.get(word, {}).get("best_frame_id"),
+                "best_frame_similarity": self._assignment_diagnostics.get(word, {}).get("best_similarity"),
+                "second_frame_id": self._assignment_diagnostics.get(word, {}).get("second_frame_id"),
+                "second_frame_similarity": self._assignment_diagnostics.get(word, {}).get("second_similarity"),
+                "assignment_margin": self._assignment_diagnostics.get(word, {}).get("assignment_margin"),
                 "similarity_to_lemma": float(row["similarity_to_lemma"]),
                 "freq": int(row["freq"]),
                 "globality": float(row["globality"]),
-                "local_strength": float(degree_strength.get(word, 0.0)),
-                "bridge_score": float(betweenness.get(word, 0.0)),
 
                 # stare miary ramowe
                 "typicality": float(frame_typicality),
                 "distinctiveness": float(frame_distinctiveness),
-                "salience": float(frame_salience),
 
                 # nowe miary field-level
                 "field_typicality": float(field_typicality),
                 "field_distinctiveness": float(field_distinctiveness),
-                "field_salience": float(field_salience),
 
                 # alias diagnostyczny / kompatybilność
                 "similarity_to_field_centroid": float(field_typicality),
@@ -577,26 +774,19 @@ class AnalyticalSemanticReportBuilderV7_1:
         if df.empty:
             return df
 
-        core_flags = []
-        for _, row in df.iterrows():
-            if not row["frame_id"]:
-                core_flags.append(False)
-                continue
-            vals = df[df["frame_id"] == row["frame_id"]]["typicality"].tolist()
-            core_flags.append(float(row["typicality"]) >= percentile(vals, self.config.core_quantile * 100.0))
 
-        df["is_core"] = core_flags
-        df["is_periphery"] = ~df["is_core"]
-
-        # UWAGA:
-        # zostawiamy sortowanie po starych metrykach ramowych, żeby nie ruszać
-        # logiki szczegółów ram i istniejących widoków.
-        return df.sort_values(["salience", "typicality"], ascending=[False, False]).reset_index(drop=True)
+        # D9a: bez zagregowanej nośności ramowej. Porządek techniczny tabeli
+        # wykorzystuje bezpośrednie miary ramowe, bez ich ważonego łączenia.
+        return df.sort_values(
+            ["typicality", "distinctiveness", "freq"],
+            ascending=[False, False, False],
+        ).reset_index(drop=True)
 
     def compute_frame_metrics(self, key: str, frames: List[Dict], word_df: pd.DataFrame) -> pd.DataFrame:
         records = []
         key_vec = self.bundle.vectors.get(key)
         frame_centroids = {str(fr["id"]): fr["centroid"] for fr in frames}
+        frame_labels = {str(fr["id"]): fr["label"] for fr in frames}
         for fr in frames:
             fid = str(fr["id"])
             members_df = word_df[word_df["frame_id"] == fid].copy()
@@ -604,48 +794,50 @@ class AnalyticalSemanticReportBuilderV7_1:
                 continue
             member_vectors = [self.bundle.vectors[m] for m in members_df["lemma"].tolist() if m in self.bundle.vectors]
             centroid = fr["centroid"]
-            other_sims = [cosine_similarity(centroid, c) for oid, c in frame_centroids.items() if oid != fid]
-            separation = 1.0 - (max(other_sims) if other_sims else 0.0)
             nearest_frame_id = None
-            nearest_frame_sim = -1.0
-            for oid, c in frame_centroids.items():
-                if oid == fid:
+            nearest_frame_similarity = None
+            for other_frame_id, other_centroid in frame_centroids.items():
+                if other_frame_id == fid:
                     continue
-                s = cosine_similarity(centroid, c)
-                if s > nearest_frame_sim:
-                    nearest_frame_sim = s
-                    nearest_frame_id = oid
+                similarity = float(cosine_similarity(centroid, other_centroid))
+                if nearest_frame_similarity is None or similarity > nearest_frame_similarity:
+                    nearest_frame_similarity = similarity
+                    nearest_frame_id = other_frame_id
+            separation = (
+                1.0 - nearest_frame_similarity
+                if nearest_frame_similarity is not None
+                else None
+            )
             records.append({
                 "frame_id": fid,
                 "frame_label": fr["label"],
                 "frame_type": fr.get("type", "semantyczna"),
                 "size": int(len(members_df)),
-                "core_size": int(members_df["is_core"].sum()),
-                "periphery_size": int((~members_df["is_core"]).sum()),
                 "coverage_share": float(len(members_df) / len(word_df)) if len(word_df) else 0.0,
                 "cohesion_pairwise": float(pairwise_mean_cos(member_vectors)),
                 "cohesion_centroid_mean": float(members_df["typicality"].mean()),
                 "distinctiveness_mean": float(members_df["distinctiveness"].mean()),
-                "salience_mean": float(members_df["salience"].mean()),
                 "globality_mean": float(members_df["globality"].mean()),
                 "similarity_centroid_to_lemma": float(
                     cosine_similarity(key_vec, centroid)) if key_vec is not None else 0.0,
-                "separation_from_other_frames": float(separation),
+                "separation_from_other_frames": float(separation) if separation is not None else None,
                 "frequency_sum": int(members_df["freq"].sum()),
                 "frequency_mean": float(members_df["freq"].mean()),
                 "anchors": fr.get("anchors", [])[:4],
                 "nearest_frame_id": nearest_frame_id,
-                "nearest_frame_similarity": nearest_frame_sim,
+                "nearest_frame_label": frame_labels.get(nearest_frame_id) if nearest_frame_id else None,
+                "nearest_frame_similarity": nearest_frame_similarity,
             })
         df = pd.DataFrame(records)
         if not df.empty:
-            df = df.sort_values(["coverage_share", "salience_mean", "cohesion_centroid_mean"],
-                                ascending=[False, False, False]).reset_index(drop=True)
+            df = df.sort_values(
+                ["coverage_share", "cohesion_centroid_mean", "distinctiveness_mean"],
+                ascending=[False, False, False],
+            ).reset_index(drop=True)
             df["frame_rank"] = range(1, len(df) + 1)
         return df
 
-    def compute_global_overview(self, key: str, field_rows: List[Dict], local_graph: nx.Graph,
-                                frame_df: pd.DataFrame) -> Dict:
+    def compute_global_overview(self, key: str, field_rows: List[Dict], frame_df: pd.DataFrame) -> Dict:
         sims = [float(r["similarity_to_lemma"]) for r in field_rows]
         globalities = [float(r["globality"]) for r in field_rows]
         field_words = [r["lemma"] for r in field_rows]
@@ -661,9 +853,6 @@ class AnalyticalSemanticReportBuilderV7_1:
             "available_neighbors_for_lemma": int(self.bundle.max_neighbors_for(key)),
             "selected_neighbors": int(len(field_rows)),
             "liczba_ram": int(len(frame_df)),
-            "graph_nodes": int(local_graph.number_of_nodes()),
-            "graph_edges": int(local_graph.number_of_edges()),
-            "graph_density": float(nx.density(local_graph)) if local_graph.number_of_nodes() > 1 else 0.0,
             "field_similarity_mean": float(np.mean(sims)) if sims else 0.0,
             "field_similarity_median": float(np.median(sims)) if sims else 0.0,
             "field_similarity_p90": percentile(sims, 90.0) if sims else 0.0,
@@ -674,14 +863,12 @@ class AnalyticalSemanticReportBuilderV7_1:
                                                         weights=frame_df["size"])) if not frame_df.empty else 0.0,
             "frame_separation_mean": float(
                 frame_df["separation_from_other_frames"].mean()) if not frame_df.empty else 0.0,
-            "neighbors_top_k": int(
-                self.config.top_k_neighbors if self.config.top_k_neighbors > 0 else self.bundle.max_neighbors_for(key)),
-            "min_similarity": float(self.config.min_similarity),
+            "neighbors_top_k": int(self.bundle.max_neighbors_for(key)),
         }
 
     def compute_projection(self, key: str, word_df: pd.DataFrame, frame_df: pd.DataFrame, frames: List[Dict]) -> Tuple[
         pd.DataFrame, pd.DataFrame]:
-        plot_word_df = word_df.copy().head(self.config.max_plot_words)
+        plot_word_df = word_df.copy()
         vectors, labels = [], []
         if key in self.bundle.vectors:
             vectors.append(self.bundle.vectors[key])
@@ -705,7 +892,6 @@ class AnalyticalSemanticReportBuilderV7_1:
                     "y": float(xy[1]),
                     "frame_id": "",
                     "size_metric": 1.0,
-                    "salience": 1.0,
                 })
             else:
                 meta = label_to_meta[label]
@@ -715,8 +901,7 @@ class AnalyticalSemanticReportBuilderV7_1:
                     "x": float(xy[0]),
                     "y": float(xy[1]),
                     "frame_id": str(meta.get("frame_id", "")),
-                    "size_metric": float(meta.get("salience", 0.0)),
-                    "salience": float(meta.get("salience", 0.0)),
+                    "size_metric": float(meta.get("typicality", 0.0)),
                     "freq": int(meta.get("freq", 0)),
                     "typicality": float(meta.get("typicality", 0.0)),
                     "distinctiveness": float(meta.get("distinctiveness", 0.0)),
@@ -759,26 +944,7 @@ class AnalyticalSemanticReportBuilderV7_1:
                 })
         return pd.DataFrame(rows)
 
-    def build_orphan_rows(self, word_df: pd.DataFrame) -> List[Dict]:
-        if word_df.empty:
-            return []
-        orphans = word_df[word_df["frame_id"].fillna("") == ""].copy()
-        if orphans.empty:
-            return []
-        return [
-            {
-                "word": r["lemma"],
-                "freq": int(r["freq"]),
-                "similarity_to_lemma": float(r["similarity_to_lemma"]),
-                "globality": float(r["globality"]),
-                "salience": float(r["salience"]),
-            }
-            for _, r in orphans.sort_values(["similarity_to_lemma", "salience"], ascending=[False, False]).head(
-                self.config.orphan_table_size).iterrows()
-        ]
-
-    def compute_diagnostics(self, key: str, field_rows: List[Dict], word_df: pd.DataFrame, frames: List[Dict],
-                            local_graph: nx.Graph) -> Dict:
+    def compute_diagnostics(self, key: str, field_rows: List[Dict], word_df: pd.DataFrame, frames: List[Dict]) -> Dict:
         assigned_count = int((word_df["frame_id"].fillna("") != "").sum()) if not word_df.empty else 0
         orphan_count = int((word_df["frame_id"].fillna("") == "").sum()) if not word_df.empty else 0
         candidate_words = [r["lemma"] for r in field_rows]
@@ -792,8 +958,6 @@ class AnalyticalSemanticReportBuilderV7_1:
             "coverage_ratio": round((assigned_count / len(candidate_words)) if candidate_words else 0.0, 4),
             "root_has_vector": bool(key in self.bundle.vectors),
             "missing_vectors_total": len(missing_vectors),
-            "graph_nodes": int(local_graph.number_of_nodes()),
-            "graph_edges": int(local_graph.number_of_edges()),
         }
 
     # -----------------------------------------------------
@@ -807,14 +971,13 @@ class AnalyticalSemanticReportBuilderV7_1:
             "diagnostics": diagnostics,
             "word_df": payload["word_df"].to_dict(orient="records") if payload.get("word_df") is not None else [],
             "frame_df": payload["frame_df"].to_dict(orient="records") if payload.get("frame_df") is not None else [],
+            "relation_df": payload["relation_df"].to_dict(orient="records") if payload.get("relation_df") is not None else [],
             "frame_similarity_df": payload["frame_similarity_df"].to_dict(orient="records") if payload.get(
                 "frame_similarity_df") is not None else [],
             "words_coords_df": payload["words_coords_df"].to_dict(orient="records") if payload.get(
                 "words_coords_df") is not None else [],
             "frames_coords_df": payload["frames_coords_df"].to_dict(orient="records") if payload.get(
                 "frames_coords_df") is not None else [],
-            "orphans_df": payload["orphans_df"].to_dict(orient="records") if payload.get(
-                "orphans_df") is not None else [],
         }
 
         (self.output_dir / "report.payload.json").write_text(
@@ -829,23 +992,33 @@ class AnalyticalSemanticReportBuilderV7_1:
             json.dumps(methodology, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+        (self.output_dir / "method_contract.json").write_text(
+            json.dumps(methodology.get("method_contract", {}), ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
         (self.output_dir / "diagnostics.json").write_text(
             json.dumps(diagnostics, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
 
         if self.config.export_csv:
-            payload["word_df"].to_csv(self.output_dir / "semantic_field.csv", index=False, encoding="utf-8")
+            export_word_df = payload["word_df"].copy()
+            export_relation_df = payload["relation_df"].copy()
+            export_word_df.to_csv(self.output_dir / "semantic_field.csv", index=False, encoding="utf-8")
             payload["frame_df"].to_csv(self.output_dir / "frames.csv", index=False, encoding="utf-8")
-            payload["word_df"].to_csv(self.output_dir / "frame_members.csv", index=False, encoding="utf-8")
+            export_relation_df.to_csv(self.output_dir / "frame_relations.csv", index=False, encoding="utf-8")
+            export_word_df[export_word_df["assignment_source"] == "graph_cluster"].to_csv(self.output_dir / "frame_members.csv", index=False, encoding="utf-8")
             payload["frame_similarity_df"].to_csv(self.output_dir / "frame_similarity.csv", index=False,
                                                   encoding="utf-8")
             payload["words_coords_df"].to_csv(self.output_dir / "coordinates_words.csv", index=False, encoding="utf-8")
             payload["frames_coords_df"].to_csv(self.output_dir / "coordinates_frames.csv", index=False,
                                                encoding="utf-8")
-            payload["edges_df"].to_csv(self.output_dir / "edges.csv", index=False, encoding="utf-8")
-            if payload["orphans_df"] is not None and not payload["orphans_df"].empty:
-                payload["orphans_df"].to_csv(self.output_dir / "periphery_orphans.csv", index=False, encoding="utf-8")
+            stale_edges = self.output_dir / "edges.csv"
+            if stale_edges.exists():
+                stale_edges.unlink()
+            legacy_orphans = self.output_dir / "periphery_orphans.csv"
+            if legacy_orphans.exists():
+                legacy_orphans.unlink()
 
     def compute_reverse_field(self, target_lemma: str) -> pd.DataFrame:
         df = self.bundle.df_neighbors
@@ -853,7 +1026,7 @@ class AnalyticalSemanticReportBuilderV7_1:
             return pd.DataFrame()
 
         # 1. Kto ma target_lemma w swoim polu
-        mask = (df["neighbor"] == target_lemma) & (df["similarity"] >= self.config.min_similarity)
+        mask = (df["neighbor"] == target_lemma)
         reverse_hits = df[mask].copy()
 
         if reverse_hits.empty:
@@ -871,8 +1044,8 @@ class AnalyticalSemanticReportBuilderV7_1:
             # To jest bardzo szybkie
             raw_neighbors = self.bundle.neighbors_of(
                 x_lemma,
-                top_k=self.config.top_k_neighbors,
-                min_similarity=self.config.min_similarity
+                top_k=self.bundle.max_neighbors_for(x_lemma),
+                min_similarity=0.0
             )
 
             # Zbieramy wektory sąsiadów (z wyłączeniem samej lemy docelowej,
@@ -916,7 +1089,7 @@ class AnalyticalSemanticReportBuilderV7_1:
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Analityczny raport semantyczny V7.2</title>
+          <title>Raport semantyczny</title>
           <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
           <style>
             :root {
@@ -985,10 +1158,10 @@ class AnalyticalSemanticReportBuilderV7_1:
         <body>
           <header>
             <div>
-              <div style="font-size: 21px; font-weight: 700;">Raport semantyczny V7.2</div>
+              <div style="font-size: 21px; font-weight: 700;">Raport semantyczny</div>
               <div id="header-meta" class="meta"></div>
             </div>
-            <button class="btn" id="method-btn">Metodologia i metryki</button>
+            <button class="btn" id="method-btn">Metodologia</button>
           </header>
 
           <div class="wrap">
@@ -999,27 +1172,21 @@ class AnalyticalSemanticReportBuilderV7_1:
               <div class="panel-head">
                 <h2>Globalne rankingi słów</h2>
                 <div class="section-note">
-                Top 25 słów według miar liczonych względem centroidu całego pola semantycznego.
+                25 lematów o najwyższej centralności i specyficzności w całym analizowanym polu.
                 </div>
               </div>
               <div class="panel-body">
-                <div class="detail-grid">
+                <div class="two-col">
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Top Centralność pola</th><th>Rama</th><th>Wynik</th></tr></thead>
+                      <thead><tr><th>Najwyższa centralność pola</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
                       <tbody id="global-typ-tbody"></tbody>
                     </table>
                   </div>
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Top Swoistość pola</th><th>Rama</th><th>Wynik</th></tr></thead>
+                      <thead><tr><th>Najwyższa specyficzność pola</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
                       <tbody id="global-dis-tbody"></tbody>
-                    </table>
-                  </div>
-                  <div class="table-wrap">
-                    <table>
-                      <thead><tr><th>Top Nośność pola</th><th>Rama</th><th>Wynik</th></tr></thead>
-                      <tbody id="global-sal-tbody"></tbody>
                     </table>
                   </div>
                 </div>
@@ -1030,7 +1197,7 @@ class AnalyticalSemanticReportBuilderV7_1:
               <div class="panel">
                 <div class="panel-head">
                   <h2>Przestrzeń semantyczna (PCA)</h2>
-                  <div class="section-note">Przełączaj zakładki, aby zobaczyć całe słownictwo w tle ram lub same centroidy ram.</div>
+                  <div class="section-note">Przełączaj zakładki, aby zobaczyć całe słownictwo w tle ram lub same centroidy ram. Położenie na mapie jest dwuwymiarową projekcją PCA i przybliża relacje obecne w pełnej przestrzeni wektorowej.</div>
                 </div>
                 <div class="panel-body plot-panel-body">
                   <div class="tabs" data-tab-group="pca">
@@ -1055,50 +1222,28 @@ class AnalyticalSemanticReportBuilderV7_1:
                   <div id="detail-empty" class="empty">Kliknij wybraną ramę, aby zobaczyć szczegóły.</div>
                   <div id="detail-content" style="display:none;">
                     <div class="metrics" id="frame-metrics"></div>
-                    <div class="detail-grid">
-                      <div class="panel"><div class="panel-head"><h3>Top Typowość</h3></div><div class="panel-body"><div id="core-chart" class="chart"></div></div></div>
-                      <div class="panel"><div class="panel-head"><h3>Top Swoistość</h3></div><div class="panel-body"><div id="distinctive-chart" class="chart"></div></div></div>
-                      <div class="panel"><div class="panel-head"><h3>Top Nośność</h3></div><div class="panel-body"><div id="interpretive-chart" class="chart"></div></div></div>
+                    <div class="two-col">
+                      <div class="panel"><div class="panel-head"><h3>Najwyższa typowość</h3></div><div class="panel-body"><div id="core-chart" class="chart"></div></div></div>
+                      <div class="panel"><div class="panel-head"><h3>Najwyższa swoistość</h3></div><div class="panel-body"><div id="distinctive-chart" class="chart"></div></div></div>
                     </div>
 
                     <div style="height:16px"></div>
-                    <div class="tabs" data-tab-group="detail">
-                      <button class="tab-btn active" data-tab-group="detail" data-target="detail-members">Tabela główna</button>
-                      <button class="tab-btn" data-tab-group="detail" data-target="detail-tail">peryferie ramy</button>
+                    <div class="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Lemat</th>
+                            <th>Status</th>
+                            <th>Powiązane ramy</th>
+                            <th>Frekwencja</th>
+                            <th>Typowość</th>
+                            <th>Swoistość</th>
+                            <th>Ogólność</th>
+                          </tr>
+                        </thead>
+                        <tbody id="frame-lemmas-tbody"></tbody>
+                      </table>
                     </div>
-                    <div class="tab-panel active" id="detail-members" data-tab-group="detail">
-                      <div class="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Słowo</th>
-                              <th>Freq</th>
-                              <th>Typowość</th>
-                              <th>Swoistość</th>
-                              <th>Nośność</th>
-                              <th>Siła lokalna</th>
-                              <th>Ogólność</th>
-                            </tr>
-                          </thead>
-                          <tbody id="members-tbody"></tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div class="tab-panel" id="detail-tail" data-tab-group="detail">
-                      <div class="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              <th>Słowo</th>
-                              <th>Typowość</th>
-                              <th>Swoistość</th>
-                              <th>Nośność</th>
-                              <th>Komentarz diagnostyczny</th>
-                            </tr>
-                          </thead>
-                          <tbody id="tail-tbody"></tbody>
-                        </table>
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1114,13 +1259,10 @@ class AnalyticalSemanticReportBuilderV7_1:
                   <table class="summary-table">
                     <thead>
                       <tr>
-                        <th>Rama (Rank)</th>
+                        <th>Rama</th>
                         <th>Rozmiar</th>
-                        <th>Rdzeń</th>
-                        <th>peryferie</th>
                         <th title="Średnia wartość typowości wszystkich elementów należących do ramy. Stanowi wskaźnik wewnętrznej spójności i jednorodności semantycznej grupy.">Zwartość <span class="help">?</span></th>
                         <th title="Miara dystansu semantycznego między centroidem danej ramy a najbliższym sąsiadującym klastrem. Odzwierciedla stopień odrębności tematycznej.">Separacja <span class="help">?</span></th>
-                        <th title="Średnia wartość nośności interpretacyjnej przypisanych elementów. Wskazuje na ogólny potencjał wyrazistości pojęciowej danej ramy.">Średnia nośność <span class="help">?</span></th>
                         <th>Najbliższa rama</th>
                       </tr>
                     </thead>
@@ -1134,6 +1276,7 @@ class AnalyticalSemanticReportBuilderV7_1:
               <div class="panel">
                 <div class="panel-head">
                   <h2>Relacje między ramami</h2>
+                  <div class="section-note">Macierz przedstawia podobieństwo między centroidami ram. Wyższa wartość oznacza bardziej zbliżone położenie dwóch ram w przestrzeni wektorowej.</div>
                 </div>
                 <div class="panel-body"><div id="relations-heatmap"></div></div>
               </div>
@@ -1142,18 +1285,10 @@ class AnalyticalSemanticReportBuilderV7_1:
                 <div class="panel-head">
                   <h2>Obecność w innych polach</h2>
                   <div class="section-note">
-                    W jakich polach innych pojęć pojawia się słowo: <strong id="reverse-lemma-name"></strong>?
+                    Pokazuje, w polach semantycznych jakich innych pojęć występuje badany lemat oraz jak centralne zajmuje w nich miejsce.
                   </div>
                 </div>
                 <div class="panel-body" id="reverse-field-body"></div>
-              </div>
-            
-              <div class="panel" id="orphans-panel">
-                <div class="panel-head">
-                  <h2>peryferie pola semantycznego</h2>
-                  <div class="section-note">Słowa z pola lemy, które nie zostały przypisane do żadnej ramy.</div>
-                </div>
-                <div class="panel-body" id="orphans-panel-body"></div>
               </div>
             </section>
 
@@ -1161,15 +1296,56 @@ class AnalyticalSemanticReportBuilderV7_1:
             <div class="modal-box">
               <span class="close-x" id="close-modal">×</span>
               <h2>Metodologia i interpretacja miar</h2>
-              <p style="line-height:1.6; color:#334155;">Raport wykorzystuje aparat grafowy (NetworkX) oraz algebrę liniową do wydobycia struktury semantycznej wokół lemy. Ramy są generowane i oceniane przy użyciu poniższych metryk analitycznych.</p>
+              <!-- D13F_METHODOLOGY_LAYOUT -->
+              <p style="line-height:1.6; color:#334155;">Raport wykorzystuje graf wzajemnego sąsiedztwa oraz reprezentacje wektorowe do wydobycia lokalnych skupień podobieństwa wokół badanej lemy. Podobieństwo wektorowe może odzwierciedlać zarówno podobieństwo kontekstów użycia, jak i podobieństwo budowy wyrazów wynikające z reprezentacji subwordowych modelu FastText.</p>
 
+              <div style="margin:14px 0 18px 0; line-height:1.65; color:#334155;">
+                <p>Każdy lemat <code>w</code> jest reprezentowany przez wektor <code>v(w)</code>. Centroid ramy <code>c(r)</code> reprezentuje wspólne położenie lematów należących do ramy <code>r</code>, a centroid pola <code>c(F)</code> reprezentuje wspólne położenie wszystkich lematów analizowanego pola. Centroid zbioru <code>A</code> jest obliczany jako znormalizowana suma jego wektorów:</p>
+                <p style="font-family:Consolas,monospace; font-size:1.04em; margin:10px 0;"><b>c(A) = Σ<sub>w∈A</sub> v(w) / ||Σ<sub>w∈A</sub> v(w)||</b></p>
+              </div>
+
+              <h3 style="margin:18px 0 10px 0;">Miary ramowe</h3>
+              <div class="method-grid">
+                <div class="method-card">
+                  <h4>Typowość ramowa</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>typicality</code></div>
+                  <p>Określa stopień zgodności kierunku wektora lematu z kierunkiem centroidu ramy odniesienia. Dla członka klastra jest nią własna rama grafowa, a dla lematu spoza klastrów najbliższa rama centroidowa.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>T<sub>r</sub>(w) = [v(w) · c(r)] / [||v(w)|| · ||c(r)||]</b></p>
+                  <p>Wyższa wartość oznacza bardziej centralne położenie lematu w ramie.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Swoistość ramowa</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>distinctiveness</code></div>
+                  <p>Określa, o ile podobieństwo lematu do ramy odniesienia przewyższa jego największe podobieństwo do innej ramy.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>D<sub>r</sub>(w) = T<sub>r</sub>(w) − max<sub>s≠r</sub> {[v(w) · c(s)] / [||v(w)|| · ||c(s)||]}</b></p>
+                  <p>Wartość bliska zeru wskazuje położenie na pograniczu ram. Dla członka klastra wartość ujemna oznacza większe podobieństwo do centroidu innej ramy niż do centroidu własnej ramy. Dla lematu spoza klastrów rama odniesienia jest ramą najbliższą, dlatego swoistość jest nieujemna.</p>
+                </div>
+              </div>
+
+              <h3 style="margin:18px 0 10px 0;">Miary całego pola</h3>
               <div class="method-grid" id="method-grid">
-                <div class="method-card"><h4>Nośność interpretacyjna ramy (Salience)</h4><p>Łączy w sobie typowość słowa dla ramy, jego swoistość, zlogarytmowaną frekwencję oraz siłę lokalną w grafie. Jest karana za wysoką ogólność (hubness). Słowa o wysokiej nośności najlepiej nadają się do nazwania i zinterpretowania ramy.</p></div>
-                <div class="method-card"><h4>Typowość ramy (Typicality)</h4><p>Podobieństwo kosinusowe słowa do uśrednionego środka ramy (centroidu). Słowa z wysoką typowością leżą w samym rdzeniu przestrzennym danej grupy znaczeniowej.</p></div>
-                <div class="method-card"><h4>Swoistość ramy (Distinctiveness)</h4><p>Różnica między typowością dla własnej ramy a podobieństwem do centroidu najbliższej innej ramy. Słowo o niskiej swoistości leży na pograniczu dwóch ram.</p></div>
-                <div class="method-card"><h4>Centralność pola (Field typicality)</h4><p>Podobieństwo słowa do centroidu całego pola semantycznego danej lemy. Ta miara zasila globalny ranking field-level i wskazuje słowa najbardziej centralne dla całego pola, a nie tylko dla jednej ramy.</p></div>
-                <div class="method-card"><h4>Swoistość pola (Field distinctiveness)</h4><p>Miara łącząca centralność w całym polu z niską ogólnością (globality). Premiuje słowa mocno reprezentujące pole badanej lemy, ale niebędące ogólnymi hubami.</p></div>
-                <div class="method-card"><h4>Nośność pola (Field salience)</h4><p>Miara interpretacyjna dla całego pola semantycznego. Łączy centralność pola, swoistość pola, zlogarytmowaną frekwencję, siłę lokalną oraz podobieństwo do lemy centralnej. To ona zasila nowe globalne rankingi słów.</p></div>
+                <div class="method-card">
+                  <h4>Centralność pola</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_typicality</code></div>
+                  <p>Określa stopień zgodności kierunku wektora lematu z kierunkiem centroidu całego pola.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>C<sub>F</sub>(w) = [v(w) · c(F)] / [||v(w)|| · ||c(F)||]</b></p>
+                  <p>Wyższa wartość oznacza bardziej centralne położenie lematu w analizowanym polu.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Ogólność</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>globality</code></div>
+                  <p>Określa rozpowszechnienie lematu na listach sąsiedztwa innych lematów.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>G(w) = 0</b>, gdy <b>d<sub>in</sub>(w) ≤ p<sub>50</sub></b></p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>G(w) = log[d<sub>in</sub>(w) − p<sub>50</sub> + 1] / log[d<sub>max</sub> − p<sub>50</sub> + 1]</b>, gdy <b>d<sub>in</sub>(w) &gt; p<sub>50</sub></b></p>
+                  <p><code>d<sub>in</sub>(w)</code> to liczba list sąsiedztwa zawierających lemat <code>w</code>; <code>p<sub>50</sub></code> to mediana tej liczby, a <code>d<sub>max</sub></code> jej wartość maksymalna. Wyższa wartość oznacza lemat występujący w sąsiedztwie większej liczby różnych jednostek.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Specyficzność pola</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_distinctiveness</code></div>
+                  <p>Określa centralność lematu w analizowanym polu po pomniejszeniu jej odpowiednio do ogólności lematu.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>S<sub>F</sub>(w) = C<sub>F</sub>(w) · [1 − G(w)]</b></p>
+                  <p>Wyższa wartość oznacza lemat centralny dla badanego pola, który nie występuje często na listach sąsiedztwa wielu innych jednostek.</p>
+                </div>
               </div>
 
               <h3 style="margin-top:20px;">Parametry wykonania</h3>
@@ -1186,13 +1362,6 @@ class AnalyticalSemanticReportBuilderV7_1:
             function fmt(x, digits = 3) {
               if (x === null || x === undefined || Number.isNaN(x)) return '—';
               return Number(x).toFixed(digits);
-            }
-
-            function tailComment(row) {
-              if (row.globality > 0.6) return 'Słowo ogólne (hub), osłabia precyzję.';
-              if (row.distinctiveness < 0.05) return 'Silne pogranicze z inną ramą.';
-              if (row.typicality < 0.3) return 'Dalekie peryferie (niska typowość).';
-              return 'Umiarkowane powiązanie z rdzeniem.';
             }
 
             const frameColors = ['#2563eb','#0f766e','#7c3aed','#dc2626','#ea580c','#0891b2', '#4d7c0f', '#be123c'];
@@ -1244,10 +1413,6 @@ class AnalyticalSemanticReportBuilderV7_1:
                   tip: 'Całkowita liczba wystąpień lemy w zbadanym korpusie. Rzadkie lemy mogą generować mniej stabilne modele wektorowe, co wymaga ostrożniejszej interpretacji ram.' 
                 },
                 { 
-                  label: 'Gęstość grafu', value: fmt(o.graph_density), 
-                  tip: 'Stosunek istniejących krawędzi do maksymalnej ich możliwej liczby. Wysoka gęstość (>0.4) dowodzi, że słowa z pola silnie łączą się również ze sobą nawzajem, tworząc zwartą domenę tematyczną.' 
-                },
-                { 
                   label: 'Spójność pola (pairwise)', value: fmt(o.field_cohesion_pairwise), 
                   tip: 'Średnie podobieństwo kosinusowe między wszystkimi parami wektorów w przestrzeni. Wysoka spójność potwierdza, że zbiór jest silnie zogniskowany wokół wspólnego tematu.' 
                 },
@@ -1259,12 +1424,8 @@ class AnalyticalSemanticReportBuilderV7_1:
                   label: 'Parametr Top-K', value: o.neighbors_top_k, 
                   tip: 'Zdefiniowany w konfiguracji analizy górny limit liczby pobieranych najbliższych sąsiadów.' 
                 },
-                { 
-                  label: 'Minimalne podobieństwo', value: fmt(o.min_similarity, 2), 
-                  tip: 'Próg podobieństwa wymagany do włączenia sąsiada w przestrzeń analizy. Wyższy próg generuje pole semantyczne o większej precyzji powiązań i węższym zakresie tematycznym.' 
-                }
               ];
-              
+
               document.getElementById('technical-cards').innerHTML = techCards.map(c => `
                 <div class="card">
                   <div class="label" style="display:flex; align-items:center;">
@@ -1276,57 +1437,63 @@ class AnalyticalSemanticReportBuilderV7_1:
 
             function renderGlobalRankings() {
               const words = [...DATA.word_df];
-            
+
               const getRank = (fid) => {
                 if (!fid) return '—';
-                const fr = DATA.frame_df.find(f => f.frame_id === fid);
-                return fr ? `R${fr.frame_rank}` : '—';
+                const fr = DATA.frame_df.find(f => String(f.frame_id) === String(fid));
+                return fr ? `R${fr.frame_rank}` : `R${fid}`;
               };
-            
               const getRankNum = (fid) => {
-                if (!fid) return null;
-                const fr = DATA.frame_df.find(f => f.frame_id === fid);
-                return fr ? fr.frame_rank : null;
+                const fr = DATA.frame_df.find(f => String(f.frame_id) === String(fid));
+                return fr ? Number(fr.frame_rank) : null;
               };
-            
-              // NOWE: prawdziwe rankingi field-level
+
               const typWords = [...words]
                 .sort((a, b) => (b.field_typicality ?? 0) - (a.field_typicality ?? 0))
                 .slice(0, 25);
-            
+
               const disWords = [...words]
                 .sort((a, b) => (b.field_distinctiveness ?? 0) - (a.field_distinctiveness ?? 0))
                 .slice(0, 25);
-            
-              const salWords = [...words]
-                .sort((a, b) => (b.field_salience ?? 0) - (a.field_salience ?? 0))
-                .slice(0, 25);
-            
+
               const fillTable = (id, data, key) => {
                 const tbody = document.getElementById(id);
                 tbody.innerHTML = data.map(w => {
-                  const rankNum = getRankNum(w.frame_id);
-                  const bgColor = rankNum ? getFrameColor(rankNum) : '#cbd5e1';
-                  const textColor = rankNum ? '#fff' : '#0f172a';
+                  const createsFrame = w.assignment_source === 'graph_cluster';
+                  let frameBadges = '';
+                  if (createsFrame) {
+                    const rankNum = getRankNum(w.frame_id);
+                    const color = rankNum ? getFrameColor(rankNum) : '#64748b';
+                    frameBadges = `<span class="badge" style="background:${color};color:#fff">${getRank(w.frame_id)}</span>`;
+                  } else {
+                    const ids = [w.best_frame_id, w.second_frame_id].filter(Boolean);
+                    frameBadges = ids.map(fid => `<span class="badge" style="background:#e2e8f0;color:#334155;margin-right:4px">${getRank(fid)}</span>`).join('');
+                  }
                   return `<tr>
                     <td><b>${w.lemma}</b></td>
-                    <td><span class="badge" style="background:${bgColor}; color:${textColor}">${getRank(w.frame_id)}</span></td>
+                    <td>${frameBadges || '—'}</td>
                     <td>${fmt(w[key])}</td>
                   </tr>`;
                 }).join('');
               };
-            
               fillTable('global-typ-tbody', typWords, 'field_typicality');
               fillTable('global-dis-tbody', disWords, 'field_distinctiveness');
-              fillTable('global-sal-tbody', salWords, 'field_salience');
             }
 
             function renderMaps() {
+              if (typeof Plotly === 'undefined') {
+                const warning = '<div class="info-box">Nie udało się załadować biblioteki Plotly. Mapy i macierz relacji wymagają dostępu do skryptu Plotly, ale pozostałe tabele raportu nadal działają.</div>';
+                const wordsMap = document.getElementById('words-map');
+                const framesMap = document.getElementById('frames-map');
+                if (wordsMap) wordsMap.innerHTML = warning;
+                if (framesMap) framesMap.innerHTML = warning;
+                return;
+              }
               const framesCoords = DATA.frames_coords_df;
               const wordsCoords = DATA.words_coords_df;
               const mapLayout = {
                 margin: { l:20, r:20, t:10, b:50 },
-                xaxis: { showticklabels:false, showgrid:false, zeroline:false },
+xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                 yaxis: { showticklabels:false, showgrid:false, zeroline:false },
                 paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)', dragmode:'pan',
                 hovermode: 'closest'
@@ -1365,14 +1532,14 @@ class AnalyticalSemanticReportBuilderV7_1:
                 groupedWords[rank].y.push(w.y);
                 groupedWords[rank].customdata.push(w.frame_id);
                 groupedWords[rank].size.push(Math.max(8, Math.min(18, 8 + (w.size_metric || 0) * 10)));
-                groupedWords[rank].text.push(`<b>${w.lemma}</b><br>Rama: ${rank === 999 ? 'Brak' : rank}<br>Nośność: ${fmt(w.salience)}<br>Typowość: ${fmt(w.typicality || 0)}<br>Swoistość: ${fmt(w.distinctiveness || 0)}<br>Freq: ${w.freq}`);
+                groupedWords[rank].text.push(`<b>${w.lemma}</b><br>Rama: ${rank === 999 ? 'Brak' : rank}<br>Typowość: ${fmt(w.typicality || 0)}<br>Swoistość: ${fmt(w.distinctiveness || 0)}<br>Freq: ${w.freq}`);
               });
               Object.values(groupedWords).sort((a,b) => a.rank - b.rank).forEach(group => {
                 wordsTraces.push({
                   x: group.x, y: group.y, text: group.text, customdata: group.customdata,
                   mode: 'markers', hoverinfo: 'text',
                   marker: { size: group.size, color: group.rank === 999 ? '#94a3b8' : getFrameColor(group.rank), opacity: 0.78 },
-                  name: group.rank === 999 ? 'peryferie' : `Rama ${group.rank}`
+                  name: group.rank === 999 ? 'Lematy związane z ramami' : `Rama ${group.rank}`
                 });
               });
               if (rootCoords) {
@@ -1417,12 +1584,11 @@ class AnalyticalSemanticReportBuilderV7_1:
                       <b>${formatFrameDisplayName(f)}</b>
                     </td>
                   <td>${f.size}</td>
-                  <td>${f.core_size}</td>
-                  <td>${f.periphery_size}</td>
                   <td>${fmt(f.cohesion_centroid_mean)}</td>
-                  <td>${fmt(f.separation_from_other_frames)}</td>
-                  <td>${fmt(f.salience_mean)}</td>
-                  <td>${f.nearest_frame_id ? f.nearest_frame_id : '—'} (${fmt(f.nearest_frame_similarity)})</td>`;
+                  <td>${f.separation_from_other_frames == null ? '—' : fmt(f.separation_from_other_frames)}</td>
+                  <td>${f.nearest_frame_id
+                    ? '<b>' + (f.nearest_frame_label || f.nearest_frame_id) + '</b> (' + fmt(f.nearest_frame_similarity) + ')'
+                    : '—'}</td>`;
                 tr.addEventListener('click', () => {
                   selectFrame(f.frame_id);
                   document.getElementById('detail-title').scrollIntoView({ behavior: 'smooth' });
@@ -1432,6 +1598,11 @@ class AnalyticalSemanticReportBuilderV7_1:
             }
 
             function renderRelations() {
+              if (typeof Plotly === 'undefined') {
+                const target = document.getElementById('relations-heatmap');
+                if (target) target.innerHTML = '<div class="info-box">Macierz relacji nie jest dostępna, ponieważ biblioteka Plotly nie została załadowana.</div>';
+                return;
+              }
               const ids = [...new Set(DATA.frame_similarity_df.map(x => x.frame_label_a))];
               if (ids.length === 0) return;
               const matrix = ids.map(id_a => ids.map(id_b => {
@@ -1455,111 +1626,65 @@ class AnalyticalSemanticReportBuilderV7_1:
             function selectFrame(frameId) {
               if (!frameId) return;
               selectedFrameId = frameId;
-              const frame = DATA.frame_df.find(f => f.frame_id === frameId);
+              const frame = DATA.frame_df.find(f => String(f.frame_id) === String(frameId));
               if (!frame) return;
-              const words = DATA.word_df.filter(w => w.frame_id === frameId);
+              const members = DATA.word_df.filter(w => String(w.frame_id) === String(frameId) && w.assignment_source === 'graph_cluster');
+              const relations = (DATA.relation_df || []).filter(w => String(w.nearest_frame_id) === String(frameId));
+
               document.getElementById('detail-empty').style.display = 'none';
               document.getElementById('detail-content').style.display = 'block';
               document.getElementById('detail-title').textContent = formatFrameDisplayName(frame);
               document.getElementById('detail-subtitle').textContent = `Rank: ${frame.frame_rank} · Anchory: ${(frame.anchors || []).join(', ')}`;
+
               const mHtml = [
-                `<div class="metric"><div class="k">Rozmiar ramy</div><div class="v">${frame.size}</div><div class="i">Rdzeń: ${frame.core_size} | peryferie: ${frame.periphery_size}</div></div>`,
-                `<div class="metric"><div class="k">Zwartość ramy</div><div class="v">${fmt(frame.cohesion_centroid_mean)}</div><div class="i">Średnia typowość wektora</div></div>`,
-                `<div class="metric"><div class="k">Nośność ramy</div><div class="v">${fmt(frame.salience_mean)}</div><div class="i">Średnia waga dla ramy</div></div>`,
+                `<div class="metric"><div class="k">Rozmiar ramy</div><div class="v">${frame.size}</div><div class="i">Liczba lematów należących do skupienia grafowego</div></div>`,
+                `<div class="metric"><div class="k">Zwartość ramy</div><div class="v">${fmt(frame.cohesion_centroid_mean)}</div><div class="i">Średnie podobieństwo członków do centroidu</div></div>`,
               ].join('');
               document.getElementById('frame-metrics').innerHTML = mHtml;
-              const coreWords = [...words].sort((a,b) => b.typicality - a.typicality).slice(0, 10);
-              const distWords = [...words].sort((a,b) => b.distinctiveness - a.distinctiveness).slice(0, 10);
-              const salWords = [...words].sort((a,b) => b.salience - a.salience).slice(0, 10);
+
+              const coreWords = [...members].sort((a,b) => b.typicality - a.typicality).slice(0, 10);
+              const distWords = [...members].sort((a,b) => b.distinctiveness - a.distinctiveness).slice(0, 10);
               const color = getFrameColor(frame.frame_rank);
               renderBarChart('core-chart', coreWords, 'typicality', color, 'Typowość');
               renderBarChart('distinctive-chart', distWords, 'distinctiveness', color, 'Swoistość');
-              renderBarChart('interpretive-chart', salWords, 'salience', color, 'Nośność (Salience)');
-              const tbody = document.getElementById('members-tbody');
-              tbody.innerHTML = '';
-              // Filtrujemy tylko Rdzeń i dodajemy ładny badge
-              words.filter(w => !w.is_periphery).sort((a,b) => b.salience - a.salience).forEach(row => {
-                const tr = document.createElement('tr');
-                const badge = '<span style="font-size:10px; color:#059669; background:#d1fae5; padding:2px 6px; border-radius:4px; margin-left:6px;">Rdzeń</span>';
-                tr.innerHTML = `
-                  <td><b>${row.lemma}</b> ${badge}</td>
-                  <td>${row.freq}</td>
+
+              const combined = [];
+              members.forEach(row => combined.push({
+                ...row,
+                table_status: 'Rama',
+                similarity_to_current_frame: row.best_frame_similarity ?? row.typicality,
+                related_frames: [],
+              }));
+              relations.forEach(row => combined.push({
+                ...row,
+                table_status: 'Związany z ramą',
+                similarity_to_current_frame: row.nearest_frame_similarity,
+                related_frames: [row.second_frame_id].filter(Boolean),
+              }));
+              combined.sort((a,b) => (b.similarity_to_current_frame ?? -Infinity) - (a.similarity_to_current_frame ?? -Infinity));
+
+              const tbody = document.getElementById('frame-lemmas-tbody');
+              tbody.innerHTML = combined.map(row => {
+                const related = (row.related_frames || []).map(fid => {
+                  const relatedFrame = DATA.frame_df.find(f => String(f.frame_id) === String(fid));
+                  return relatedFrame ? `R${relatedFrame.frame_rank}` : `R${fid}`;
+                }).join(', ') || '—';
+                return `<tr>
+                  <td><b>${row.lemma}</b></td>
+                  <td><span class="badge" style="background:${row.table_status === 'Rama' ? '#dbeafe' : '#e2e8f0'};color:#334155">${row.table_status}</span></td>
+                  <td>${related}</td>
+                  <td>${row.freq ?? '—'}</td>
                   <td>${fmt(row.typicality)}</td>
                   <td>${fmt(row.distinctiveness)}</td>
-                  <td><b>${fmt(row.salience)}</b></td>
-                  <td>${fmt(row.local_strength)}</td>
-                  <td>${fmt(row.globality)}</td>`;
-                tbody.appendChild(tr);
-              });
-              const tailBody = document.getElementById('tail-tbody');
-              tailBody.innerHTML = '';
-              const peripheryWords = words.filter(w => w.is_periphery).sort((a,b) => b.typicality - a.typicality);
-              if (peripheryWords.length === 0) {
-                tailBody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#64748b;padding:16px;">Rama jest bardzo spójna, wszystkie słowa weszły do rdzenia.</td></tr>';
-              } else {
-                peripheryWords.forEach(row => {
-                  const tr = document.createElement('tr');
-                  tr.innerHTML = `
-                    <td><b>${row.lemma}</b></td>
-                    <td>${fmt(row.typicality)}</td>
-                    <td>${fmt(row.distinctiveness)}</td>
-                    <td>${fmt(row.salience)}</td>
-                    <td>${tailComment(row)}</td>`;
-                  tailBody.appendChild(tr);
-                });
-              }
-            }
-
-            function renderOrphansPanel() {
-              const panel = document.getElementById('orphans-panel');
-              const panelBody = document.getElementById('orphans-panel-body');
-              const orphans = DATA.orphans_df || [];
-            
-              // Jeśli nie ma orphanów, ukryj cały panel
-              if (!orphans.length) {
-                if (panel) panel.style.display = 'none';
-                return;
-              }
-            
-              // Jeśli są orphany, upewnij się, że panel jest widoczny
-              if (panel) panel.style.display = '';
-            
-              panelBody.innerHTML = `
-                <div class="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Słowo</th>
-                        <th title="Częstość absolutna występowania słowa w analizowanym korpusie.">Freq <span class="help">?</span></th>
-                        <th title="Miara bliskości wektora słowa względem centroidu ramy. Wyższa wartość wskazuje na silniejszą przynależność do rdzenia semantycznego ramy.">Typowość <span class="help">?</span></th>
-                        <th title="Stopień unikalności słowa dla danej ramy (różnica między typowością a podobieństwem do najbliższej sąsiedniej ramy). Wyższa wartość oznacza mniejszą wieloznaczność.">Swoistość <span class="help">?</span></th>
-                        <th title="Złożona wskaźnik uwzględniający m.in. typowość, swoistość i siłę lokalną. Identyfikuje słowa o najwyższym potencjale reprezentatywnym dla danej ramy.">Nośność <span class="help">?</span></th>
-                        <th title="Suma wag krawędzi łączących dany węzeł (słowo) z pozostałymi elementami w wyodrębnionej podsieci grafu.">Siła lokalna <span class="help">?</span></th>
-                        <th title="Znormalizowany wskaźnik (0-1) określający stopień wszechobecności słowa w globalnej przestrzeni korpusu. Wysokie wartości wskazują na słowa o wysokiej ogólności (tzw. węzły typu hub).">Ogólność <span class="help">?</span></th>
-                      </tr>
-                    </thead>
-                    <tbody id="orphans-tbody"></tbody>
-                  </table>
-                </div>`;
-            
-              const tbody = document.getElementById('orphans-tbody');
-              tbody.innerHTML = orphans.map(row => `
-                <tr>
-                  <td><b>${row.word}</b></td>
-                  <td>${row.freq}</td>
-                  <td>${fmt(row.similarity_to_lemma)}</td>
-                  <td>${fmt(row.salience)}</td>
                   <td>${fmt(row.globality)}</td>
-                </tr>`).join('');
+                </tr>`;
+              }).join('');
             }
 
             function renderReverseField() {
               const container = document.getElementById('reverse-field-body');
               const data = DATA.reverse_field_df || [];
             
-              // Ustawiamy nazwę lemy w nagłówku panelu
-              const lemmaHeader = document.getElementById('reverse-lemma-name');
-              if (lemmaHeader) lemmaHeader.textContent = DATA.overview.lemma;
             
               if (data.length === 0) {
                 container.innerHTML = `
@@ -1640,20 +1765,116 @@ class AnalyticalSemanticReportBuilderV7_1:
               document.getElementById('method-btn').addEventListener('click', () => { document.getElementById('modal').style.display = 'flex'; });
               document.getElementById('close-modal').addEventListener('click', () => { document.getElementById('modal').style.display = 'none'; });
               document.getElementById('modal').addEventListener('click', e => { if (e.target.id === 'modal') document.getElementById('modal').style.display = 'none'; });
-              if (document.getElementById('method-pre')) document.getElementById('method-pre').textContent = JSON.stringify(DATA.methodology, null, 2);
-              if (document.getElementById('diag-pre')) document.getElementById('diag-pre').textContent = JSON.stringify(DATA.diagnostics, null, 2);
+              const boolPl = value => value ? 'tak' : 'nie';
+              const methodology = DATA.methodology || {};
+              const contract = methodology.method_contract || {};
+              const selection = methodology.semantic_field_selection || {};
+              const graph = contract.clustering_graph || {};
+              const clustering = contract.clustering || {};
+              const relation = contract.nonmember_relation || {};
+              const reported = contract.reported_measures || {};
+              const runtimeCw = (methodology.frame_construction_disclosure || {}).chinese_whispers || {};
+
+              const methodSummary = {
+                wersja_metody: contract.analysis_method_version || null,
+                korpus: methodology.bundle_label || null,
+                lemat: methodology.lemma || DATA.lemma || null,
+                pole_semantyczne: {
+                  dostepne_lematy: selection.available_neighbors ?? null,
+                  wykorzystane_lematy: selection.used_neighbors ?? null,
+                  zakres: 'pełna lista dostępna w artefakcie'
+                },
+                graf_klasteryzacji: {
+                  metoda: 'mutual k-NN',
+                  k: graph.knn_k ?? null,
+                  wymagana_wzajemnosc: boolPl(Boolean(graph.mutual_required)),
+                  waga_krawedzi: 'podobieństwo cosinusowe'
+                },
+                klasteryzacja: {
+                  algorytm: clustering.algorithm === 'chinese_whispers' ? 'Chinese Whispers' : clustering.algorithm,
+                  seed: clustering.reference_seed ?? null,
+                  maksimum_iteracji: clustering.maximum_iterations ?? null,
+                  wykonane_iteracje: runtimeCw.iterations_used ?? null,
+                  osiagnieta_zbieznosc: boolPl(Boolean(runtimeCw.converged)),
+                  warunek_zatrzymania: 'pełna iteracja bez zmiany etykiet',
+                  minimalny_rozmiar_ramy: graph.minimum_cluster_size ?? null
+                },
+                lematy_spoza_klastrow: {
+                  opis: relation.mode === 'two_nearest_normalized_frame_centroids'
+                    ? 'dwie najbliższe ramy według znormalizowanych centroidów'
+                    : relation.mode,
+                  zmieniaja_sklad_ramy: boolPl(Boolean(relation.changes_frame_membership)),
+                  zmieniaja_centroid_ramy: boolPl(Boolean(relation.changes_frame_centroid))
+                },
+                ogolnosc: 'obecność lematu na listach sąsiedztwa innych lematów',
+                indeksy_zagregowane: boolPl(Boolean(reported.aggregated_indices))
+              };
+
+              const diagnostics = DATA.diagnostics || {};
+              const dGraph = diagnostics.clustering_graph || {};
+              const dCw = dGraph.chinese_whispers || {};
+              const assignment = diagnostics.assignment || {};
+              const diagnosticSummary = {
+                pole: {
+                  lematy: diagnostics.candidate_neighbors_total ?? null,
+                  brakujace_wektory: diagnostics.missing_vectors_total ?? null,
+                  lematy_na_mapie: (diagnostics.projection || {}).mapped_word_records ?? null
+                },
+                graf: {
+                  wezly_przed_usunieciem_izolatow: dGraph.pool_nodes ?? null,
+                  wezly_po_usunieciu_izolatow: dGraph.nodes_after_isolate_removal ?? null,
+                  krawedzie: dGraph.edges ?? null,
+                  izolaty: dGraph.isolates_removed ?? null
+                },
+                klasteryzacja: {
+                  iteracje: dCw.iterations_used ?? null,
+                  zbieznosc: boolPl(Boolean(dCw.converged)),
+                  zmiany_etykiet: dCw.label_changes_by_iteration || [],
+                  klastry_przed_filtrem: dGraph.clusters_before_min_size_filter ?? null,
+                  zachowane_ramy: dGraph.retained_frames ?? diagnostics.frames_total ?? null,
+                  odrzucone_male_klastry: dGraph.discarded_small_clusters ?? null,
+                  lematy_w_malych_klastrach: dGraph.discarded_small_cluster_nodes ?? null
+                },
+                pokrycie: {
+                  czlonkowie_ram: assignment.graph_cluster ?? diagnostics.frame_members_total ?? null,
+                  relacje_do_ram: assignment.frame_relation ?? diagnostics.frame_related_lemmas_total ?? null,
+                  nieopisane_lematy: assignment.unassigned ?? diagnostics.unrelated_lemmas_total ?? null,
+                  pelne_pokrycie: boolPl(Number(diagnostics.described_candidates_ratio) === 1)
+                }
+              };
+
+              if (document.getElementById('method-pre')) document.getElementById('method-pre').textContent = JSON.stringify(methodSummary, null, 2);
+              if (document.getElementById('diag-pre')) document.getElementById('diag-pre').textContent = JSON.stringify(diagnosticSummary, null, 2);
             }
             document.addEventListener('DOMContentLoaded', () => {
-              document.getElementById('header-meta').textContent = `Lema: ${DATA.overview.lemma} · Ramy: ${DATA.overview.liczba_ram}`;
-              buildCards();
-              renderGlobalRankings();
-              renderMaps();
-              renderFramesSummaryTable();
-              renderRelations();
-              renderOrphansPanel();
-              renderReverseField();
-              initTabsAndModals();
-              if (DATA.frame_df.length) selectFrame(DATA.frame_df[0].frame_id);
+              const runSection = (name, fn) => {
+                try {
+                  fn();
+                } catch (error) {
+                  console.error(`[Raport] Błąd sekcji ${name}:`, error);
+                }
+              };
+
+              // Kontrolki zakładek i modali muszą być aktywne niezależnie od
+              // powodzenia zewnętrznej biblioteki wykresów.
+              runSection('zakładki i modale', initTabsAndModals);
+              runSection('nagłówek', () => {
+                const header = document.getElementById('header-meta');
+                if (header) header.textContent = `Lema: ${DATA.overview.lemma} · Ramy: ${DATA.overview.liczba_ram}`;
+              });
+              runSection('karty', buildCards);
+              runSection('globalne rankingi', renderGlobalRankings);
+              runSection('podsumowanie ram', renderFramesSummaryTable);
+              runSection('obecność w innych polach', renderReverseField);
+
+              // Wybór pierwszej ramy nie zależy od mapy i powinien działać
+              // również wtedy, gdy Plotly jest niedostępne.
+              runSection('pierwsza rama', () => {
+                if (DATA.frame_df.length) selectFrame(DATA.frame_df[0].frame_id);
+              });
+
+              runSection('mapy', renderMaps);
+              runSection('relacje między ramami', renderRelations);
               setTimeout(() => window.dispatchEvent(new Event('resize')), 100);
             });
           </script>
@@ -1665,10 +1886,10 @@ class AnalyticalSemanticReportBuilderV7_1:
             "overview": payload["overview"],
             "word_df": payload["word_df"].to_dict(orient="records"),
             "frame_df": payload["frame_df"].to_dict(orient="records"),
+            "relation_df": payload["relation_df"].to_dict(orient="records"),
             "frame_similarity_df": payload["frame_similarity_df"].to_dict(orient="records"),
             "words_coords_df": payload["words_coords_df"].to_dict(orient="records"),
             "frames_coords_df": payload["frames_coords_df"].to_dict(orient="records"),
-            "orphans_df": payload["orphans_df"].to_dict(orient="records") if payload["orphans_df"] is not None else [],
             "methodology": payload["methodology"],
             "diagnostics": payload["diagnostics"],
             "reverse_field_df": payload["reverse_field_df"].to_dict(orient="records") if not payload["reverse_field_df"].empty else [],
@@ -1689,45 +1910,90 @@ class AnalyticalSemanticReportBuilderV7_1:
         if len(field_rows) < 2:
             raise ValueError(f"Brak sąsiadów spełniających warunki dla lemy: {key}")
         candidate_words = [row["lemma"] for row in field_rows]
-        local_graph = self._build_local_graph(key, field_rows)
         frames = self.induce_frames(key, candidate_words)
         if not frames:
             raise ValueError("Nie udało się wygenerować ram semantycznych dla wskazanej lemy.")
 
-        word_df = self.compute_word_metrics(key, field_rows, frames, local_graph)
+        word_df = self.compute_word_metrics(key, field_rows, frames)
+        relation_df = word_df[word_df["assignment_source"] == "frame_relation"].copy()
+        if not relation_df.empty:
+            relation_df = relation_df.rename(columns={"best_frame_id": "nearest_frame_id", "best_frame_similarity": "nearest_frame_similarity", "assignment_margin": "similarity_difference"})
         frame_df = self.compute_frame_metrics(key, frames, word_df)
         frame_similarity_df = self.compute_frame_similarity(frames)
         words_coords_df, frames_coords_df = self.compute_projection(key, word_df, frame_df, frames)
-        edges_df = pd.DataFrame([
-            {"source": u, "target": v, "weight": float(d.get("weight", 0.0)), "edge_type": d.get("edge_type", "")}
-            for u, v, d in local_graph.edges(data=True)
-        ])
-        overview = self.compute_global_overview(key, field_rows, local_graph, frame_df)
-        diagnostics = self.compute_diagnostics(key, field_rows, word_df, frames, local_graph)
-        orphans_rows = self.build_orphan_rows(word_df)
-        orphans_df = pd.DataFrame(orphans_rows) if orphans_rows else pd.DataFrame()
+        mapped_word_records = int((words_coords_df["kind"] == "word").sum()) if not words_coords_df.empty else 0
+        expected_word_records = int(len(word_df))
+        if mapped_word_records != expected_word_records:
+            raise RuntimeError(
+                f"Mapa PCA jest niekompletna: {mapped_word_records} z {expected_word_records} lematów."
+            )
+        overview = self.compute_global_overview(key, field_rows, frame_df)
+        diagnostics = self.compute_diagnostics(key, field_rows, word_df, frames)
+        frame_members_total = int((word_df['assignment_source'] == 'graph_cluster').sum())
+        frame_related_lemmas_total = int((word_df['assignment_source'] == 'frame_relation').sum())
+        unrelated_lemmas_total = int((word_df['assignment_source'] == 'unassigned').sum())
+        candidates_total = int(len(word_df))
+        diagnostics['frame_members_total'] = frame_members_total
+        diagnostics['frame_related_lemmas_total'] = frame_related_lemmas_total
+        diagnostics['unrelated_lemmas_total'] = unrelated_lemmas_total
+        diagnostics['frame_membership_ratio'] = round(frame_members_total / candidates_total, 4) if candidates_total else 0.0
+        diagnostics['frame_relation_ratio'] = round(frame_related_lemmas_total / candidates_total, 4) if candidates_total else 0.0
+        diagnostics['described_candidates_ratio'] = round((frame_members_total + frame_related_lemmas_total) / candidates_total, 4) if candidates_total else 0.0
+        diagnostics["projection"] = {
+            "mapped_word_records": mapped_word_records,
+            "expected_word_records": expected_word_records,
+            "complete": mapped_word_records == expected_word_records,
+        }
+        for legacy_key in ('assigned_neighbors_total', 'orphans_total', 'coverage_ratio'):
+            diagnostics.pop(legacy_key, None)
+        diagnostics["clustering_graph"] = dict(self._clustering_graph_diagnostics)
+        diagnostics["assignment"] = {
+            "graph_cluster": int(sum(v.get("assignment_status")=="graph_cluster" for v in self._assignment_diagnostics.values())),
+            "frame_relation": int(sum(v.get("assignment_status")=="frame_relation" for v in self._assignment_diagnostics.values())),
+            "unassigned": int(sum(v.get("assignment_status")=="unassigned" for v in self._assignment_diagnostics.values())),
+            "with_second_frame": int(sum(v.get("second_frame_id") is not None for v in self._assignment_diagnostics.values())),
+        }
         reverse_field_df = self.compute_reverse_field(key)
 
+        method_contract = self.build_method_contract(key)
+        used_similarities = [float(row["similarity_to_lemma"]) for row in field_rows]
+        semantic_field_selection = {
+            "source": "full_available_neighbor_list",
+            "neighbor_artifact_capacity": int(self.bundle.max_neighbors_for(key)),
+            "boundary_interpretation": "artifact_capacity_not_semantic_cutoff",
+            "available_neighbors": int(self.bundle.max_neighbors_for(key)),
+            "used_neighbors": int(len(field_rows)),
+            "minimum_used_similarity": (min(used_similarities) if used_similarities else None),
+            "maximum_used_similarity": (max(used_similarities) if used_similarities else None),
+            "rejected_missing_or_duplicate_or_self": int(max(0, self.bundle.max_neighbors_for(key) - len(field_rows))),
+            "similarity_threshold": None,
+            "technical_validation_only": True,
+        }
+        diagnostics["semantic_field_selection"] = semantic_field_selection
+
         methodology = {
+            "method_contract": method_contract,
             "source_path": self.bundle.source_path,
             "bundle_label": self.bundle.label,
             "lemma": key,
-            "neighbors_top_k": int(
-                self.config.top_k_neighbors if self.config.top_k_neighbors > 0 else self.bundle.max_neighbors_for(key)),
-            "min_similarity": float(self.config.min_similarity),
+            "semantic_field_selection": semantic_field_selection,
+            "frame_construction_disclosure": {
+                "graph_mode": self.config.frame_graph_mode,
+                "knn_k": int(self.config.frame_graph_knn_k),
+                "mutuality_required": bool(self.config.frame_graph_mode == "mutual_knn"),
+                "minimum_frame_size": int(SenseInducer.MIN_CLUSTER_SIZE) if SenseInducer is not None else 2,
+                "small_clusters_reported_in_diagnostics": True,
+                "chinese_whispers": dict(self._clustering_graph_diagnostics.get("chinese_whispers", {})),
+            },
             "frame_source": "SenseInducer" if (
                         self.config.use_sense_inducer and SenseInducer is not None) else "fallback_greedy_modularity",
             "use_sense_inducer": bool(self.config.use_sense_inducer and SenseInducer is not None),
-            "frame_edge_threshold": float(self.config.frame_edge_threshold),
-            "bridge_similarity_threshold": float(self.config.bridge_similarity_threshold),
-            "hubness_similarity_threshold": float(self.config.hubness_similarity_threshold),
-            "frame_assignment_min_similarity": float(self.config.frame_assignment_min_similarity),
-            "core_quantile": float(self.config.core_quantile),
-            "max_plot_words": int(self.config.max_plot_words),
-            "local_neighbor_window": int(self.config.local_neighbor_window),
+            "globality": {
+                "method": "threshold_free_in_degree_over_all_stored_neighbor_lists",
+                "similarity_threshold": None,
+            },
             "typicality": "cos(word, centroid_ramy)",
             "distinctiveness": "typicality - max cos(word, centroid_innej_ramy)",
-            "salience": "0.40*typicality + 0.30*distinctiveness + 0.15*log(freq) + 0.10*local_strength + 0.05*sim_to_lemma - 0.15*globality",
             "projection_2d": "PCA na wektorach słów / centroidach ram",
         }
 
@@ -1738,11 +2004,10 @@ class AnalyticalSemanticReportBuilderV7_1:
             "diagnostics": diagnostics,
             "word_df": word_df,
             "frame_df": frame_df,
+            "relation_df": relation_df,
             "frame_similarity_df": frame_similarity_df,
             "words_coords_df": words_coords_df,
             "frames_coords_df": frames_coords_df,
-            "edges_df": edges_df,
-            "orphans_df": orphans_df,
             "reverse_field_df": reverse_field_df,
         }
 
@@ -1768,21 +2033,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--artifacts", required=True)
     p.add_argument("--lemma", required=True)
     p.add_argument("--output-dir", required=True)
-    p.add_argument("--top-k-neighbors", type=int, default=0)
-    p.add_argument("--min-similarity", type=float, default=0.30)
-    p.add_argument("--top-core", type=int, default=15, dest="top_n_core_words")
-    p.add_argument("--top-distinctive", type=int, default=15, dest="top_n_distinctive_words")
-    p.add_argument("--top-interpretive", type=int, default=15, dest="top_n_interpretive_words")
-    p.add_argument("--table-size", type=int, default=50, dest="members_table_size")
-    p.add_argument("--tail-size", type=int, default=24, dest="tail_table_size")
-    p.add_argument("--orphan-size", type=int, default=60, dest="orphan_table_size")
-    p.add_argument("--globality-threshold", type=float, default=0.40, dest="hubness_similarity_threshold")
-    p.add_argument("--frame-edge-threshold", type=float, default=0.42)
-    p.add_argument("--bridge-similarity-threshold", type=float, default=0.45)
-    p.add_argument("--frame-assignment-min-similarity", type=float, default=0.10)
-    p.add_argument("--core-quantile", type=float, default=0.60)
-    p.add_argument("--max-plot-words", type=int, default=120)
-    p.add_argument("--local-neighbor-window", type=int, default=80)
+    p.add_argument("--frame-graph-mode", choices=("mutual_knn", "legacy_threshold"), default="mutual_knn")
+    p.add_argument("--frame-graph-knn-k", type=int, default=5)
+    p.add_argument("--frame-graph-seed", type=int, default=42)
+    p.add_argument(
+        "--frame-graph-iterations",
+        type=int,
+        default=100,
+        help="Maksymalna liczba iteracji Chinese Whispers; algorytm kończy się wcześniej po zbieżności.",
+    )
     p.add_argument("--no-sense-inducer", action="store_true")
     p.add_argument("--no-csv", action="store_true")
     p.add_argument("--verbose", action="store_true")
@@ -1796,23 +2055,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     config = ReportConfigV7_1(
         lemma=args.lemma,
         output_dir=args.output_dir,
-        top_k_neighbors=args.top_k_neighbors,
-        min_similarity=args.min_similarity,
-        top_n_core_words=args.top_n_core_words,
-        top_n_distinctive_words=args.top_n_distinctive_words,
-        top_n_interpretive_words=args.top_n_interpretive_words,
-        members_table_size=args.members_table_size,
-        tail_table_size=args.tail_table_size,
-        orphan_table_size=args.orphan_table_size,
         use_sense_inducer=not args.no_sense_inducer,
         export_csv=not args.no_csv,
-        hubness_similarity_threshold=args.hubness_similarity_threshold,
-        frame_edge_threshold=args.frame_edge_threshold,
-        bridge_similarity_threshold=args.bridge_similarity_threshold,
-        frame_assignment_min_similarity=args.frame_assignment_min_similarity,
-        core_quantile=args.core_quantile,
-        max_plot_words=args.max_plot_words,
-        local_neighbor_window=args.local_neighbor_window,
+        frame_graph_mode=args.frame_graph_mode,
+        frame_graph_knn_k=args.frame_graph_knn_k,
+        frame_graph_seed=args.frame_graph_seed,
+        frame_graph_iterations=args.frame_graph_iterations,
     )
     result = AnalyticalSemanticReportBuilderV7_1(bundle, config).build()
     LOGGER.info("Raport V7.2 wygenerowany: %s", result["report_path"])

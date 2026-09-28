@@ -33,24 +33,65 @@ class SenseInducer:
         return float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9))
 
     @staticmethod
-    def chinese_whispers(G, iters=20, seed=42):
+    def chinese_whispers(
+        G,
+        iters=100,
+        seed=42,
+        stop_on_convergence=True,
+        return_diagnostics=False,
+    ):
+        """Run weighted Chinese Whispers with optional convergence diagnostics.
+
+        ``iters`` is a safety maximum. Convergence means that a complete
+        iteration changed no node label. The default return value remains the
+        historical list of clusters; callers may request ``(clusters,
+        diagnostics)`` without breaking existing uses.
+        """
+        # D11_CHINESE_WHISPERS_CONVERGENCE
+        maximum_iterations = max(1, int(iters))
         rng = random.Random(seed) if seed is not None else random
         labels = {n: n for n in G.nodes()}
         nodes = list(G.nodes())
+        changes_by_iteration = []
+        converged = False
 
-        for _ in range(iters):
+        for _iteration in range(maximum_iterations):
             rng.shuffle(nodes)
+            changes = 0
             for n in nodes:
                 scores = defaultdict(float)
                 for nb, data in G[n].items():
                     scores[labels[nb]] += data.get("weight", 1.0)
-                if scores:
-                    labels[n] = max(scores.items(), key=lambda x: x[1])[0]
+                if not scores:
+                    continue
+                old_label = labels[n]
+                new_label = max(scores.items(), key=lambda x: x[1])[0]
+                if new_label != old_label:
+                    labels[n] = new_label
+                    changes += 1
+            changes_by_iteration.append(int(changes))
+            if stop_on_convergence and changes == 0:
+                converged = True
+                break
 
         clusters = defaultdict(list)
         for n, lab in labels.items():
             clusters[lab].append(n)
-        return list(clusters.values())
+        cluster_list = list(clusters.values())
+        diagnostics = {
+            "seed": seed,
+            "maximum_iterations": int(maximum_iterations),
+            "iterations_used": int(len(changes_by_iteration)),
+            "converged": bool(converged),
+            "stop_reason": "converged" if converged else "maximum_iterations",
+            "label_changes_last_iteration": (
+                int(changes_by_iteration[-1]) if changes_by_iteration else 0
+            ),
+            "label_changes_by_iteration": changes_by_iteration,
+        }
+        if return_diagnostics:
+            return cluster_list, diagnostics
+        return cluster_list
 
     @classmethod
     def _apply_mmr(cls, v_center, candidate_words, vectors_dict, max_neighbors=50, lambda_param=0.62):

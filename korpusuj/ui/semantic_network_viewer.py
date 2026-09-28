@@ -15,6 +15,11 @@ from korpusuj.ui.plots import get_plot_stack
 
 
 class SemanticNetworkViewer:
+    # D19_RANKING_CONTRACT
+    # D18c_NO_SELECTED_MEMBERS
+    # D18_NO_WSD
+    # D17_EXPLORATION_UI
+    # D16_MUTUAL_5NN_EXPLORATION
     """Klasa renderująca i zarządzająca oknem grafu sieci semantycznej."""
 
     def __init__(self, parent_app, engine, theme, insert_query_callback, current_corpus_name_provider=None, current_corpus_path_provider=None, open_report_callback=None):
@@ -45,13 +50,8 @@ class SemanticNetworkViewer:
         self.node_root = {}
         self.expanded_centers_history = []
 
-        self.draw_static_bridges = False
-        self.draw_contextual_bridges = True
 
         # --- WSD ---
-        self.selected_sense_id = None
-        self.selected_members = set()
-        self.current_senses = []
         self.last_neighbors = []
 
         self.win = ctk.CTkToplevel(self.app)
@@ -62,6 +62,7 @@ class SemanticNetworkViewer:
 
 
         self.domain_lambda_var = tk.DoubleVar(value=0.20)
+        self.show_mutual_knn_edges_var = tk.BooleanVar(value=True)
 
         self.layout_seed_var = ctk.StringVar(value="")
 
@@ -133,25 +134,16 @@ class SemanticNetworkViewer:
             self.side_panel, values=["Eksploracja", "Kręgosłup (MST)", "Klastry"],
             variable=self.mode_var, command=lambda _: self.render_graph()
         )
-        self.mode_selector.pack(fill="x", pady=(0, 10))
-
-        # --- WSD controls (overlay + sort listy) ---
-        self.wsd_var = ctk.StringVar(value="Wszystkie ramy")
-
-        self.wsd_label = ctk.CTkLabel(
-            self.side_panel, text="Profil użycia:", font=("Verdana", 12, "bold")
-        )
-
-        self.wsd_label.pack(fill="x", pady=(0, 4))
-
-        self.wsd_menu = ctk.CTkOptionMenu(
+        self.mode_selector.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
             self.side_panel,
-            variable=self.wsd_var,
-            values=["Wszystkie ramy"],
-            command=self.on_wsd_select,
-            state="disabled"
-        )
-        self.wsd_menu.pack(fill="x", pady=(0, 10))
+            text="Rozmiar węzła zależy od frekwencji. Linie ciągłe powstają podczas rozwijania, dodatkowe połączenia wynikają z mutual 5-NN.",
+            wraplength=470,
+            justify="left",
+            text_color="gray",
+            font=("Verdana", 9)
+        ).pack(fill="x", pady=(0, 10))
+
 
         self.btn_reset = ctk.CTkButton(self.side_panel, text="Wyczyść sieć", fg_color="#D9534F",
                                        command=self.reset_graph)
@@ -226,9 +218,6 @@ class SemanticNetworkViewer:
         self.node_sense_id.clear()
         self.node_root.clear()
         self.last_neighbors = []
-        self.current_senses = []
-        self.selected_sense_id = None
-        self.selected_members = set()
 
         if hasattr(self, 'expanded_centers_history'):
             self.expanded_centers_history.clear()
@@ -247,8 +236,8 @@ class SemanticNetworkViewer:
 
         # Przypisujemy okno do zmiennej instancji (self.settings_win)
         self.settings_win = ctk.CTkToplevel(self.win)
-        self.settings_win.title("Ustawienia Grafu")
-        self.settings_win.geometry("350x450")  # <--- POWIĘKSZONE OKNO
+        self.settings_win.title("Ustawienia grafu")
+        self.settings_win.geometry("430x570")  # <--- POWIĘKSZONE OKNO
 
         # 2. NAPRAWA CHOWANIA SIĘ POD SPÓD
         self.settings_win.transient(self.win)  # Zawsze utrzymuj nad oknem grafu
@@ -261,7 +250,7 @@ class SemanticNetworkViewer:
         y = self.win.winfo_y() + (self.win.winfo_height() // 2) - 200  # <--- ZMIENIONE WYRÓWNANIE DO ŚRODKA
         self.settings_win.geometry(f"+{x}+{y}")
 
-        ctk.CTkLabel(self.settings_win, text=f"Liczba wyświetlanych sąsiadów\n(Max w tej sieci: {max_avail})",
+        ctk.CTkLabel(self.settings_win, text=f"Liczba lematów dodawanych po rozwinięciu węzła\n(Maksymalnie dostępnych: {max_avail})",
                      font=("Verdana", 12)).pack(pady=10)
 
         slider = ctk.CTkSlider(
@@ -281,23 +270,14 @@ class SemanticNetworkViewer:
         domain_frame.pack(fill="x", padx=10, pady=(15, 5))
 
 
-        title_label = ctk.CTkLabel(domain_frame, text="Preferuj słownictwo domenowe", font=("Verdana", 12, "bold"))
+        title_label = ctk.CTkLabel(domain_frame, text="Ograniczanie lematów ogólnych", font=("Verdana", 12, "bold"))
         title_label.pack(pady=(0, 5))
 
         lambda_val_label = ctk.CTkLabel(domain_frame, text="", font=("Verdana", 11))
         lambda_val_label.pack(pady=(0, 5))
 
         def update_lambda_label(val):
-            val = float(val)
-            if val < 0.1:
-                desc = "Wyłączone (standard)"
-            elif val <= 0.3:
-                desc = "Lekka preferencja (domyślnie)"
-            elif val <= 0.6:
-                desc = "Wyraźnie domenowo"
-            else:
-                desc = "Mocno selektywne"
-            lambda_val_label.configure(text=f"Wartość: {val:.2f} — {desc}")
+            lambda_val_label.configure(text=f"Wartość: {float(val):.2f}")
 
         # TWORZYMY SUWAK TYLKO RAZ:
         lambda_scale = ctk.CTkSlider(
@@ -315,12 +295,26 @@ class SemanticNetworkViewer:
 
         tooltip_label = ctk.CTkLabel(
             domain_frame,
-            text="Zmniejsza wagę słów generycznych (hubów),\nwydobywając słownictwo specyficzne.",
+            text="Obniża pozycję lematów występujących na listach sąsiedztwa wielu różnych jednostek. Wartość 0 wyłącza korektę.",
             text_color="gray",
             font=("Verdana", 10)
         )
         tooltip_label.pack(pady=(0, 5))
 
+        ctk.CTkCheckBox(
+            self.settings_win,
+            text="Pokazuj dodatkowe krawędzie mutual 5-NN",
+            variable=self.show_mutual_knn_edges_var,
+            font=("Verdana", 11)
+        ).pack(fill="x", padx=25, pady=(8, 2))
+        ctk.CTkLabel(
+            self.settings_win,
+            text="Połączenie jest dodawane, gdy każdy lemat należy do pięciu najbliższych sąsiadów drugiego.",
+            wraplength=380,
+            justify="left",
+            text_color="gray",
+            font=("Verdana", 9)
+        ).pack(fill="x", padx=25, pady=(0, 6))
 
         def apply_and_close():
             # 1. Zapisujemy historię eksploracji, żeby zachować strukturę drzewa i gałęzi
@@ -341,9 +335,6 @@ class SemanticNetworkViewer:
                 for step in history_to_redraw:
                     self.explore_node(step["word"], parent=step.get("parent"))
 
-                    # Przywrócenie ramy WSD, jeśli była wybrana
-                    if step.get("sense_id") is not None:
-                        self.node_sense_id[step["word"]] = step["sense_id"]
 
                 # Aktualizujemy pasek wyszukiwania do ostatniego aktywnego węzła
                 if self.current_center:
@@ -367,7 +358,7 @@ class SemanticNetworkViewer:
         seed_frame = ctk.CTkFrame(self.settings_win, fg_color="transparent")
         seed_frame.pack(fill="x", padx=10, pady=(5, 5))
 
-        ctk.CTkLabel(seed_frame, text="Ziarno losowości (Seed)", font=("Verdana", 12, "bold")).pack(pady=(0, 5))
+        ctk.CTkLabel(seed_frame, text="Seed rozmieszczenia", font=("Verdana", 12, "bold")).pack(pady=(0, 5))
 
         seed_entry = ctk.CTkEntry(
             seed_frame,
@@ -379,7 +370,7 @@ class SemanticNetworkViewer:
 
         ctk.CTkLabel(
             seed_frame,
-            text="Wpisz liczbę całkowitą, aby zamrozić układ grafu.",
+            text="Wpływa tylko na położenie węzłów. Nie zmienia wyboru lematów ani krawędzi.",
             text_color="gray",
             font=("Verdana", 10)
         ).pack(pady=(0, 5))
@@ -412,10 +403,8 @@ class SemanticNetworkViewer:
             theme=self.theme,
             open_report_callback=self.open_report_callback,
             params={
-                "report_top_k": 0,
                 "hops": 2,
                 "top_k": self.neighbors_limit_var.get(),
-                "min_similarity": 0.45,
             }
         )
 
@@ -523,19 +512,6 @@ class SemanticNetworkViewer:
                         node_colors.append('#08D9D6')  # Morskie historyczne centra
                     else:
                         node_colors.append('#EAEAEA')  # Jasnoszary dla sąsiadów
-
-            # --- WSD overlay z OCHRONĄ ROOTA ---
-            members = getattr(self, 'selected_members', set()) or set()
-            if members:
-                accent = "#9A5BB6"
-                dim = "lightgray"
-                new_colors = []
-                for n, current_color in zip(self.G.nodes(), node_colors):
-                    if n == getattr(self, 'current_root', None):
-                        new_colors.append('#FFCA3A')  # Ochrona: Root zawsze zostaje złoty!
-                    else:
-                        new_colors.append(accent if n in members else dim)
-                node_colors = new_colors
 
             # --- DYNAMICZNE OBRYSY (Stroke) DLA CZYTELNOŚCI ---
             edge_colors_list = []
@@ -724,33 +700,6 @@ class SemanticNetworkViewer:
 
             self.explore_node(clicked_halo, parent=anchor)
 
-    def _format_sense_label(self, sense: dict) -> str:
-        sid = sense.get("frame_id", sense.get("sense_id", "?"))
-        label = (sense.get("label") or "").strip()
-        anchors = sense.get("anchors", []) or []
-        members = sense.get("members", []) or []
-        frame_type = sense.get("frame_type", sense.get("profile_type", "semantic"))
-
-        if frame_type == "contextual":
-            prefix = "Rama kontekstowa"
-        else:
-            prefix = "Rama semantyczna"
-
-        preview_terms = (anchors or members)[:4]
-        preview = ", ".join(preview_terms)
-        if len(anchors or members) > 4:
-            preview += ", ..."
-
-        if label:
-            raw_tokens = {t.strip() for t in label.split(",") if t.strip()}
-            anchor_tokens = {t.strip() for t in anchors[:3] if isinstance(t, str) and t.strip()}
-            overlap = len(raw_tokens & anchor_tokens)
-            bad_prefix = label.lower().startswith(("rama", "profil", "sense"))
-
-            if not bad_prefix and (not anchor_tokens or overlap > 0):
-                return f"{prefix} {sid}: {label}"
-
-        return f"{prefix} {sid}: {preview}"
 
 
     def execute_search(self, event=None):
@@ -777,17 +726,12 @@ class SemanticNetworkViewer:
 
 
         root_lemma = self.current_root or word
-        root_sense_id = self.node_sense_id.get(root_lemma)
-        parent_sense_id = self.node_sense_id.get(parent) if parent else None
 
-        local_neighbors = [n for n in self.G.neighbors(parent)] if parent and self.G.has_node(parent) else []
-
-        # Pobieramy szerszą listę uwzględniającą karę (lambda)
-        # Pobieramy szerszą listę uwzględniającą karę (lambda)
+        # parent=None oznacza pierwszy krok. Silnik użyje wtedy wyłącznie
+        # podobieństwa do aktualnie rozwijanego lematu.
         matched_word, all_res = self.engine.get_contextual_neighbors(
             center_lemma=word, top_n=150,
-            root_lemma=root_lemma, parent_lemma=parent or word,
-            root_sense_id=root_sense_id, parent_sense_id=parent_sense_id, local_neighbor_lemmas=local_neighbors,
+            root_lemma=root_lemma, parent_lemma=parent,
             domain_lambda=self.domain_lambda_var.get()
         )
 
@@ -795,47 +739,13 @@ class SemanticNetworkViewer:
 
         self.current_center = matched_word
 
-        # --- ZMIANA: Prawidłowy, rozciągliwy podział na Core oraz Halo ---
-        limit = self.neighbors_limit_var.get()
+        # D16: pierwsze N według selection_score, halo to kolejne N.
+        limit = max(0, int(self.neighbors_limit_var.get()))
+        core_res = all_res[:limit]
+        halo_res = all_res[limit:limit * 2]
 
-        if all_res:
-            best_score = all_res[0]["score"]
-            lambda_val = float(self.domain_lambda_var.get())
+        self.last_neighbors = core_res  # główne węzły
 
-            # Zoptymalizowany margines bezpieczeństwa
-            # Używamy 0.45 zamiast 0.60, żeby podłoga wpadła idealnie
-            # w "przepaść" wygenerowaną przez algorytm.
-            margin = 0.35 + (0.45 * lambda_val)
-            raw_floor = best_score - margin
-
-            # Twarde dno: Podłoga odcięcia nigdy nie powinna być niższa niż -0.15.
-            # Jeśli słowo po karze spada poniżej -0.15, to jest w 100% zepsutym hubem.
-            score_floor = max(0.05, raw_floor)
-
-            filtered_core = [x for x in all_res if x["score"] >= score_floor]
-            core_res = filtered_core[:limit]
-
-            core_lemmas = {x["lemma"] for x in core_res}
-            halo_res = [x for x in all_res if x["lemma"] not in core_lemmas]
-
-            # --- DEBUG LOG ---
-            print(f"\n=== LAMBDA = {lambda_val:.2f} | center = {matched_word} ===")
-            print(f"Lider: {best_score:.3f} | Margines: {margin:.3f} | PODŁOGA: {score_floor:.3f}")
-            for item in all_res:
-                marker = "✅ (CORE)" if item["score"] >= score_floor and item["lemma"] in core_lemmas else "❌ (HALO)"
-                print(f"{item['lemma']:18s} score={item['score']:+.3f} {marker}")
-        else:
-            core_res = []
-            halo_res = []
-
-        self.last_neighbors = core_res  # W panelu bocznym pokazujemy tylko Core
-
-        if parent:
-            center_sid, _, _ = self.engine.choose_graph_sense(self.current_center, root_lemma, parent, root_sense_id,
-                                                              parent_sense_id)
-            self.node_sense_id[self.current_center] = center_sid
-        else:
-            self.node_sense_id.setdefault(self.current_center, None)
 
         if self.G.has_node(self.current_center):
             self.G.nodes[self.current_center]['type'] = 'center'
@@ -844,8 +754,7 @@ class SemanticNetworkViewer:
         step_record = {
             "word": matched_word,
             "parent": parent,
-            "root": root_lemma,
-            "sense_id": self.node_sense_id.get(matched_word)
+            "root": root_lemma
         }
 
         self.expanded_centers_history = [s for s in self.expanded_centers_history if
@@ -856,18 +765,6 @@ class SemanticNetworkViewer:
             self.node_parent[self.current_center] = parent
             self.node_root[self.current_center] = root_lemma
 
-        # Pobieranie WSD (bez zmian)
-        self.current_senses = self.engine.get_or_create_senses(self.current_center)
-        if self.current_senses:
-            values = ["Wszystkie ramy"] + [self._format_sense_label(s) for s in self.current_senses]
-            self.wsd_menu.configure(values=values, state="normal")
-            self.wsd_var.set("Wszystkie ramy")
-        else:
-            self.wsd_menu.configure(values=["Wszystkie ramy"], state="disabled")
-            self.wsd_var.set("Wszystkie ramy")
-
-        self.selected_sense_id = None
-        self.selected_members = set()
 
         if not core_res:
             ctk.CTkLabel(self.results_frame, text=f"Ślepy zaułek (liść).\nBrak własnych powiązań dla: {matched_word}",
@@ -885,46 +782,26 @@ class SemanticNetworkViewer:
         self.render_graph()
         self._render_neighbors_list()
 
-    def _add_contextual_bridges(self, neighbors_data, sim_threshold=0.62, max_bridges_per_node=2):
-        """Łączy nowo dodanych sąsiadów w lokalną siatkę bazując na aktualnym sensie/wektorze."""
-        reps = {}
-        # <--- POPRAWKA 3: Budowa mostów bez kary za hubowość
-        eligible_neighbors = [
-            item for item in neighbors_data
-            if item.get("contextual_score", item.get("base_similarity", 0.0)) >= 0.35
-        ]
-
-        # 1. Pobierzemy faktyczne wektory (reprezentacje) używane w tym widoku
-        for item in eligible_neighbors:  # ZMIANA: pętla iteruje teraz po przefiltrowanej liście
-            lemma = item["lemma"]
-            sid = item.get("sense_id")
-            vec = self.engine.get_representation_vector(lemma, sid)
-            if vec is not None:
-                reps[lemma] = vec
-
-        bridge_counts = {lemma: 0 for lemma in reps}
-        lemmas = list(reps.keys())
-
-        # 2. Pętla porównująca każdego sąsiada z każdym innym sąsiadem
-        for i in range(len(lemmas)):
-            for j in range(i + 1, len(lemmas)):
-                u, v = lemmas[i], lemmas[j]
-
-                # Zabezpieczenie przed "makaronem" (zbyt gęstą siecią)
-                if bridge_counts[u] >= max_bridges_per_node or bridge_counts[v] >= max_bridges_per_node:
+    def _add_contextual_bridges(self, neighbors_data, max_cross_edges_per_node=2):
+        """Dodaje najsilniejsze dodatkowe krawędzie mutual 5-NN bez progu kosinusowego."""
+        visible = {item["lemma"]: item for item in neighbors_data if self.G.has_node(item["lemma"])}
+        candidates = []
+        lemmas = sorted(visible)
+        for i, u in enumerate(lemmas):
+            for v in lemmas[i + 1:]:
+                if self.G.has_edge(u, v) or not self.engine.is_mutual_knn(u, v):
                     continue
-
-                # Liczymy rzeczywiste podobieństwo węzłów w locie
-                sim = self.engine._cos(reps[u], reps[v])
-
-                if sim >= sim_threshold:
-                    if self.G.has_edge(u, v):
-                        self.G[u][v]["weight"] = max(self.G[u][v].get("weight", 0), sim)
-                    else:
-                        self.G.add_edge(u, v, weight=sim)
-
-                    bridge_counts[u] += 1
-                    bridge_counts[v] += 1
+                u_vec = self.engine.get_representation_vector(u)
+                v_vec = self.engine.get_representation_vector(v)
+                if u_vec is not None and v_vec is not None:
+                    candidates.append((float(self.engine._cos(u_vec, v_vec)), u, v))
+        counts = {lemma: 0 for lemma in lemmas}
+        for sim, u, v in sorted(candidates, key=lambda row: (-row[0], row[1], row[2])):
+            if counts[u] >= max_cross_edges_per_node or counts[v] >= max_cross_edges_per_node:
+                continue
+            self.G.add_edge(u, v, weight=sim, semantic_edge_weight=sim, edge_type="mutual_5nn")
+            counts[u] += 1
+            counts[v] += 1
 
     def _prune_center_neighbors(self, center_word, desired_core_words):
         """
@@ -948,12 +825,12 @@ class SemanticNetworkViewer:
                 continue
 
             # Pobieramy dotychczasową siłę połączenia, by zachować estetykę tła
-            sim = self.G[center_word][nbr].get("weight", 0.35)
+            sim = float(self.G[center_word][nbr].get("semantic_edge_weight", self.G[center_word][nbr].get("weight", 0.0)))
 
-            # Downgrade do halo
+            # D16: zachowujemy rzeczywistą siłę relacji, bez sztucznego minimum.
             self.halo_nodes[nbr] = {
                 "anchor": center_word,
-                "sim": max(0.35, float(sim))
+                "sim": sim
             }
 
             # Odpinamy krawędź od centrum
@@ -993,11 +870,10 @@ class SemanticNetworkViewer:
         for item in halo_data:
             n_word = item["lemma"]
             # Estetyczna siła grawitacji tła nadal korzysta z obiektywnego podobieństwa
-            sim = item.get("base_similarity", 0.35)
+            sim = float(item.get("base_similarity", 0.0))
 
-            if sim >= 0.35:
-                if n_word not in self.halo_nodes or sim > self.halo_nodes[n_word].get('sim', 0):
-                    self.halo_nodes[n_word] = {'anchor': center_word, 'sim': sim}
+            if n_word not in self.halo_nodes or sim > self.halo_nodes[n_word].get('sim', 0):
+                self.halo_nodes[n_word] = {'anchor': center_word, 'sim': sim}
 
     def _update_core_topology(self, center_word, neighbors_data, parent=None):
         """Zarządza dodawaniem węzłów i krawędzi (Core)."""
@@ -1027,9 +903,11 @@ class SemanticNetworkViewer:
         for item in neighbors_data:
             n_word = item["lemma"]
 
-            # --- ZMIANA: Pobieramy wagę dla krawędzi (bez kary za hubowość) ---
-            # Jeśli graph_weight nie istnieje (dla bezpieczeństwa wstecznego), używamy score
-            edge_weight = item.get("graph_weight", item["score"])
+            # Semantyczna waga krawędzi nie zawiera kary za ogólność.
+            edge_weight = item.get(
+                "semantic_edge_weight",
+                item.get("graph_weight", item.get("selection_score", item["score"]))
+            )
 
             n_freq = item["freq"]
             sense_id = item["sense_id"]
@@ -1042,26 +920,16 @@ class SemanticNetworkViewer:
 
             self.node_sense_id[n_word] = sense_id
 
-            # --- ZMIANA: Używamy edge_weight zamiast ukaranego score ---
             add_or_update_edge(center_word, n_word, edge_weight)
+            edge_data = self.G[center_word][n_word]
+            edge_data["semantic_edge_weight"] = float(edge_weight)
+            edge_data["edge_type"] = "expansion"
+            edge_data["selection_score"] = float(item.get("selection_score", item["score"]))
+            edge_data["generality_penalty"] = float(item.get("generality_penalty", 0.0))
 
-        # --- PRZYWRÓCONY KOD MOZSTÓW Z POPRZEDNIEJ WERSJI ---
-        if getattr(self, 'draw_contextual_bridges', True):
+        # D16: dodatkowe krawędzie wyłącznie mutual 5-NN.
+        if self.show_mutual_knn_edges_var.get():
             self._add_contextual_bridges(neighbors_data)
-        elif getattr(self, 'draw_static_bridges', False):
-            min_bridge_sim = 0.55
-            for item in neighbors_data:
-                n_word = item["lemma"]
-                for nn_word, nn_score, nn_freq in self.engine.index.get(n_word, [])[:10]:
-                    if nn_score < min_bridge_sim: break
-                    if self.G.has_node(nn_word) and nn_word != n_word:
-                        if not self.engine.is_mutual_knn(n_word, nn_word): continue
-                        thr = self.engine.dynamic_bridge_threshold(
-                            self.G.nodes[n_word].get('freq', 0), self.G.nodes[nn_word].get('freq', 0),
-                            base=min_bridge_sim
-                        )
-                        if nn_score >= thr:
-                            add_or_update_edge(n_word, nn_word, nn_score)
 
     def _add_terminal_core_node(self, center_word, parent=None):
         """Dodaje węzeł do grafu jawnie jako ślepy zaułek (terminal node)."""
@@ -1097,9 +965,9 @@ class SemanticNetworkViewer:
 
         # Manipulacja sprężynami dla fizyki układu
         for u, v, d in self.G.edges(data=True):
-            w = d.get('weight', 0.5)
-            # Potęga 4 sprawi, że słabsze słowa zredukują się do ułamków, a silne zostaną mocne
-            d['physics_weight'] = w ** 4
+            w = d.get('semantic_edge_weight', d.get('weight', 0.5))
+            # Osobna waga układu. Transformacja pozostaje bez zmian w D15.
+            d['layout_weight'] = w ** 4
 
         raw_seed = self.layout_seed_var.get().strip()
         try:
@@ -1113,26 +981,17 @@ class SemanticNetworkViewer:
             pos=self.pos if self.pos else None,
             k=dynamic_k,
             iterations=50,  # Więcej iteracji, żeby węzły zdążyły odlecieć
-            weight='physics_weight',  # <--- KLUCZOWE: Mówimy algorytmowi, by użył zmanipulowanej wagi
+            weight='layout_weight',
             seed = current_seed  # <--- Podpięcie zmiennej
         )
 
-    def _update_halo_candidates(self, center_word):
-        """Pobiera nowych kandydatów do tła korzystając z czystego API z engine'u."""
-        candidates = self.engine.get_halo_candidates(center_word, top_n=150, min_sim=0.35)
-
-        for n_word, sim in candidates:
-            if not self.G.has_node(n_word):
-                # Usunięto zbędny hasattr, bo halo_nodes jest gwarantowane w __init__
-                if n_word not in self.halo_nodes or sim > self.halo_nodes[n_word].get('sim', 0):
-                    self.halo_nodes[n_word] = {'anchor': center_word, 'sim': sim}
 
     def _update_halo_positions(self):
         """Układa kropki tła za pomocą barycentrum grawitacyjnego i stabilnego hashowania."""
         import math
         core_vectors = {}
         for n in self.G.nodes():
-            vec = self.engine.get_representation_vector(n, self.node_sense_id.get(n))
+            vec = self.engine.get_representation_vector(n)
             if vec is not None:
                 core_vectors[n] = vec
 
@@ -1190,20 +1049,23 @@ class SemanticNetworkViewer:
         if not res:
             return
 
-        members = self.selected_members or set()
-
+        # Po usunięciu WSD lista jest porządkowana wyłącznie
+        # według wyniku wyboru, frekwencji i lematu.
         def sort_key(item):
-            n_word = item["lemma"]
-            in_sense = (n_word in members) if members else False
-            return (1 if in_sense else 0, float(item["score"]), int(item["freq"]))
+            return (
+                float(item.get("selection_score", item.get("score", 0.0))),
+                int(item.get("freq", 0)),
+                str(item.get("lemma", "")),
+            )
 
         res_sorted = sorted(res, key=sort_key, reverse=True)
 
         for item in res_sorted:
             n_word = item["lemma"]
             n_freq = item["freq"]
-            n_score = item.get("score", 0.0)
+            n_score = item.get("selection_score", item.get("score", 0.0))
             n_base_sim = item.get("base_similarity", 0.0)
+            n_generality = item.get("generality", 0.0)
 
             has_network = (
                     (n_word in self.engine.index)
@@ -1212,18 +1074,19 @@ class SemanticNetworkViewer:
             )
             btn_state = "normal" if has_network else "disabled"
 
-            t_color = "gray50" if (members and n_word not in members) else self.theme["label_text"]
+            t_color = self.theme["label_text"]
             cmd = (lambda w=n_word, p=self.current_center: self.explore_node(w, parent=p)) if has_network else None
 
             row = ctk.CTkFrame(self.results_frame, fg_color="transparent")
             row.pack(fill="x", pady=2, padx=2)
 
-            # Kolumny: lemma | score | sim | freq | +
+            # Kolumny: lemat | wynik | podobieństwo | ogólność | frekwencja | +
             row.grid_columnconfigure(0, weight=1, minsize=140)
             row.grid_columnconfigure(1, weight=0)
             row.grid_columnconfigure(2, weight=0)
             row.grid_columnconfigure(3, weight=0)
             row.grid_columnconfigure(4, weight=0)
+            row.grid_columnconfigure(5, weight=0)
 
             # 1. Lemma
             ctk.CTkButton(
@@ -1240,7 +1103,7 @@ class SemanticNetworkViewer:
             # 2. Score (krótszy napis, żeby się mieścił)
             ctk.CTkLabel(
                 row,
-                text=f"sc {n_score:.2f}",
+                text=f"wyn {n_score:.2f}",
                 text_color="#1982C4",
                 font=("Verdana", 9, "bold"),
                 width=52
@@ -1249,72 +1112,37 @@ class SemanticNetworkViewer:
             # 3. Base similarity
             ctk.CTkLabel(
                 row,
-                text=f"sim {n_base_sim:.2f}",
+                text=f"pod {n_base_sim:.2f}",
                 text_color="#8A9AAB",
                 font=("Verdana", 8),
                 width=50
             ).grid(row=0, column=2, padx=2)
 
-            # 4. Frekwencja
+            # 4. Ogólność
+            ctk.CTkLabel(
+                row,
+                text=f"og {n_generality:.2f}",
+                text_color="#8A6D3B",
+                font=("Verdana", 8),
+                width=48
+            ).grid(row=0, column=3, padx=2)
+
+            # 5. Frekwencja
             ctk.CTkLabel(
                 row,
                 text=f"f {n_freq:,}".replace(",", " "),
                 text_color="gray60",
                 font=("Verdana", 8),
                 width=48
-            ).grid(row=0, column=3, padx=2)
+            ).grid(row=0, column=4, padx=2)
 
-            # 5. Plus
+            # 6. Plus
             ctk.CTkButton(
                 row,
                 text="+",
                 width=26,
                 height=24,
                 command=lambda w=n_word: self.on_insert_query(w)
-            ).grid(row=0, column=4, padx=(4, 0))
+            ).grid(row=0, column=5, padx=(4, 0))
 
 
-    def on_wsd_select(self, choice: str):
-        if choice == "Wszystkie ramy":
-            self.selected_sense_id = None
-            self.selected_members = set()
-            self.node_sense_id[self.current_center] = None
-        else:
-            sid = None
-            try:
-                # Obsługa nowych etykiet:
-                # "Rama semantyczna 0: ..."
-                # "Rama kontekstowa 1: ..."
-                if choice.startswith("Rama semantyczna"):
-                    sid = int(choice.split("Rama semantyczna", 1)[1].split(":", 1)[0].strip())
-                elif choice.startswith("Rama kontekstowa"):
-                    sid = int(choice.split("Rama kontekstowa", 1)[1].split(":", 1)[0].strip())
-                else:
-                    # fallback kompatybilności ze starymi etykietami
-                    clean_choice = (
-                        choice
-                        .replace("Sens", "Rama")
-                        .replace("Profil", "Rama")
-                    )
-                    sid = int(clean_choice.split("Rama", 1)[1].split(":", 1)[0].strip())
-            except Exception as e:
-                import logging
-                logging.warning(f"Nie udało się sparsować wyboru ramy '{choice}': {e}")
-                sid = None
-
-            self.selected_sense_id = sid
-            self.node_sense_id[self.current_center] = sid
-
-            if sid is not None and 0 <= sid < len(self.current_senses):
-                self.selected_members = set(self.current_senses[sid].get("members", []) or [])
-            else:
-                self.selected_members = set()
-
-        for step in reversed(self.expanded_centers_history):
-            if step.get("word") == self.current_center and step.get("parent") == self.node_parent.get(
-                    self.current_center):
-                step["sense_id"] = self.selected_sense_id
-                break
-
-        self.render_graph()
-        self._render_neighbors_list()

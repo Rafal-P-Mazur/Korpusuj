@@ -1,3 +1,4 @@
+# D18_NO_WSD
 """Desktop GUI orchestration for Korpusuj.
 
 This module owns interface state, widgets, background-task coordination and
@@ -225,7 +226,6 @@ from dateutil.relativedelta import relativedelta
 import calendar
 import time
 from korpusuj.semantic.word_profile import compute_word_profile, flatten_word_profile
-from korpusuj.semantic.sense_inducer import SenseInducer
 
 def notify_status(msg):
     # Sprawdzamy, czy launcher jest uruchomiony i ma funkcję update_status
@@ -4255,116 +4255,8 @@ def validate_query_for_ui(query: str):
             raise QueryValidationError(f"Nie udało się przeanalizować grupy {idx}: {e}")
 
 
-# --- ZMIENNE GLOBALNE DLA FILTRU WSD ---
-current_wsd_lemma = None
-unfiltered_wsd_results = None  # Tu będziemy trzymać kopię wyników przed filtrowaniem
 
 
-def filter_by_selected_sense(choice):
-    """Odfiltrowuje tablicę wyników pozostawiając tylko wybraną ramę."""
-    global full_results_sorted, current_page, unfiltered_wsd_results
-
-    # Zabezpieczenie oryginalnych wyników przed pierwszym filtrowaniem
-    if unfiltered_wsd_results is None:
-        unfiltered_wsd_results = list(full_results_sorted)
-
-    if choice == "Wszystkie ramy":
-        # Powrót do pełnych wyników w ułamku sekundy
-        full_results_sorted = list(unfiltered_wsd_results)
-        unfiltered_wsd_results = None
-        current_page = 0
-        label_results_count.configure(text=f"Znaleziono: {len(full_results_sorted)}")
-        display_page(global_query, global_selected_corpus)
-        return
-
-    # Wyciągamy ID ramy z tekstu wyboru, np.:
-    # "Rama semantyczna 1: UE, unia..." -> 1
-    # "Rama kontekstowa 2: mówić, powiedzieć..." -> 2
-    # Zostawiamy też fallback kompatybilności dla starych etykiet typu "Sens 1: ..."
-    try:
-        frame_id = None
-
-        if choice.startswith("Rama semantyczna"):
-            frame_id = int(choice.split("Rama semantyczna", 1)[1].split(":", 1)[0].strip())
-        elif choice.startswith("Rama kontekstowa"):
-            frame_id = int(choice.split("Rama kontekstowa", 1)[1].split(":", 1)[0].strip())
-        elif choice.startswith("Profil"):
-            frame_id = int(choice.split("Profil", 1)[1].split(":", 1)[0].strip())
-        elif choice.startswith("Sens"):
-            frame_id = int(choice.split("Sens", 1)[1].split(":", 1)[0].strip())
-        else:
-            return
-    except ValueError:
-        return
-
-    loading_win = ctk.CTkToplevel(app)
-    loading_win.title("Filtrowanie ram")
-    loading_win.geometry("360x120")
-    loading_win.attributes("-topmost", True)
-    x = app.winfo_x() + (app.winfo_width() // 2) - 180
-    y = app.winfo_y() + (app.winfo_height() // 2) - 60
-    loading_win.geometry(f"+{x}+{y}")
-    ctk.CTkLabel(
-        loading_win,
-        text=f"Filtrowanie {len(unfiltered_wsd_results)} wyników...\nTo może chwilę potrwać.",
-        font=("Verdana", 12)
-    ).pack(expand=True)
-    loading_win.update()
-
-    try:
-        filtered = []
-        df = dataframes[global_selected_corpus]
-
-        # Zawsze filtrujemy z "pełnej" puli zapytania, żeby móc przeskakiwać między ramami
-        for res in unfiltered_wsd_results:
-            r_idx = res[11]
-            match_start = res[12]
-            match_end = res[13] if len(res) > 13 else match_start
-
-            row_data = df.loc[r_idx]
-            tokens = row_data.tokens
-            lemmas = row_data.lemmas
-            sentence_ids = row_data.sentence_ids
-
-            # Szukamy, pod którym indeksem w dopasowanym fragmencie ukrywa się nasz wyraz
-            target_idx = match_start
-            for i in range(match_start, match_end + 1):
-                if lemmas[i].lower() == current_wsd_lemma.lower():
-                    target_idx = i
-                    break
-
-            sent_id = sentence_ids[target_idx]
-            sent_start = target_idx
-            while sent_start > 0 and sentence_ids[sent_start - 1] == sent_id:
-                sent_start -= 1
-            sent_end = target_idx
-            while sent_end < len(sentence_ids) and sentence_ids[sent_end] == sent_id:
-                sent_end += 1
-
-            sentence_tokens = [
-                {"lemma": lemmas[i], "form": tokens[i]}
-                for i in range(sent_start, sent_end)
-            ]
-            local_target_idx = target_idx - sent_start
-
-            # Właściwa weryfikacja: silnik nadal zwraca ID ramy przez stare pole/ścieżkę sense_id
-            sid = semantic_engine.disambiguate_instance(
-                sentence_tokens,
-                local_target_idx,
-                current_wsd_lemma
-            )
-            if sid == frame_id:
-                filtered.append(res)
-
-        full_results_sorted = filtered
-        current_page = 0
-        label_results_count.configure(
-            text=f"Rama {frame_id}: {len(filtered)} z {len(unfiltered_wsd_results)}"
-        )
-        display_page(global_query, global_selected_corpus)
-
-    finally:
-        loading_win.destroy()
 
 
 def _is_no_sort_option(choice):
@@ -4911,7 +4803,7 @@ def _build_search_request_from_boundary_036l4g34c(runtime_locals=None):
         date_to = _safe_widget_get_036l4g34c("date_to_var", None) or _safe_widget_get_036l4g34c("date_end_var", None)
     selected_sense = runtime_locals.get("selected_sense")
     if selected_sense is None:
-        selected_sense = globals().get("current_wsd_lemma", None)
+        selected_sense = None
 
     kwargs = {
         "query": query,
@@ -11275,118 +11167,6 @@ def search_from_table(selected_word):
         entry_query.insert("1.0", new_query)
         search()
 
-def show_wsd_dialog():
-    """Otwiera okno wyboru ram semantycznych/dyskursywnych dla aktualnego zapytania."""
-    global current_wsd_lemma, unfiltered_wsd_results
-
-    if not full_results_sorted:
-        messagebox.showinfo("Brak wyników", "Najpierw wykonaj wyszukiwanie, aby móc analizować ramy.")
-        return
-
-    if semantic_engine.vectors is None:
-        messagebox.showwarning(
-            "Brak danych",
-            "Sieć semantyczna nie jest załadowana lub nie zawiera wektorów (analiza ram niedostępna)."
-        )
-        return
-
-    import re
-    bases = re.findall(r'\[base="([^"]+)"\]', global_query)
-    lemma = bases[-1] if bases else global_query.strip().split()[-1] if global_query.strip() else None
-
-    if not lemma:
-        messagebox.showwarning("Błąd", "Nie udało się określić słowa do analizy ram.")
-        return
-
-    senses = semantic_engine.get_or_create_senses(lemma)
-    if not senses:
-        messagebox.showinfo("Ramy", f"Słowo '{lemma}' nie ma wyodrębnionych ram w tym korpusie.")
-        return
-
-    current_wsd_lemma = lemma
-
-    # -------------------------
-    # Helper do czyszczenia etykiety
-    # -------------------------
-    def clean_frame_label(sense: dict) -> str:
-        label = (sense.get("label") or "").strip()
-        anchors = sense.get("anchors", []) or []
-        members = sense.get("members", []) or []
-
-        # Usuń ewentualne prefixy z dawnych wersji inducera
-        prefixes = [
-            "rama semantyczna:",
-            "Rama semantyczna:",
-            "Rama kontekstowa:",
-            "Rama kontekstowa:",
-            "profil wokół:",
-            "Profil wokół:",
-            "rama użycia:",
-            "Rama użycia:",
-        ]
-
-        clean = label
-        for p in prefixes:
-            if clean.startswith(p):
-                clean = clean[len(p):].strip()
-                break
-
-        if clean:
-            return clean
-
-        preview = ", ".join((anchors or members)[:5])
-        if len(anchors or members) > 5:
-            preview += ", ..."
-        return preview if preview else "nieokreślona"
-
-    # Tworzenie okienka dialogowego
-    wsd_win = ctk.CTkToplevel(app)
-    wsd_win.title(f"Ramy semantyczne: {lemma}")
-    wsd_win.geometry("540x340")
-    wsd_win.attributes("-topmost", True)
-    wsd_win.configure(fg_color=THEMES[motyw.get()]["app_bg"])
-
-    ctk.CTkLabel(
-        wsd_win,
-        text=f"Wybierz ramę dla słowa: {lemma}",
-        font=("Verdana", 13, "bold")
-    ).pack(pady=15)
-
-    dropdown_values = ["Wszystkie ramy"]
-    for s in senses:
-        frame_id = s.get("frame_id", s.get("sense_id", "?"))
-        frame_type = s.get("frame_type", s.get("profile_type", "semantic"))
-        clean_preview = clean_frame_label(s)
-
-        if frame_type == "contextual":
-            dropdown_values.append(f"Rama kontekstowa {frame_id}: {clean_preview}")
-        else:
-            dropdown_values.append(f"Rama semantyczna {frame_id}: {clean_preview}")
-
-    selection_var = ctk.StringVar(value="Wszystkie ramy")
-
-    def on_apply():
-        choice = selection_var.get()
-        wsd_win.destroy()
-        filter_by_selected_sense(choice)
-
-    combo = ctk.CTkOptionMenu(
-        wsd_win,
-        variable=selection_var,
-        values=dropdown_values,
-        width=440,
-        height=35
-    )
-    combo.pack(pady=20)
-
-    btn_apply = ctk.CTkButton(
-        wsd_win,
-        text="Filtruj wyniki",
-        command=on_apply,
-        fg_color="#4E8752",
-        hover_color="#57965C"
-    )
-    btn_apply.pack(pady=20)
 
 
 def open_topic_modeling():
@@ -11987,7 +11767,6 @@ update_history_menu()
 
 tools_menu = menu.menu_bar(text="Narzędzia", tearoff=0)
 tools_menu.add_command(label="Sieć semantyczna", command=smart_show_semantic_network)
-tools_menu.add_command(label="Filtrowanie wyników według ram", command=show_wsd_dialog)
 tools_menu.add_command(label="Modelowanie tematyczne (BERTopic)", command=open_topic_modeling)
 
 file_menu = menu.menu_bar(text="Ustawienia", tearoff=0)
