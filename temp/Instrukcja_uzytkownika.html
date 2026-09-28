@@ -10,9 +10,15 @@ code,pre,kbd,samp{font-variant-ligatures:none!important;font-feature-settings:"l
 </style></head><body><header class="bar"><strong>Korpusuj — pomoc</strong><div><button id="tocbtn">☰ Spis treści</button> <button id="theme">🌙 Ciemny</button></div></header><div class="layout"><nav class="toc" id="toc"><h2>Spis treści</h2><ul><li class="l2"><a href="#1-rozpoczęcie-pracy">1. Rozpoczęcie pracy</a></li><li class="l3"><a href="#uruchamianie-aplikacji">Uruchamianie aplikacji</a></li><li class="l3"><a href="#otwieranie-korpusu">Otwieranie korpusu</a></li><li class="l3"><a href="#okno-główne-aplikacji">Okno główne aplikacji</a></li><li class="l2"><a href="#2-tworzenie-nowego-korpusu">2. Tworzenie nowego korpusu</a></li><li class="l3"><a href="#dołączanie-metadanych-z-zewnętrznego-pliku">Dołączanie
 metadanych z zewnętrznego pliku</a></li><li class="l3"><a href="#analiza-językowa-i-zapis">Analiza językowa i zapis</a></li><li class="l2"><a href="#3-wyszukiwanie">3. Wyszukiwanie</a></li><li class="l3"><a href="#zapytanie-w-języku-cql">Zapytanie w języku CQL</a></li><li class="l3"><a href="#konstruktor-zapytań-i-kontekst">Konstruktor zapytań i
 kontekst</a></li><li class="l3"><a href="#porządkowanie-wyników">Sortowanie wyników</a></li><li class="l2"><a href="#4-przeglądanie-wyników">4. Przeglądanie wyników</a></li><li class="l2"><a href="#5-statystyki">5. Statystyki</a></li><li class="l3"><a href="#interpretacja-danych-w-tabelach">Interpretacja danych w
-tabelach</a></li><li class="l2"><a href="#6-wykresy">6. Wykresy</a></li><li class="l3"><a href="#konfiguracja-wykresu">Konfiguracja wykresu</a></li><li class="l2"><a href="#7-kolokacje">7. Kolokacje</a></li><li class="l3"><a href="#rodzaje-kontekstu">Rodzaje kontekstu</a></li><li class="l3"><a href="#filtry-i-miary">Filtry i miary</a></li><li class="l2"><a href="#8-profil-kolokacyjny">8. Profil kolokacyjny</a></li><li class="l2"><a href="#9-sieć-semantyczna">9. Sieć semantyczna</a></li><li class="l3"><a href="#tworzenie-sieci-semantycznej">Tworzenie sieci semantycznej</a></li><li class="l3"><a href="#tryby-wyświetlania-sieci">Tryby wyświetlania sieci</a></li><li class="l3"><a href="#raport-semantyczny">Raport semantyczny</a></li><li class="l3"><a href="#znaczenie-kluczowych-metryk-z-raportu">Znaczenie kluczowych
-metryk z raportu</a></li><li class="l3"><a href="#struktura-raportu-html">Struktura raportu HTML</a></li><li class="l3"><a href="#filtrowanie-wyników-według-ram">Filtrowanie wyników według
-ram</a></li><li class="l2"><a href="#10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
+tabelach</a></li><li class="l2"><a href="#6-wykresy">6. Wykresy</a></li><li class="l3"><a href="#konfiguracja-wykresu">Konfiguracja wykresu</a></li><li class="l2"><a href="#7-kolokacje">7. Kolokacje</a></li><li class="l3"><a href="#rodzaje-kontekstu">Rodzaje kontekstu</a></li><li class="l3"><a href="#filtry-i-miary">Filtry i miary</a></li><li class="l2"><a href="#8-profil-kolokacyjny">8. Profil kolokacyjny</a></li><li class="l2"><a href="#9-eksploracja-i-analiza-otoczenia-semantycznego">9. Eksploracja i analiza otoczenia semantycznego</a></li>
+<li class="l3"><a href="#przygotowanie-modelu-wektorowego">Przygotowanie modelu wektorowego</a></li>
+<li class="l3"><a href="#graf-eksploracyjny">Graf eksploracyjny</a></li>
+<li class="l3"><a href="#raport-analityczny">Raport analityczny</a></li>
+<li class="l3"><a href="#budowa-grup-w-raporcie">Budowa grup w raporcie</a></li>
+<li class="l3"><a href="#status-grup-i-lematów">Status grup i lematów</a></li>
+<li class="l3"><a href="#miary-ramowe-i-miary-pola">Miary ramowe i miary pola</a></li>
+<li class="l3"><a href="#relacje-między-grupami">Relacje między grupami</a></li>
+<li class="l3"><a href="#ograniczenia-analizy-semantycznej">Ograniczenia analizy</a></li><li class="l2"><a href="#10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
 (BERTopic)</a></li><li class="l2"><a href="#11-eksport-i-podkorpus">11. Eksport i podkorpus</a></li><li class="l2"><a href="#12-informacje-preferencje-pomoc-i-skróty">12. Informacje,
 preferencje, pomoc i skróty</a></li><li class="l2"><a href="#13-rozwiązywanie-problemów">13. Rozwiązywanie problemów</a></li></ul></nav><main><h1 id="instrukcja-użytkownika-korpusuj">Instrukcja użytkownika —
 Korpusuj</h1>
@@ -317,162 +323,81 @@ relacjom składniowym. W każdej grupie aplikacja przedstawia najlepiej
 ocenione pozycje, między innymi ranking Top 5 (wg Log-Dice), oraz
 umożliwia otwarcie pełnej listy.</p>
 <hr/>
-<h2 id="9-sieć-semantyczna">9. Sieć semantyczna</h2>
-<p>Sieć semantyczna służy do badania powiązań znaczeniowych w korpusie
-na podstawie modelowania wektorowego. Dla wybranego lematu aplikacja
-wyszukuje słowa używane w podobnych kontekstach. Słowa te są
-przedstawiane jako sąsiedzi semantyczni i grupowane w ramy na podstawie
-wzajemnych podobieństw.</p>
-<ul>
-<li><strong>Rama semantyczna:</strong> Grupa słów silnie i bezpośrednio
-związanych ze słowem centralnym w modelu semantycznym. Mogą do niej
-należeć synonimy, wyrazy bliskoznaczne, określenia powiązanych pojęć i
-inne słowa reprezentujące wspólny obszar znaczeniowy.</li>
-<li><strong>Rama kontekstowa:</strong> Grupa opisująca charakterystyczne
-otoczenie użycia lematu. Może zawierać słowa związane z określonym
-tematem lub sytuacją, nawet jeśli nie są one bezpośrednio bliskoznaczne
-ze słowem centralnym.</li>
-</ul>
-<h3 id="tworzenie-sieci-semantycznej">Tworzenie sieci semantycznej</h3>
-<p>Przed rozpoczęciem eksploracji aplikacja musi przygotować model
-semantyczny dla aktualnie otwartego korpusu. Model ten powstaje na
-podstawie sposobu użycia słów w dokumentach. Aplikacja analizuje
-konteksty, w których występują poszczególne lematy, i zapisuje je w
-postaci wektorów, czyli matematycznych reprezentacji ich użycia. Słowa
-pojawiające się w podobnych otoczeniach uzyskują podobne wektory i mogą
-zostać później połączone w sieci.</p>
-<p>Jeżeli dane potrzebne do utworzenia sieci nie są jeszcze dostępne, po
-otwarciu modułu <strong>Sieć semantyczna</strong> aplikacja zaproponuje
-ich przygotowanie. Należy uruchomić ten proces i poczekać na jego
-zakończenie. Czas obliczeń zależy przede wszystkim od wielkości korpusu,
-liczby różnych lematów oraz wydajności komputera. Przygotowanie modelu
-wykonuje się dla całego korpusu, dlatego po jego ukończeniu można badać
-kolejne słowa bez ponownego przetwarzania wszystkich dokumentów.</p>
-<p>Model semantyczny nie korzysta z gotowego słownika znaczeń.
-Odzwierciedla zależności wykryte w otwartym korpusie. To samo słowo może
-zatem mieć innych sąsiadów w korpusie prasowym, innych w literaturze, a
-jeszcze innych w zbiorze tekstów specjalistycznych. Wyniki należy
-interpretować jako opis sposobu użycia słownictwa w badanym
-materiale.</p>
-<p>Po przygotowaniu modelu sieć dla konkretnego słowa tworzona jest
-podczas eksploracji:</p>
+<h2 id="9-eksploracja-i-analiza-otoczenia-semantycznego">9. Eksploracja i analiza otoczenia semantycznego</h2>
+<p>Moduł semantyczny umożliwia przeglądanie lematów o zbliżonych reprezentacjach wektorowych oraz automatyczne porządkowanie szerszego otoczenia wybranego lematu. Wyniki można wykorzystać do wyboru jednostek przeznaczonych do dalszego sprawdzenia w konkordancjach, kolokacjach i zapytaniach CQL.</p>
+
+<h3 id="przygotowanie-modelu-wektorowego">Przygotowanie modelu wektorowego</h3>
+<p>Przed rozpoczęciem analizy należy przygotować model wektorowy dla otwartego korpusu. W oknie konfiguracji można wybrać model Word2Vec albo FastText oraz ustawić dostępne parametry treningu. Program tworzy reprezentacje lematów na podstawie ich kontekstów w korpusie i zapisuje artefakty modelu oraz listy najbliższych sąsiadów.</p>
+<p>W modelu FastText reprezentacja uwzględnia również fragmenty znakowe wyrazów. Z tego powodu podobieństwo wyników może częściowo zależeć od podobieństwa formy. Word2Vec nie wykorzystuje informacji subwordowej.</p>
+<p>Po przygotowaniu modelu można analizować wiele lematów bez ponownego trenowania modelu dla każdego z nich. Model trzeba przygotować ponownie po zmianie korpusu albo ustawień treningu.</p>
+
+<h3 id="graf-eksploracyjny">Graf eksploracyjny</h3>
+<p>Aby rozpocząć eksplorację:</p>
 <ol type="1">
-<li>Z menu głównego należy otworzyć moduł <strong>Sieć
-semantyczna</strong>.</li>
-<li>W polu <strong>Słowo centralne...</strong> wpisać lemat, który ma
-być punktem wyjścia analizy.</li>
-<li>Wybrać przycisk <strong>Eksploruj</strong>.</li>
+<li>Otwórz moduł <strong>Sieć semantyczna</strong>.</li>
+<li>Wpisz lemat początkowy.</li>
+<li>Wybierz <strong>Eksploruj</strong>.</li>
+<li>Kliknij węzeł, którego sąsiedztwo chcesz rozwinąć.</li>
 </ol>
-<p>Aplikacja wyszukuje wtedy wektor podanego lematu i porównuje go z
-wektorami pozostałych słów. Do sieci wybierani są najbliżsi sąsiedzi
-semantyczni, czyli słowa o najbardziej podobnych sposobach użycia.
-Liczba pokazywanych sąsiadów zależy od ustawień grafu, a bardzo słabe
-podobieństwa są pomijane.</p>
-<p>Słowo centralne i jego sąsiedzi stają się węzłami sieci. Linie łączą
-te słowa, między którymi aplikacja wykryła odpowiednio silne
-podobieństwo. Połączenie nie oznacza automatycznie synonimii. Może
-wskazywać podobieństwo znaczenia, wspólny temat, typowe
-współwystępowanie albo użycie w zbliżonych sytuacjach.</p>
-<p>Na podstawie wzajemnych podobieństw aplikacja grupuje sąsiadów w
-ramy. Dla każdej ramy wyznaczane są słowa najlepiej reprezentujące
-grupę, słowa należące do jej rdzenia oraz pozycje bardziej peryferyjne.
-Aplikacja nadaje również ramie etykietę złożoną z najbardziej
-reprezentatywnych elementów i określa, czy ma ona charakter semantyczny,
-czy kontekstowy.</p>
-<p>Wizualny układ węzłów jest tylko sposobem prezentacji obliczonych
-relacji. Położenie słowa po lewej lub prawej stronie wykresu samo w
-sobie nie ma znaczenia językowego. Istotne są przede wszystkim
-połączenia, przypisanie do ram i wartości podobieństwa. Zmiana ziarna
-losowości może zmienić rozmieszczenie punktów bez zmiany samych relacji
-semantycznych.</p>
-<p>Po wybraniu kolejnego węzła można rozwinąć jego otoczenie. Jeżeli
-opcja <strong>Rozwijaj obecną gałąź</strong> jest włączona, nowe słowa
-zostaną dołączone do istniejącego grafu. Po jej wyłączeniu aplikacja
-utworzy nowy widok z wybranym słowem jako kolejnym punktem
-centralnym.</p>
-<h3 id="tryby-wyświetlania-sieci">Tryby wyświetlania sieci</h3>
+<p>Po rozwinięciu węzła program wybiera kolejnych kandydatów na podstawie ich związku z rozwijanym węzłem, lematem początkowym i dotychczas zbudowaną częścią grafu. Użytkownik wybiera kierunek eksploracji, natomiast program dobiera elementy dodawane do widoku.</p>
+<p>W tabeli kandydatów wyświetlane są między innymi:</p>
 <ul>
-<li><strong>Eksploracja:</strong> Podstawowy tryb interaktywnego
-przeglądania i rozwijania sieci.</li>
-<li><strong>Kręgosłup (MST):</strong> Upraszcza sieć do struktury
-łączącej wszystkie widoczne węzły bez zamkniętych pętli. Dzięki
-ograniczeniu liczby krawędzi łatwiej prześledzić ogólną budowę grafu.
-Pominięte połączenia nadal istnieją w danych, ale nie są pokazywane w
-tym widoku.</li>
-<li><strong>Klastry:</strong> Widok wyróżniający zwarte grupy silniej
-powiązanych węzłów w obrębie grafu.</li>
+<li><strong>Podobieństwo:</strong> podobieństwo cosinusowe kandydata do rozwijanego lematu.</li>
+<li><strong>Wynik:</strong> wartość używana do uporządkowania kandydatów w danym kroku eksploracji.</li>
+<li><strong>Ogólność:</strong> wartość wynikająca z obecności lematu na listach sąsiedztwa innych lematów.</li>
+<li><strong>Frekwencja:</strong> liczba wystąpień lematu zapisana w artefakcie modelu.</li>
 </ul>
-<p>W <strong>Ustawieniach grafu</strong> dostępne są opcje pozwalające
-na ograniczenie liczby dołączanych sąsiadów, zmianę ziarna losowości
-(Seed) czy preferowanie słownictwa domenowego kosztem bardzo pospolitych
-wyrażeń.</p>
-<h3 id="raport-semantyczny">Raport semantyczny</h3>
-<p>W celu uzyskania szczegółowej analizy statystycznej pola
-semantycznego można wygenerować Raport semantyczny. Skutkuje to
-utworzeniem kompleksowego pliku <code>report.html</code>.</p>
-<p>Aby utworzyć raport, należy otworzyć zakładkę sieci semantycznej,
-podać słowo centralne, upewnić się, że figuruje ono w modelu, a
-następnie wybrać polecenie <strong>Raport semantyczny</strong>.</p>
-<h3 id="znaczenie-kluczowych-metryk-z-raportu">Znaczenie kluczowych
-metryk z raportu</h3>
+<p>Położenie węzłów na ekranie służy prezentacji grafu. Kierunek i odległość na rysunku nie są dodatkowymi miarami językowymi.</p>
+
+<h3 id="raport-analityczny">Raport analityczny</h3>
+<p>Aby wygenerować raport:</p>
+<ol type="1">
+<li>Otwórz moduł <strong>Sieć semantyczna</strong>.</li>
+<li>Wpisz lemat dostępny w przygotowanym modelu.</li>
+<li>Wybierz polecenie <strong>Raport semantyczny</strong>.</li>
+<li>Wskaż katalog wyniku, jeżeli program o to poprosi.</li>
+<li>Po zakończeniu otwórz wygenerowany plik <code>report.html</code>.</li>
+</ol>
+<p>Raport obejmuje dostępne otoczenie wektorowe lematu, grupy utworzone na grafie analitycznym, tabele lematów, podobieństwa między centroidami grup, projekcję przestrzeni wektorowej oraz dane metodologiczne i diagnostyczne.</p>
+
+<h3 id="budowa-grup-w-raporcie">Budowa grup w raporcie</h3>
+<p>Program pobiera pełną listę sąsiadów dostępną w artefakcie modelu. Następnie dla każdego lematu ustala pięciu najbliższych sąsiadów w analizowanym zbiorze. Krawędź grafu powstaje tylko wtedy, gdy oba lematy wzajemnie należą do swoich pięciu najbliższych sąsiadów. Wagą krawędzi jest podobieństwo cosinusowe.</p>
+<p>Tak przygotowany graf jest dzielony za pomocą ważonego algorytmu Chinese Whispers. Algorytm aktualizuje etykiety węzłów na podstawie etykiet i wag połączeń ich sąsiadów. Obliczenia kończą się po pełnej iteracji bez zmian albo po osiągnięciu maksymalnej liczby iteracji. Raport prezentuje grupy zawierające co najmniej trzy lematy.</p>
+<p>Przebieg grupowania używa zapisanego ziarna losowości, dzięki czemu można odtworzyć wynik dla tego samego grafu wejściowego i tej samej wersji programu.</p>
+
+<h3 id="status-grup-i-lematów">Status grup i lematów</h3>
+<p>Grupy utworzone przez algorytm są w raporcie nazywane ramami. Nazwa ta porządkuje prezentację wyniku i nie rozstrzyga samodzielnie językoznawczej interpretacji grupy.</p>
+<p>Raport rozróżnia:</p>
 <ul>
-<li><strong>Typowość:</strong> Bliskość wektora słowa do centrum swojej
-ramy. Wskazuje na stopień reprezentatywności słowa dla danej grupy.</li>
-<li><strong>Swoistość:</strong> Różnica między podobieństwem słowa do
-własnej ramy a jego podobieństwem do najbliższej innej ramy. Wysoka
-wartość oznacza, że słowo lepiej reprezentuje własną ramę i słabiej
-wiąże się z pozostałymi.</li>
-<li><strong>Nośność:</strong> Łączna miara przydatności słowa do
-interpretacji ramy. Uwzględnia typowość, swoistość, frekwencję, siłę
-lokalnych połączeń i podobieństwo do lemy centralnej, a zmniejsza wagę
-słów bardzo ogólnych.</li>
-<li><strong>Zwartość i Separacja:</strong> Jednorodność grupy oraz
-stopień odrębności ramy od najbliższej innej ramy, wyznaczany na
-podstawie podobieństwa ich centroidów. Wyższa wartość oznacza
-wyraźniejszą granicę między grupami.</li>
-<li><strong>Ogólność:</strong> Stopień uczestnictwa pojęcia w innych
-obszarach semantycznych całego korpusu.</li>
+<li><strong>Członka klastra</strong> (<code>graph_cluster</code>): lemat należy do klastra utworzonego przez Chinese Whispers.</li>
+<li><strong>Lemat powiązany z ramą</strong> (<code>frame_relation</code>): lemat nie należy do prezentowanego klastra, ale w raporcie pokazano jego podobieństwo do najbliższego i drugiego najbliższego centroidu.</li>
 </ul>
-<h3 id="struktura-raportu-html">Struktura raportu HTML</h3>
+<p>Lemat o statusie <code>frame_relation</code> nie jest dodawany do składu ramy i nie wpływa na jej centroid.</p>
+
+<h3 id="miary-ramowe-i-miary-pola">Miary ramowe i miary pola</h3>
+<p>Centroid ramy jest znormalizowaną sumą wektorów jej członków grafowych. Centroid pola jest obliczany dla całego analizowanego otoczenia.</p>
 <ul>
-<li><strong>Karty podsumowujące:</strong> Pokazują między innymi
-frekwencję lematu, liczbę wybranych sąsiadów, liczbę ram, gęstość i
-spójność grafu, średnie podobieństwo pola, separację ram, parametr Top-K
-oraz minimalne podobieństwo.</li>
-<li><strong>Globalne rankingi słów:</strong> Listy Top 25
-najważniejszych pojęć klasyfikowanych według Centralności, Swoistości i
-Nośności.</li>
-<li><strong>Przestrzeń semantyczna (PCA):</strong> Dwuwymiarowe
-uproszczenie przestrzeni wektorowej. Bliskość punktów pomaga odczytywać
-podobieństwo, ale same kierunki osi nie mają określonego znaczenia
-językowego.</li>
-<li><strong>Szczegóły ramy:</strong> Rozdzielenie zawartości klastrów na
-rdzeń znaczeniowy oraz ogólniejsze peryferie semantyczne.</li>
-<li><strong>Obecność w innych polach:</strong> Sekcja ta wskazuje, w
-jakich innych polach pojęciowych badany lemat pełni istotną funkcję
-poboczną.</li>
+<li><strong>Typowość ramowa:</strong> podobieństwo lematu do centroidu ramy odniesienia.</li>
+<li><strong>Swoistość ramowa:</strong> różnica między podobieństwem do ramy odniesienia a największym podobieństwem do innej ramy.</li>
+<li><strong>Centralność pola:</strong> podobieństwo lematu do centroidu całego pola.</li>
+<li><strong>Specyficzność pola:</strong> centralność pola skorygowana o ogólność lematu.</li>
 </ul>
-<p>Raport może nie zostać wygenerowany, jeżeli lemat nie występuje w
-indeksie, brakuje jego wektora, nie odnaleziono wystarczającej liczby
-powiązanych sąsiadów lub materiał jest zbyt mało liczny do utworzenia
-prawidłowych ram statystycznych.</p>
-<hr/>
-<h3 id="filtrowanie-wyników-według-ram">Filtrowanie wyników według
-ram</h3>
-<p>Po rozpoznaniu i zdefiniowaniu ram znaczeniowych dla hasła, dostępna
-staje się funkcja filtrowania bieżących konkordancji w oparciu o
-ustalone profile znaczeniowe.</p>
-<p>Wymagane jest wcześniejsze wykonanie wyszukiwania. Następnie w panelu
-głównym wybiera się opcję <strong>Filtrowanie wyników według
-ram</strong>. Z listy rozwijanej wskazuje się wybraną ramę semantyczną
-lub kontekstową i zatwierdza przyciskiem <strong>Filtruj
-wyniki</strong>. Interfejs wyświetli licznik skuteczności filtra, a
-wyświetlana tabela zostanie ograniczona do wystąpień przypisanych przez
-aplikację do wybranej ramy. Przypisanie jest wynikiem automatycznej
-analizy i w przypadkach granicznych może wymagać sprawdzenia
-kontekstu.</p>
-<hr/>
-<h2 id="10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
+<p>Miary są prezentowane osobno. Raport nie łączy ich w jeden indeks nośności.</p>
+
+<h3 id="relacje-między-grupami">Relacje między grupami</h3>
+<p>Raport oblicza podobieństwo cosinusowe centroidów grup. Tabela i mapa ram pokazują, które grupy mają najbardziej zbliżone reprezentacje zbiorcze. Grupy nie są na tej podstawie automatycznie scalane.</p>
+
+<h3 id="ograniczenia-analizy-semantycznej">Ograniczenia analizy</h3>
+<ul>
+<li>Wynik zależy od zawartości i wielkości wybranego korpusu.</li>
+<li>Reprezentacje rzadkich lematów powstają na podstawie mniejszej liczby kontekstów.</li>
+<li>Błędy tokenizacji i lematyzacji mogą tworzyć osobne węzły.</li>
+<li>Wyniki zależą od wybranego typu modelu i parametrów treningu.</li>
+<li>W modelu FastText na podobieństwo może wpływać wspólna budowa znakowa wyrazów.</li>
+<li>Liczba i skład grup zależą od grafu wejściowego i przebiegu grupowania.</li>
+</ul>
+<p>Po wskazaniu interesującej grupy lub lematu należy wrócić do materiału tekstowego i sprawdzić jego użycia za pomocą zapytań CQL, konkordancji i kolokacji.</p>
+<hr/><h2 id="10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
 (BERTopic)</h2>
 <p>Korpusuj wykorzystuje bibliotekę <a href="https://maartengr.github.io/BERTopic/index.html" rel="noopener noreferrer" target="_blank">BERTopic</a>.
 Oficjalna dokumentacja opisuje pełne możliwości biblioteki; nie

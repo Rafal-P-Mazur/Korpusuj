@@ -191,77 +191,80 @@ Podsumowanie profilu dzieli połączenia na grupy odpowiadające relacjom skład
 
 ---
 
-## 9. Sieć semantyczna
+## 9. Eksploracja i analiza otoczenia semantycznego
 
-Sieć semantyczna służy do badania powiązań znaczeniowych w korpusie na podstawie modelowania wektorowego. Dla wybranego lematu aplikacja wyszukuje słowa używane w podobnych kontekstach. Słowa te są przedstawiane jako sąsiedzi semantyczni i grupowane w ramy na podstawie wzajemnych podobieństw.
+Moduł semantyczny służy do eksploracyjnego badania słownictwa funkcjonującego w korpusie w kontekstach podobnych do kontekstów wybranego lematu. Nie zastępuje konkordancji, kolokacji ani jakościowej interpretacji tekstów. Pomaga odnaleźć jednostki, które mogą posłużyć do formułowania dalszych pytań i precyzyjniejszych zapytań korpusowych.
 
-*  **Rama semantyczna:** Grupa słów silnie i bezpośrednio związanych ze słowem centralnym w modelu semantycznym. Mogą do niej należeć synonimy, wyrazy bliskoznaczne, określenia powiązanych pojęć i inne słowa reprezentujące wspólny obszar znaczeniowy.
-*  **Rama kontekstowa:** Grupa opisująca charakterystyczne otoczenie użycia lematu. Może zawierać słowa związane z określonym tematem lub sytuacją, nawet jeśli nie są one bezpośrednio bliskoznaczne ze słowem centralnym.
+### Model dystrybucyjny
 
+Dla lematów tworzony jest model FastText wytrenowany na wybranym korpusie. Lematy występujące w podobnych kontekstach otrzymują zbliżone reprezentacje wektorowe, a ich podobieństwo jest mierzone cosinusem.
 
-### Tworzenie sieci semantycznej
+FastText wykorzystuje również znakowe fragmenty wyrazów. Bliskość wektorowa może więc częściowo wynikać z podobieństwa formalnego, zwłaszcza w wypadku jednej rodziny słowotwórczej albo błędnych wariantów lematyzacyjnych. Podobieństwo dystrybucyjne nie określa automatycznie rodzaju relacji językowej.
 
-Przed rozpoczęciem eksploracji aplikacja musi przygotować model semantyczny dla aktualnie otwartego korpusu. Model ten powstaje na podstawie sposobu użycia słów w dokumentach. Aplikacja analizuje konteksty, w których występują poszczególne lematy, i zapisuje je w postaci wektorów, czyli matematycznych reprezentacji ich użycia. Słowa pojawiające się w podobnych otoczeniach uzyskują podobne wektory i mogą zostać później połączone w sieci.
+### Graf eksploracyjny
 
-Jeżeli dane potrzebne do utworzenia sieci nie są jeszcze dostępne, po otwarciu modułu **Sieć semantyczna** aplikacja zaproponuje ich przygotowanie. Należy uruchomić ten proces i poczekać na jego zakończenie. Czas obliczeń zależy przede wszystkim od wielkości korpusu, liczby różnych lematów oraz wydajności komputera. Przygotowanie modelu wykonuje się dla całego korpusu, dlatego po jego ukończeniu można badać kolejne słowa bez ponownego przetwarzania wszystkich dokumentów.
+Graf eksploracyjny wspiera analizę kierowaną przez użytkownika:
 
-Model semantyczny nie korzysta z gotowego słownika znaczeń. Odzwierciedla zależności wykryte w otwartym korpusie. To samo słowo może zatem mieć innych sąsiadów w korpusie prasowym, innych w literaturze, a jeszcze innych w zbiorze tekstów specjalistycznych. Wyniki należy interpretować jako opis sposobu użycia słownictwa w badanym materiale.
+1. użytkownik wskazuje lemat początkowy;
+2. program proponuje dystrybucyjnie podobne lematy;
+3. użytkownik wybiera węzeł, którego otoczenie chce rozwinąć;
+4. program dobiera kolejne jednostki z uwzględnieniem rozwijanego węzła, lematu początkowego i dotychczas zbudowanej części grafu.
 
-Po przygotowaniu modelu sieć dla konkretnego słowa tworzona jest podczas eksploracji:
+W tabeli kandydatów należy rozróżnić bezpośrednie podobieństwo do rozwijanego lematu, wynik służący do uporządkowania kandydatów, ogólność wynikającą z rozpowszechnienia na listach sąsiedztwa oraz frekwencję korpusową. Ogólność i frekwencja nie są tą samą miarą.
 
-1. Z menu głównego należy otworzyć moduł **Sieć semantyczna**.
-2. W polu **Słowo centralne...** wpisać lemat, który ma być punktem wyjścia analizy.
-3. Wybrać przycisk **Eksploruj**.
+### Raport analityczny
 
-Aplikacja wyszukuje wtedy wektor podanego lematu i porównuje go z wektorami pozostałych słów. Do sieci wybierani są najbliżsi sąsiedzi semantyczni, czyli słowa o najbardziej podobnych sposobach użycia. Liczba pokazywanych sąsiadów zależy od ustawień grafu, a bardzo słabe podobieństwa są pomijane.
+Raport bada szerszy zbiór dostępnych sąsiadów badanego lematu. W aktualnym wariancie:
 
-Słowo centralne i jego sąsiedzi stają się węzłami sieci. Linie łączą te słowa, między którymi aplikacja wykryła odpowiednio silne podobieństwo. Połączenie nie oznacza automatycznie synonimii. Może wskazywać podobieństwo znaczenia, wspólny temat, typowe współwystępowanie albo użycie w zbliżonych sytuacjach.
+1. wykorzystywana jest pełna lista sąsiadów dostępna w artefakcie modelu;
+2. budowany jest ważony graf wzajemnych pięciu najbliższych sąsiadów, czyli mutual 5-NN;
+3. dwa lematy są połączone, jeżeli każdy należy do pięciu najbliższych sąsiadów drugiego;
+4. wagą krawędzi jest podobieństwo cosinusowe;
+5. graf jest dzielony przez Chinese Whispers;
+6. prezentowane są klastry mające co najmniej trzy lematy.
 
-Na podstawie wzajemnych podobieństw aplikacja grupuje sąsiadów w ramy. Dla każdej ramy wyznaczane są słowa najlepiej reprezentujące grupę, słowa należące do jej rdzenia oraz pozycje bardziej peryferyjne. Aplikacja nadaje również ramie etykietę złożoną z najbardziej reprezentatywnych elementów i określa, czy ma ona charakter semantyczny, czy kontekstowy.
+Wartość `k=5` przyjęto na podstawie testów granulacji jako wariant zachowujący szczegółowe struktury lokalne. Większe wartości `k` zmniejszały liczbę izolatów, ale łączyły też część czytelnych grup i obniżały ich średnią zwartość.
 
-Wizualny układ węzłów jest tylko sposobem prezentacji obliczonych relacji. Położenie słowa po lewej lub prawej stronie wykresu samo w sobie nie ma znaczenia językowego. Istotne są przede wszystkim połączenia, przypisanie do ram i wartości podobieństwa. Zmiana ziarna losowości może zmienić rozmieszczenie punktów bez zmiany samych relacji semantycznych.
+Chinese Whispers używa seedu referencyjnego `42`, maksymalnie `100` iteracji i zatrzymuje się wcześniej po pełnej iteracji bez zmian etykiet. Seed umożliwia odtworzenie przebiegu referencyjnego przy tym samym grafie i implementacji, ale sam nie jest oceną stabilności względem innych seedów.
 
-Po wybraniu kolejnego węzła można rozwinąć jego otoczenie. Jeżeli opcja **Rozwijaj obecną gałąź** jest włączona, nowe słowa zostaną dołączone do istniejącego grafu. Po jej wyłączeniu aplikacja utworzy nowy widok z wybranym słowem jako kolejnym punktem centralnym.
+### Status grup
 
-### Tryby wyświetlania sieci
-*  **Eksploracja:** Podstawowy tryb interaktywnego przeglądania i rozwijania sieci.
-*  **Kręgosłup (MST):** Upraszcza sieć do struktury łączącej wszystkie widoczne węzły bez zamkniętych pętli. Dzięki ograniczeniu liczby krawędzi łatwiej prześledzić ogólną budowę grafu. Pominięte połączenia nadal istnieją w danych, ale nie są pokazywane w tym widoku.
-*  **Klastry:** Widok wyróżniający zwarte grupy silniej powiązanych węzłów w obrębie grafu.
+Algorytm wyodrębnia lokalne grupy podobieństwa dystrybucyjnego. Określenie **rama** ma w raporcie charakter operacyjny. Nie oznacza, że każda grupa automatycznie odpowiada ramie semantycznej w sensie określonej teorii językoznawczej.
 
-W **Ustawieniach grafu** dostępne są opcje pozwalające na ograniczenie liczby dołączanych sąsiadów, zmianę ziarna losowości (Seed) czy preferowanie słownictwa domenowego kosztem bardzo pospolitych wyrażeń.
+Raport rozróżnia:
 
-### Raport semantyczny
+- **członka klastra** (`graph_cluster`), należącego do klastra Chinese Whispers;
+- **lemat powiązany z ramą** (`frame_relation`), który nie należy do prezentowanego klastra, lecz jest opisany przez podobieństwo do dwóch najbliższych centroidów.
 
-W celu uzyskania szczegółowej analizy statystycznej pola semantycznego można wygenerować Raport semantyczny. Skutkuje to utworzeniem kompleksowego pliku `report.html`.
+Lematy `frame_relation` nie są automatycznie dołączane do ram, nie zmieniają ich składu i nie wpływają na centroidy.
 
-Aby utworzyć raport, należy otworzyć zakładkę sieci semantycznej, podać słowo centralne, upewnić się, że figuruje ono w modelu, a następnie wybrać polecenie **Raport semantyczny**.
+### Miary
 
-### Znaczenie kluczowych metryk z raportu
-*  **Typowość:** Bliskość wektora słowa do centrum swojej ramy. Wskazuje na stopień reprezentatywności słowa dla danej grupy.
-*  **Swoistość:** Różnica między podobieństwem słowa do własnej ramy a jego podobieństwem do najbliższej innej ramy. Wysoka wartość oznacza, że słowo lepiej reprezentuje własną ramę i słabiej wiąże się z pozostałymi.
-*  **Nośność:** Łączna miara przydatności słowa do interpretacji ramy. Uwzględnia typowość, swoistość, frekwencję, siłę lokalnych połączeń i podobieństwo do lemy centralnej, a zmniejsza wagę słów bardzo ogólnych.
-*  **Zwartość i Separacja:** Jednorodność grupy oraz stopień odrębności ramy od najbliższej innej ramy, wyznaczany na podstawie podobieństwa ich centroidów. Wyższa wartość oznacza wyraźniejszą granicę między grupami.
-*  **Ogólność:** Stopień uczestnictwa pojęcia w innych obszarach semantycznych całego korpusu.
+- **Typowość ramowa**: podobieństwo lematu do centroidu ramy odniesienia.
+- **Swoistość ramowa**: różnica między podobieństwem do ramy odniesienia i największym podobieństwem do innej ramy.
+- **Centralność pola**: podobieństwo lematu do centroidu całego analizowanego pola.
+- **Specyficzność pola**: centralność pola pomniejszona odpowiednio do ogólności lematu.
 
-### Struktura raportu HTML
-*  **Karty podsumowujące:** Pokazują między innymi frekwencję lematu, liczbę wybranych sąsiadów, liczbę ram, gęstość i spójność grafu, średnie podobieństwo pola, separację ram, parametr Top-K oraz minimalne podobieństwo.
-*  **Globalne rankingi słów:** Listy Top 25 najważniejszych pojęć klasyfikowanych według Centralności, Swoistości i Nośności.
-*  **Przestrzeń semantyczna (PCA):** Dwuwymiarowe uproszczenie przestrzeni wektorowej. Bliskość punktów pomaga odczytywać podobieństwo, ale same kierunki osi nie mają określonego znaczenia językowego.
-*  **Szczegóły ramy:** Rozdzielenie zawartości klastrów na rdzeń znaczeniowy oraz ogólniejsze peryferie semantyczne.
-*  **Obecność w innych polach:** Sekcja ta wskazuje, w jakich innych polach pojęciowych badany lemat pełni istotną funkcję poboczną.
+Raport nie oblicza jednego agregowanego indeksu nośności. Poszczególne miary należy interpretować osobno.
 
-Raport może nie zostać wygenerowany, jeżeli lemat nie występuje w indeksie, brakuje jego wektora, nie odnaleziono wystarczającej liczby powiązanych sąsiadów lub materiał jest zbyt mało liczny do utworzenia prawidłowych ram statystycznych.
+### Relacje między grupami
 
----
+Raport porównuje centroidy grup. Pozwala to rozpoznawać szersze obszary organizacji otoczenia dystrybucyjnego bez automatycznego scalania grup i bez budowania formalnej hierarchii ram.
 
-### Filtrowanie wyników według ram
+### Ograniczenia i dalsza analiza
 
-Po rozpoznaniu i zdefiniowaniu ram znaczeniowych dla hasła, dostępna staje się funkcja filtrowania bieżących konkordancji w oparciu o ustalone profile znaczeniowe.
+Wynik zależy od korpusu, frekwencji, lematyzacji, konfiguracji FastText, subwordów, pojemności listy sąsiadów, parametru `k`, minimalnego rozmiaru klastra i przebiegu grupowania. Opisuje konkretny korpus i model, a nie kompletny system semantyczny języka.
 
-Wymagane jest wcześniejsze wykonanie wyszukiwania. Następnie w panelu głównym wybiera się opcję **Filtrowanie wyników według ram**. Z listy rozwijanej wskazuje się wybraną ramę semantyczną lub kontekstową i zatwierdza przyciskiem **Filtruj wyniki**.
-Interfejs wyświetli licznik skuteczności filtra, a wyświetlana tabela zostanie ograniczona do wystąpień przypisanych przez aplikację do wybranej ramy. Przypisanie jest wynikiem automatycznej analizy i w przypadkach granicznych może wymagać sprawdzenia kontekstu.
+Zalecany przebieg pracy:
 
----
+```text
+graf lub raport analityczny
+→ wybór lematów i grup
+→ hipoteza
+→ zapytania CQL
+→ konkordancje i kolokacje
+→ interpretacja użyć
+```
 
 ## 10. Modelowanie tematyczne (BERTopic)
 

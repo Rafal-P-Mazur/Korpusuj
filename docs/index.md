@@ -27,5 +27,6 @@ Dokumentacja obejmuje instalację, pierwsze uruchomienie, obsługę interfejsu g
 - [Dostęp do relacji zależnościowych](architecture/dependency-runtime.md)
 - [Wyniki, liczba trafień i eksport](architecture/result-materialization.md)
 - [Połączenie modułów z GUI](architecture/gui-integration.md)
+- [Analiza otoczenia semantycznego](architecture/semantic-analysis.md)
 - [Mapa pakietów i ważnych modułów](architecture/modules.md)
 - [Referencja modułów i symboli](architecture/source-reference.md)

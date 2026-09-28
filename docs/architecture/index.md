@@ -10,6 +10,7 @@
 - [Indeks wyszukiwania i `.dep_cache`](index-lifecycle.md)
 - [Wykonanie zapytania](search-execution.md)
 - [Dostęp do dependency](dependency-runtime.md)
+- [Analiza otoczenia semantycznego](semantic-analysis.md)
 - [Wyniki i dokładna liczba trafień](result-materialization.md)
 
 ## `engine.py`

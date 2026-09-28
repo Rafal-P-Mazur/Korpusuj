@@ -69,4 +69,4 @@ Indeks wskazuje kandydatów do sprawdzenia. `SearchCursor` sprawdza na danych do
 
 ## Analizy i eksport
 
-Statystyki i kolokacje znajdują się w `korpusuj.search`. Eksport tabel i podkorpusów znajduje się w `korpusuj.export`. Sieć semantyczna i raport semantyczny znajdują się w `korpusuj.semantic`, a modelowanie tematyczne w `korpusuj.topics`.
+Graf eksploracyjny i raport analityczny znajdują się w `korpusuj.semantic`. Raport buduje graf mutual 5-NN, używa `SenseInducer.chinese_whispers(...)` do podziału i osobno opisuje członków klastrów oraz relacje pozostałych lematów do centroidów. Modelowanie tematyczne znajduje się w `korpusuj.topics`.

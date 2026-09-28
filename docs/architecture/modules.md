@@ -60,7 +60,7 @@
 ## Pozostałe pakiety
 
 - `korpusuj.export`: eksport tabel i tworzenie podkorpusów.
-- `korpusuj.semantic`: model i raporty semantyczne oraz widok sieci.
+- `korpusuj.semantic`: trening i ładowanie modeli FastText, graf eksploracyjny, raport analityczny, mutual k-NN, Chinese Whispers oraz miary ramowe i polowe.
 - `korpusuj.topics`: integracja BERTopic.
 - `korpusuj.ui`: komponenty interfejsu, tabele, podpowiedzi, fiszki i widoki pomocnicze.
 - `korpusuj.utils`: małe funkcje współdzielone przez kilka pakietów.

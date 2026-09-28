@@ -1,23 +1,19 @@
-# Integracja analiz w `engine.py`
+## Integracja analiz w engine.py
 
-## Sieć semantyczna
+### Sieć semantyczna i raport analityczny
 
-`semantic_engine = SemanticEngine()` powstaje podczas importu `engine.py`. Funkcje `load_semantic_neighbors(...)`, `get_semantic_neighbors(...)`, `is_mutual_knn(...)` i `dynamic_bridge_threshold(...)` delegują do tego obiektu albo do metod klasy.
+`semantic_engine = SemanticEngine()` powstaje podczas importu `engine.py`. Graf eksploracyjny korzysta z metod `SemanticEngine` do pobierania i kontekstowego porządkowania kandydatów. Raport jest uruchamiany przez `SemanticEngine.build_semantic_report(...)` i generowany przez `reports_analytical_v7_1.py`.
 
-`smart_show_semantic_network()` sprawdza dane wybranego korpusu i otwiera widok sieci. Po zakończeniu treningu `on_training_success()` aktualizuje status i ponawia wczytanie artefaktów.
+Generator raportu buduje graf mutual k-NN, a do jego podziału wykorzystuje `SenseInducer.chinese_whispers(...)`. Następnie oblicza centroidy, miary ramowe i polowe, relacje lematów spoza klastrów oraz podobieństwa między centroidami.
 
-## Profil słowa i indukcja sensów
+### Profil słowa
 
-`compute_word_profile`, `flatten_word_profile` i `SenseInducer` są importowane przez `engine.py` i używane przez callbacki panelu semantycznego. Parametry pochodzą z kontrolek GUI, a wynik jest przekazywany do widoku lub generatora raportu.
+`compute_word_profile` i `flatten_word_profile` obsługują profil kolokacyjny. Jest to analiza odrębna od grafu eksploracyjnego i raportu semantycznego.
 
-## BERTopic
+### BERTopic
 
-`TopicEngine` jest importowany podczas inicjalizacji modułu. Callback analizy tematycznej zbiera ustawienia, uruchamia obliczenia poza bieżącą obsługą zdarzenia i otwiera wygenerowany raport.
+`TopicEngine` obsługuje analizę tematyczną i wygenerowany raport.
 
-## Raporty HTML
+### Raporty HTML i fiszki
 
-`launch_webview(target_path)` uruchamia pywebview dla gotowego pliku HTML. W wersji zamrożonej osobne zadanie procesu jest rozpoznawane na początku `engine.py`, zanim zostanie utworzone główne GUI.
-
-## Fiszki
-
-`get_fiszki_module()` importuje moduł fiszek na żądanie. Osobny argument `--run-fiszki` pozwala uruchomić wejście fiszek w procesie pomocniczym.
+`launch_webview(target_path)` otwiera gotowy raport HTML. `get_fiszki_module()` importuje moduł fiszek na żądanie.
