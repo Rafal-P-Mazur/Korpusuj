@@ -97,6 +97,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional UTF-8 JSON rules matching orth + lemma + UPOS; changes only lemmas.",
     )
     parser.add_argument(
+        "--lemma-repair-mode", choices=["off", "common-core", "common-core-plus"], default="off",
+        help="Postprocessing lematow po zbudowaniu roboczego .search; default: off.",
+    )
+    parser.add_argument(
         "--no-ner", action="store_false", dest="enable_ner", default=True,
         help="Disable named-entity recognition.",
     )
@@ -237,6 +241,7 @@ def _result_payload(result: Any, options: CreatorRunOptions) -> dict[str, Any]:
     payload["enable_ner"] = options.enable_ner
     payload["enable_coreference"] = options.enable_coreference
     payload["resume"] = options.resume_mode
+    payload["lemma_repair_mode"] = options.lemma_repair_mode
     payload["input_files"] = len(options.input_files)
     return payload
 
@@ -291,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_ner=bool(args.enable_ner),
             enable_coreference=bool(args.enable_coreference),
             lemma_corrections_path=lemma_corrections_path,
+            lemma_repair_mode=args.lemma_repair_mode,
         )
     except CreatorCliConfigurationError as exc:
         payload = _configuration_error_payload(str(exc))

@@ -8,9 +8,10 @@ code,pre,kbd,samp{font-variant-ligatures:none!important;font-feature-settings:"l
 .toc[hidden]{display:none}
 .layout.no-toc{grid-template-columns:1fr}
 </style></head><body><header class="bar"><strong>Korpusuj — pomoc</strong><div><button id="tocbtn">☰ Spis treści</button> <button id="theme">🌙 Ciemny</button></div></header><div class="layout"><nav class="toc" id="toc"><h2>Spis treści</h2><ul><li class="l2"><a href="#1-rozpoczęcie-pracy">1. Rozpoczęcie pracy</a></li><li class="l3"><a href="#uruchamianie-aplikacji">Uruchamianie aplikacji</a></li><li class="l3"><a href="#otwieranie-korpusu">Otwieranie korpusu</a></li><li class="l3"><a href="#okno-główne-aplikacji">Okno główne aplikacji</a></li><li class="l2"><a href="#2-tworzenie-nowego-korpusu">2. Tworzenie nowego korpusu</a></li><li class="l3"><a href="#dołączanie-metadanych-z-zewnętrznego-pliku">Dołączanie
-metadanych z zewnętrznego pliku</a></li><li class="l3"><a href="#analiza-językowa-i-zapis">Analiza językowa i zapis</a></li><li class="l2"><a href="#3-wyszukiwanie">3. Wyszukiwanie</a></li><li class="l3"><a href="#zapytanie-w-języku-cql">Zapytanie w języku CQL</a></li><li class="l3"><a href="#konstruktor-zapytań-i-kontekst">Konstruktor zapytań i
-kontekst</a></li><li class="l3"><a href="#porządkowanie-wyników">Sortowanie wyników</a></li><li class="l2"><a href="#4-przeglądanie-wyników">4. Przeglądanie wyników</a></li><li class="l2"><a href="#5-statystyki">5. Statystyki</a></li><li class="l3"><a href="#interpretacja-danych-w-tabelach">Interpretacja danych w
-tabelach</a></li><li class="l2"><a href="#6-wykresy">6. Wykresy</a></li><li class="l3"><a href="#konfiguracja-wykresu">Konfiguracja wykresu</a></li><li class="l2"><a href="#7-kolokacje">7. Kolokacje</a></li><li class="l3"><a href="#rodzaje-kontekstu">Rodzaje kontekstu</a></li><li class="l3"><a href="#filtry-i-miary">Filtry i miary</a></li><li class="l2"><a href="#8-profil-kolokacyjny">8. Profil kolokacyjny</a></li><li class="l2"><a href="#9-eksploracja-i-analiza-otoczenia-semantycznego">9. Eksploracja i analiza otoczenia semantycznego</a></li>
+metadanych z zewnętrznego pliku</a></li><li class="l3"><a href="#analiza-językowa-i-zapis">Analiza językowa i zapis</a></li><li class="l2"><a href="#3-korekta-lematyzacji-gotowego-korpusu">3. Korekta lematyzacji gotowego korpusu</a></li>
+<li class="l2"><a href="#4-wyszukiwanie">4. Wyszukiwanie</a></li><li class="l3"><a href="#zapytanie-w-języku-cql">Zapytanie w języku CQL</a></li><li class="l3"><a href="#konstruktor-zapytań-i-kontekst">Konstruktor zapytań i
+kontekst</a></li><li class="l3"><a href="#porządkowanie-wyników">Sortowanie wyników</a></li><li class="l2"><a href="#5-przeglądanie-wyników">5. Przeglądanie wyników</a></li><li class="l2"><a href="#6-statystyki">6. Statystyki</a></li><li class="l3"><a href="#interpretacja-danych-w-tabelach">Interpretacja danych w
+tabelach</a></li><li class="l2"><a href="#7-wykresy">7. Wykresy</a></li><li class="l3"><a href="#konfiguracja-wykresu">Konfiguracja wykresu</a></li><li class="l2"><a href="#8-kolokacje">8. Kolokacje</a></li><li class="l3"><a href="#rodzaje-kontekstu">Rodzaje kontekstu</a></li><li class="l3"><a href="#filtry-i-miary">Filtry i miary</a></li><li class="l2"><a href="#9-profil-kolokacyjny">9. Profil kolokacyjny</a></li><li class="l2"><a href="#10-eksploracja-i-analiza-otoczenia-semantycznego">10. Eksploracja i analiza otoczenia semantycznego</a></li>
 <li class="l3"><a href="#przygotowanie-modelu-wektorowego">Przygotowanie modelu wektorowego</a></li>
 <li class="l3"><a href="#graf-eksploracyjny">Graf eksploracyjny</a></li>
 <li class="l3"><a href="#raport-analityczny">Raport analityczny</a></li>
@@ -18,9 +19,9 @@ tabelach</a></li><li class="l2"><a href="#6-wykresy">6. Wykresy</a></li><li clas
 <li class="l3"><a href="#status-grup-i-lematów">Status grup i lematów</a></li>
 <li class="l3"><a href="#miary-ramowe-i-miary-pola">Miary ramowe i miary pola</a></li>
 <li class="l3"><a href="#relacje-między-grupami">Relacje między grupami</a></li>
-<li class="l3"><a href="#ograniczenia-analizy-semantycznej">Ograniczenia analizy</a></li><li class="l2"><a href="#10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
-(BERTopic)</a></li><li class="l2"><a href="#11-eksport-i-podkorpus">11. Eksport i podkorpus</a></li><li class="l2"><a href="#12-informacje-preferencje-pomoc-i-skróty">12. Informacje,
-preferencje, pomoc i skróty</a></li><li class="l2"><a href="#13-rozwiązywanie-problemów">13. Rozwiązywanie problemów</a></li></ul></nav><main><h1 id="instrukcja-użytkownika-korpusuj">Instrukcja użytkownika —
+<li class="l3"><a href="#ograniczenia-analizy-semantycznej">Ograniczenia analizy</a></li><li class="l2"><a href="#11-modelowanie-tematyczne-bertopic">11. Modelowanie tematyczne
+(BERTopic)</a></li><li class="l2"><a href="#12-eksport-i-podkorpus">12. Eksport i podkorpus</a></li><li class="l2"><a href="#13-informacje-preferencje-pomoc-i-skróty">13. Informacje,
+preferencje, pomoc i skróty</a></li><li class="l2"><a href="#14-rozwiązywanie-problemów">14. Rozwiązywanie problemów</a></li></ul></nav><main><h1 id="instrukcja-użytkownika-korpusuj">Instrukcja użytkownika —
 Korpusuj</h1>
 <p>Niniejszy przewodnik opisuje pracę z aplikacją Korpusuj. Obejmuje
 wszystkie etapy: od tworzenia i otwierania korpusów, przez wyszukiwanie
@@ -158,8 +159,14 @@ możliwe jest jego wznowienie po wskazaniu tej samej ścieżki zapisu.
 Aplikacja wczyta wówczas ukończone fragmenty i pominie wcześniej
 przetworzone teksty. Wznowienie zadania wymaga użycia identycznych
 ustawień warstw anotacji.</p>
+
 <hr/>
-<h2 id="3-wyszukiwanie">3. Wyszukiwanie</h2>
+<h2 id="4-korekta-lematyzacji-gotowego-korpusu">4. Korekta lematyzacji gotowego korpusu</h2>
+<p>Z menu <strong>Plik</strong> można uruchomić korektę lematyzacji aktywnego korpusu. Program wykorzystuje Morfeusza 2 i dane fleksyjne SGJP, przygotowuje audyt oraz bezpieczną pulę reguł, a po zatwierdzeniu tworzy oddzielny plik Parquet. Plik źródłowy nie jest nadpisywany.</p>
+<p>Mechanizm zmienia wyłącznie lematy. Nie wykonuje ponownej tokenizacji i nie zmienia tagów, zależności, NER ani koreferencji. Formy homograficzne i przypadki bez jednoznacznego celu słownikowego są blokowane. Po zapisaniu wyniku należy otworzyć nowy korpus i używać jego nowych indeksów.</p>
+<p>Morfeusz 2 i dane SGJP są udostępniane na dwuklauzulowej licencji BSD. Pełna nota znajduje się w pliku <code>THIRD_PARTY_NOTICES.md</code> dołączonym do programu.</p>
+<hr/>
+<h2 id="4-wyszukiwanie">4. Wyszukiwanie</h2>
 <h3 id="zapytanie-w-języku-cql">Zapytanie w języku CQL</h3>
 <p>Wyszukiwanie odbywa się przy pomocy języka CQL (<em>Corpus Query
 Language</em>).</p>
@@ -189,7 +196,7 @@ sortowanie alfabetyczne, sortowanie po lewym lub prawym kontekście,
 według metadanych (autor, data) oraz według frekwencji lematu lub formy
 tekstowej.</p>
 <hr/>
-<h2 id="4-przeglądanie-wyników">4. Przeglądanie wyników</h2>
+<h2 id="5-przeglądanie-wyników">5. Przeglądanie wyników</h2>
 <p>Wyniki zapytania wyświetlane są jako konkordancje w formacie Key Word
 in Context (KWIC). W kolejnych kolumnach wyświetlane są: metadane,
 kontekst lewy, dopasowanie i kontekst prawy.</p>
@@ -201,7 +208,7 @@ jednostek nazwanych (jeśli korpus ma wygenerowane takie warstwy).</p>
 <p>Zaznaczony wiersz w tabeli konkordancji lub tekst w oknie pełnego
 widoku można skopiować przy użyciu skrótu <code>Ctrl+C</code>.</p>
 <hr/>
-<h2 id="5-statystyki">5. Statystyki</h2>
+<h2 id="6-statystyki">6. Statystyki</h2>
 <p>Zakładka <strong>Statystyki</strong> służy do analizy słownictwa
 pojawiającego się w wynikach wyszukiwania. Narzędzie generuje niezależne
 tabele dla lematów (<code>base</code>) i dokładnych form z tekstu
@@ -227,7 +234,7 @@ występowania.</li>
 </ul>
 <p>Kliknięcie nagłówka kolumny zmienia kierunek sortowania tabeli.</p>
 <hr/>
-<h2 id="6-wykresy">6. Wykresy</h2>
+<h2 id="7-wykresy">7. Wykresy</h2>
 <p>Wykresy przedstawiają zmiany częstości wybranych form na osi czasu.
 Wykorzystanie tej funkcji wymaga posiadania w korpusie poprawnie
 sformatowanych metadanych z datami publikacji.</p>
@@ -266,7 +273,7 @@ w polu <strong>Nowa nazwa dla zaznaczonych</strong> i wybrać
 wykres</strong>. Wykres można zapisać na dysku jako plik graficzny
 poleceniem <strong>Zapisz wykres</strong>.</p>
 <hr/>
-<h2 id="7-kolokacje">7. Kolokacje</h2>
+<h2 id="8-kolokacje">8. Kolokacje</h2>
 <p>Analiza kolokacji pomaga znaleźć słowa często współwystępujące z
 badanym wyrażeniem.</p>
 <h3 id="rodzaje-kontekstu">Rodzaje kontekstu</h3>
@@ -300,7 +307,7 @@ do tabeli konkordancji przez kliknięcie w menu rozwijanym (otwieranym
 przez kliknięcie prawym przyciskiem myszy) opcji <strong>Wyszukaj
 kolokację</strong>.</p>
 <hr/>
-<h2 id="8-profil-kolokacyjny">8. Profil kolokacyjny</h2>
+<h2 id="9-profil-kolokacyjny">9. Profil kolokacyjny</h2>
 <p>Profil kolokacyjny ułatwia analizę kolokacji danego wyrazu,
 kategoryzując powiązania wyrazowe ze względu na pełnione funkcje
 składniowe. W efekcie zostaje utworzony uporządkowany zestaw typowych
@@ -323,7 +330,7 @@ relacjom składniowym. W każdej grupie aplikacja przedstawia najlepiej
 ocenione pozycje, między innymi ranking Top 5 (wg Log-Dice), oraz
 umożliwia otwarcie pełnej listy.</p>
 <hr/>
-<h2 id="9-eksploracja-i-analiza-otoczenia-semantycznego">9. Eksploracja i analiza otoczenia semantycznego</h2>
+<h2 id="10-eksploracja-i-analiza-otoczenia-semantycznego">10. Eksploracja i analiza otoczenia semantycznego</h2>
 <p>Moduł semantyczny umożliwia przeglądanie lematów o zbliżonych reprezentacjach wektorowych oraz automatyczne porządkowanie szerszego otoczenia wybranego lematu. Wyniki można wykorzystać do wyboru jednostek przeznaczonych do dalszego sprawdzenia w konkordancjach, kolokacjach i zapytaniach CQL.</p>
 
 <h3 id="przygotowanie-modelu-wektorowego">Przygotowanie modelu wektorowego</h3>
@@ -397,7 +404,7 @@ umożliwia otwarcie pełnej listy.</p>
 <li>Liczba i skład grup zależą od grafu wejściowego i przebiegu grupowania.</li>
 </ul>
 <p>Po wskazaniu interesującej grupy lub lematu należy wrócić do materiału tekstowego i sprawdzić jego użycia za pomocą zapytań CQL, konkordancji i kolokacji.</p>
-<hr/><h2 id="10-modelowanie-tematyczne-bertopic">10. Modelowanie tematyczne
+<hr/><h2 id="11-modelowanie-tematyczne-bertopic">11. Modelowanie tematyczne
 (BERTopic)</h2>
 <p>Korpusuj wykorzystuje bibliotekę <a href="https://maartengr.github.io/BERTopic/index.html" rel="noopener noreferrer" target="_blank">BERTopic</a>.
 Oficjalna dokumentacja opisuje pełne możliwości biblioteki; nie
@@ -427,7 +434,7 @@ większego zbioru, zmienić tryb ustalania liczby tematów, wypróbować
 automatyczną redukcję oraz porównać wynik z włączoną i wyłączoną
 lematyzacją lub filtracją stop-words.</p>
 <hr/>
-<h2 id="11-eksport-i-podkorpus">11. Eksport i podkorpus</h2>
+<h2 id="12-eksport-i-podkorpus">12. Eksport i podkorpus</h2>
 <p>Aplikacja umożliwia eksportowanie uzyskanych danych.</p>
 <p>Polecenie <strong>Eksportuj wyniki</strong> pozwala zapisać bieżących
 konkordancji i zestawień tabelarycznych w zewnętrznym pliku.</p>
@@ -441,7 +448,7 @@ dokumenty na podstawie dostępnych pól, na przykład daty, autora, tytułu,
 gatunku lub innych metadanych zapisanych w korpusie.</li>
 </ul>
 <hr/>
-<h2 id="12-informacje-preferencje-pomoc-i-skróty">12. Informacje,
+<h2 id="13-informacje-preferencje-pomoc-i-skróty">13. Informacje,
 preferencje, pomoc i skróty</h2>
 <p><strong>Informacje o korpusie</strong> Moduł pokazuje podstawowe
 informacje o zawartości korpusu, między innymi liczbę dokumentów i
@@ -463,7 +470,7 @@ zapytań</strong>. Istotne skróty klawiaturowe to:</p>
 <li><code>Ctrl+C</code> — kopiuj.</li>
 </ul>
 <hr/>
-<h2 id="13-rozwiązywanie-problemów">13. Rozwiązywanie problemów</h2>
+<h2 id="14-rozwiązywanie-problemów">14. Rozwiązywanie problemów</h2>
 <ul>
 <li><strong>Długi czas wczytywania korpusu po otwarciu:</strong> Podczas
 pierwszego otwarcia dużego korpusu tworzone są indeksy pomocnicze;

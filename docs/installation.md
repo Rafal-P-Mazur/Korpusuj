@@ -169,3 +169,15 @@ python -m pytest -q -p no:cacheprovider tests
 ```
 
 Ostrzeżenia bibliotek zewnętrznych nie zawsze oznaczają niepowodzenie. O wyniku testów decyduje końcowy komunikat programu pytest.
+
+### Morfeusz 2 i SGJP
+
+Korekta lematyzacji gotowego korpusu wymaga pakietu `morfeusz2` wraz z danymi fleksyjnymi SGJP. Zależność jest instalowana z odpowiedniego lockfile'a środowiska. Po przygotowaniu środowiska można ją sprawdzić poleceniem:
+
+```powershell
+python -c "import morfeusz2; m=morfeusz2.Morfeusz(); print(m.analyse('psychologa'))"
+```
+
+W artefaktach Windows moduł natywny i dane wymagane przez `morfeusz2` muszą zostać dołączone przez konfigurację PyInstaller. Przed publikacją wersji CPU i GPU należy uruchomić funkcję korekty lematyzacji w gotowym `onedir`, a nie tylko sprawdzić import w środowisku buildowym.
+
+Morfeusz 2 i zawarte dane fleksyjne są udostępniane na dwuklauzulowej licencji BSD. Dystrybucja binarna musi odtwarzać notę copyrightową, warunki i wyłączenie odpowiedzialności w dokumentacji lub innych materiałach dołączonych do kopii. Pełna nota została umieszczona w `THIRD_PARTY_NOTICES.md` i musi być dołączana do instalatora oraz wersji portable.

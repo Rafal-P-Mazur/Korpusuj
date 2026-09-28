@@ -124,3 +124,9 @@ Callback `completed(...)` zbiera wynik `_run_creator_job_impl()`. `run_creator_j
 - `process_single_text(...)` i `process_single_text_spacy(...)` zwracają tablice anotacji dla jednego tekstu lub chunka.
 - `chunk_text_safe(...)` dzieli tekst i zachowuje informacje potrzebne do odtworzenia pozycji w całym dokumencie.
 - `_write_creator_part(...)` zapisuje partię dokumentów wraz z metadanymi używanymi podczas wznowienia.
+
+### Korekta lematyzacji istniejącego korpusu
+
+Korekta aktywnego korpusu jest osobnym przebiegiem od creatora. Używa istniejących anotacji i workspace SQLite, porównuje obserwowane formy z Morfeuszem 2/SGJP, a wynik zapisuje jako nowy Parquet. Warstwa direct-SGJP nie polega na ręcznej liście przykładów. Cel musi wynikać z analiz słownikowych, a formy homograficzne są blokowane bez kontekstowej pewności.
+
+Zastosowanie reguł zmienia wyłącznie `lemmas`. Wszystkie pozostałe kolumny są przepisywane, a `base_tf`, `total_tokens` i metadane korekty są walidowane przed publikacją. Po zmianie Parquetu należy zbudować nowy `.search` i `.dep_cache`.

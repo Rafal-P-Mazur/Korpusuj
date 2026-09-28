@@ -76,6 +76,7 @@ class CreatorRunOptions:
     enable_ner: bool = True
     enable_coreference: bool = True
     lemma_corrections_path: str | None = None
+    lemma_repair_mode: str = "off"
     def __post_init__(self) -> None:
         self.input_files = [str(path) for path in self.input_files]
         self.output_parquet_file = str(self.output_parquet_file)
@@ -84,6 +85,9 @@ class CreatorRunOptions:
         if self.lemma_corrections_path is not None:
             self.lemma_corrections_path = str(self.lemma_corrections_path)
         self.model_name = str(self.model_name or "stanza")
+        self.lemma_repair_mode = str(self.lemma_repair_mode or "off").strip().lower()
+        if self.lemma_repair_mode not in {"off", "common-core", "common-core-plus"}:
+            raise ValueError(f"Nieznany tryb korekty lematyzacji: {self.lemma_repair_mode}")
         if self.processed_set is not None:
             self.processed_set = {str(path) for path in self.processed_set}
 

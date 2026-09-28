@@ -105,3 +105,7 @@ python -m korpusuj.search.cli --corpus-path korpusy/test.parquet --query "[base=
 - Naucz się tworzyć bardziej złożone zapytania w [przewodniku CQL](cql.md).
 - Poznaj statystyki, wykresy, kolokacje, sieć semantyczną i modelowanie tematyczne w [instrukcji GUI](gui.md).
 - Skorzystaj z automatyzacji opisanej w [instrukcji CLI](cli.md).
+
+### Opcjonalna korekta lematyzacji
+
+Jeżeli po otwarciu korpusu zauważysz systematyczne sztuczne lematy, wybierz **Plik → Popraw lematyzację aktywnego korpusu**. Najpierw uruchom analizę, przejrzyj podsumowanie, a następnie zapisz oddzielny poprawiony Parquet. Funkcja wykorzystuje Morfeusza 2 i dane SGJP, zachowuje plik źródłowy i nie zmienia warstw innych niż `lemmas`. Więcej informacji: [Korekta lematyzacji gotowego korpusu](lemma-repair.md).

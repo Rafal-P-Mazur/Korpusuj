@@ -41,6 +41,7 @@ try:
 except Exception:
     herference = None
 from korpusuj.corpus.creator_core import CreatorRunOptions, NullProgressReporter, ProgressReporter
+from korpusuj.corpus.creator_lemma_repair import run_creator_lemma_repair
 from korpusuj.corpus.lemma_corrections import (
     LemmaCorrectionsError,
     apply_lemma_corrections,
@@ -989,6 +990,14 @@ def run_creator_job(options, reporter=None, *, model_state=None, models_dir=None
         _option(options, "metadata_path", None), runtime_model_name,
         dict(_option(options, "excel_mappings", {}) or {}), bool(_option(options, "resume_mode", False)), completed,
     )
-    return CreatorRunResult(bool(payload.get("success")), payload.get("output_file"), payload.get("error_message"))
+    success=bool(payload.get("success")); output_file=payload.get("output_file"); error_message=payload.get("error_message")
+    mode=str(_option(options,"lemma_repair_mode","off") or "off")
+    if success and output_file and mode != "off":
+        try:
+            run_creator_lemma_repair(output_file,mode,_reporter)
+        except Exception as exc:
+            _reporter.error("Korekta lematyzacji nie zostala zakonczona",exc)
+            return CreatorRunResult(False,output_file,f"Korpus utworzono, ale korekta lematyzacji nie powiodla sie: {exc}")
+    return CreatorRunResult(success, output_file, error_message)
 
 __all__ = ["CreatorRunResult", "run_creator_job"]

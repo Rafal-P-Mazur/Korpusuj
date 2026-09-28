@@ -350,3 +350,9 @@ albo w PowerShellu:
 ```powershell
 explorer "$env:LOCALAPPDATA\Korpusuj\logs\gui"
 ```
+
+#### Korekta lematyzacji gotowego korpusu
+
+Polecenie **Plik → Popraw lematyzację aktywnego korpusu** analizuje lematy otwartego korpusu z użyciem Morfeusza 2 i danych SGJP. Program najpierw przygotowuje audyt i bezpieczną pulę reguł, a dopiero po zatwierdzeniu zapisuje oddzielny plik Parquet. Plik źródłowy nie jest nadpisywany.
+
+Mechanizm poprawia lematy bez ponownej tokenizacji i bez zmiany tagów, zależności, NER ani koreferencji. Blokuje formy homograficzne i przypadki, w których SGJP nie wskazuje jednoznacznego celu. Po utworzeniu wyniku należy pracować na nowym korpusie i jego nowych indeksach. Szczegółowy opis kryteriów, artefaktów i walidacji znajduje się w [dokumentacji korekty lematyzacji](lemma-repair.md).

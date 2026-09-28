@@ -316,6 +316,31 @@ def smart_show_semantic_network():
 # LAZY LOADERY (Wczytywanie na żądanie)
 # ==========================================
 from korpusuj.ui.plots import get_plot_stack
+_active_lemma_repair_module = None
+def get_active_lemma_repair_module():
+    global _active_lemma_repair_module
+    if _active_lemma_repair_module is None:
+        from korpusuj.corpus import active_corpus_lemma_repair
+        _active_lemma_repair_module = active_corpus_lemma_repair
+    return _active_lemma_repair_module
+
+
+def open_active_corpus_lemma_repair_from_menu():
+    corpus_name = str(corpus_var.get() or "").strip()
+    parquet_path = files.get(corpus_name)
+    if not parquet_path:
+        messagebox.showwarning(
+            "Korekta lematyzacji",
+            "Najpierw zaladuj i wybierz aktywny korpus.",
+            parent=app,
+        )
+        return
+    get_active_lemma_repair_module().open_active_corpus_lemma_repair(
+        app,
+        parquet_path,
+    )
+
+
 _creator_module = None
 def get_creator_module():
     global _creator_module
@@ -11752,6 +11777,10 @@ menu = Menu(app)
 file_menu = menu.menu_bar(text="Plik", tearoff=0)
 file_menu.add_command(label="Nowy projekt", command=load_corpora)
 file_menu.add_command(label="Informacje o korpusie", command=show_corpus_info)
+file_menu.add_command(
+    label="Popraw lematyzację aktywnego korpusu",
+    command=open_active_corpus_lemma_repair_from_menu,
+)
 file_menu.add_command(label="Eksportuj wyniki", command=export_data)
 file_menu.add_separator()
 file_menu.add_command(label="Utwórz korpus", command=lambda: get_creator_module().main(app))

@@ -66,3 +66,12 @@
 - `korpusuj.utils`: małe funkcje współdzielone przez kilka pakietów.
 
 `legacy_engine.py` jest historyczną kopią aplikacji sprzed indeksów SQLite i modularyzacji. Nie uczestniczy w uruchomieniu aktualnej wersji.
+
+### Korekta lematyzacji
+
+- `lemma_repair_service.py`: publiczna orkiestracja audytu, przygotowania decyzji, podglądu i zastosowania.
+- `_lemma_repair_d3_engine.py`: workspace SQLite, analizy Morfeusza 2/SGJP, normalizacja identyfikatorów lematów i porównanie tagów.
+- `_lemma_repair_policy_engine.py`: bazowa klasyfikacja AUTO, REVIEW i REJECTED.
+- `lemma_repair_policy.py`: polityka `common-core-plus` i integracja kolejnych bezpiecznych ścieżek.
+- `lemma_repair_direct_sgjp.py`: bezpośrednia kontrola trójek `orth + lemma + UPOS`, z ochroną przed homografią między częściami mowy.
+- `_lemma_repair_apply_engine.py`: podgląd oraz atomowy zapis poprawionego Parquetu z przeliczeniem `base_tf`.
