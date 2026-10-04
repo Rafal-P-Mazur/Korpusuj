@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from .lemma_repair_models import LemmaRepairError, LemmaRepairOptions, LemmaRepairPaths
-from . import _lemma_repair_d3_engine as engine
+from . import lemma_repair_analysis as engine
 
 def run_audit(paths: LemmaRepairPaths, options: LemmaRepairOptions, reporter: Any = None) -> dict:
     if not paths.parquet.is_file(): raise LemmaRepairError(f"Brak Parquetu: {paths.parquet}")

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Dwuetapowa korekta lematyzacji aktywnego korpusu."""
 from __future__ import annotations
-import json, threading
+import json, threading, shutil
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
@@ -185,8 +185,13 @@ def open_active_corpus_lemma_repair(app,parquet_path):
                 if current.get("source_sha256")!=state.get("fingerprint"): raise RuntimeError("Źródło zmieniło się po analizie. Uruchom analizę ponownie.")
                 result=lemma_repair_service.apply_approved(paths,opts,reporter); reporter.status("Budowanie indeksu poprawionego korpusu...")
                 build_index_artifacts_atomic(str(target),str(target.with_suffix(".search")))
+                if not target.is_file() or not target.with_suffix(".search").exists():
+                    raise RuntimeError("Walidacja artefaktow po korekcie nie powiodla sie.")
                 out={"source":str(source),"output":str(target),"search":str(target.with_suffix(".search")),"policy":POLICY,"apply":result.data}
-                (workdir/(source.stem+".active_corpus_summary.json")).write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding="utf-8")
+                summary_path=target.with_suffix(".lemma_repair_summary.json")
+                summary_path.write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding="utf-8")
+                # Workspace jest usuwany dopiero po Parquet, .search i summary. Przy bledzie zostaje.
+                shutil.rmtree(workdir)
             except Exception as exc:
                 reporter.stop_busy(False)
                 app.after(0,lambda exc=exc:(analyze_btn.configure(state="normal"),apply_btn.configure(state="normal"),status.configure(text="Korekta nie została zakończona."),messagebox.showerror("Korekta lematyzacji",str(exc),parent=window)))

@@ -39,10 +39,10 @@ def decode(blob, default):
   except Exception: return default
 def normalize_lemma(x):
  value=clean(x)
- # Morfeusz/SGJP moze dopisywac techniczny identyfikator homonimu lub klasy,
- # np. psycholog:Sm1, pedagog:Sm1 albo lemat:1. Do reguly korekty trafia
- # haslo bazowe, natomiast surowa analiza pozostaje dostepna w cache SGJP.
- return re.sub(r":[A-Za-z]*\d+$", "", value)
+ # Morfeusz/SGJP dopisuje po pierwszym dwukropku identyfikator techniczny
+ # paradygmatu lub wariantu, np. czas:S, Turek:Sm1~cy, rzad:Sm3~adu.
+ # W warstwie lemmas przechowujemy zawsze haslo bazowe.
+ return value.split(":",1)[0]
 def tag_upos(tag): return SGJP_TO_UPOS.get(clean(tag).split(":",1)[0].casefold())
 
 def connect_workspace(path: Path):

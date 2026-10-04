@@ -1,7 +1,199 @@
-﻿
+﻿# IDE and local Python environments
+.idea/
+.venv/
+.venv-build-cpu-repro/
+.venv-build-gpu-repro/
 
-# Python runtime cache
+# Python cache
 __pycache__/
-*.py[cod]
-.pytest_cache/
+*.pyc
+*.pyo
+
+# Generated builds and releases
+build/
+dist/
+_release_182_final/
+_release_183_final/
+
+# Local migration and regression workspaces
+_migration_backups/
+_migration_reports/
+_regression_baseline/
+_experiments/
+
+# Local corpora
+korpus/
+
+# SQLite transient files only
+# The actual temp/prng_world.sqlite database remains tracked.
+temp/*.sqlite-journal
+temp/*.sqlite-wal
+temp/*.sqlite-shm
+
+# Generated build reports
+prepare_182p_final_cpu_onedir_report.md
+prepare_182p_final_cpu_onedir_results.json
+prepare_182q_final_cpu_portable_zip_report.md
+prepare_182q_final_cpu_portable_zip_results.json
+prepare_182r_final_cpu_inno_setup_installer_report.md
+prepare_182r_final_cpu_inno_setup_installer_results.json
+prepare_182z_final_gpu_onedir_report.md
+prepare_182z_final_gpu_onedir_results.json
+prepare_182l_gpu_web_installer_report.md
+prepare_182l_gpu_web_installer_results.json
+
+prepare_183a_final_cpu_onedir_report.md
+prepare_183a_final_cpu_onedir_results.json
+prepare_183b_final_cpu_portable_zip_report.md
+prepare_183b_final_cpu_portable_zip_results.json
+prepare_183c_final_cpu_inno_setup_installer_report.md
+prepare_183c_final_cpu_inno_setup_installer_results.json
+prepare_183d_final_gpu_onedir_report.md
+prepare_183d_final_gpu_onedir_results.json
+prepare_183e_gpu_web_installer_report.md
+prepare_183e_gpu_web_installer_results.json
+
+# Regression and refactor reports
+lemma_repair_refactor_stage1.md
+lemma_repair_refactor_stage2.md
+lemma_repair_refactor_stage3.md
+lemma_repair_refactor_stage4.md
+
+lemma_repair_regression_self_test.md
+lemma_repair_regression_self_test.json
+lemma_repair_regression_stage1.md
+lemma_repair_regression_stage1.json
+lemma_repair_regression_stage2.md
+lemma_repair_regression_stage2.json
+lemma_repair_regression_stage3.md
+lemma_repair_regression_stage3.json
+lemma_repair_regression_stage4.md
+lemma_repair_regression_stage4.json
+lemma_repair_regression_without_adapters.md
+lemma_repair_regression_without_adapters.json
+
+lemma_repair_remove_compat_adapters.md
+lemma_repair_summary_field_diff.md
+
+# Local diagnostic outputs
+morfeusz2_cpu_files.txt
+morfeusz2_gpu_files.txt
+repair_modules_audit.json
+repair_modules_audit.md
+
+# Local archives
+Korpusuj_GitHu_oldb.rar
+Korpusuj_GitHub.txt
+Korpusuj_GitHub_archiwum.txt
+Korpusuj_GitHub_nowy.txt
+preparatory.txt
+korpusuj.txt
+korpusuj/corpus.txt
+
+# Pytest workspace
 .pytest_work/
+
+# Accidental placeholder
+TU_WSTAW_RZECZYWISTA_SCIEZKE_DO_BAZY_PRNG
+
+# Source PRNG workbook outside temp
+PRNG_SWIAT_XLSX.xlsx
+
+# Historical root-level patch scripts
+/Korpusuj_patch_*.py
+/patch_*.py
+/fix_patch_*.py
+/apply_license_cleanup.py
+/rollback_*.py
+
+# One-off experiments
+/experiment_*.py
+/experiment_*.json
+/experiment_*.md
+/experimental_*.py
+
+# One-off audits and reports
+/audit_*.py
+/audit_*.json
+/audit_*.md
+/audit.txt
+
+# One-off benchmarks
+/benchmark_*.md
+
+# One-off run and verification scripts
+/run_*.py
+/verify_*.py
+/check_onet_lemma_repair_parquets.py
+/test.py
+
+# Historical update utilities
+/update_named_entity_reference.py
+/update_named_entity_reference_v1_1.py
+
+# Historical helper scripts
+/prepare_d3_lemma_repair_decisions.py
+/proper_name_lemma_resolver.py
+
+# Historical semantic reports
+/semantic_subword_final_report.md
+/semantic_subword_screening_report.md
+/frame_granularity_*.md
+/frame_granularity_*.csv
+/experiment_D12_thresholds_040_042.md
+/docs.txt
+/d9.txt
+/d9c.txt
+/archiwum_doc_temp_z_instrukcja.txt
+
+# Historical builders superseded by build 183
+/prepare_182l_gpu_web_installer.py
+/prepare_182p_final_cpu_onedir.py
+/prepare_182q_final_cpu_portable_zip.py
+/prepare_182r_final_cpu_inno_setup_installer.py
+/prepare_182z_final_gpu_onedir.py
+
+# Generated PRNG report
+/build_prng_world_runtime_index_report.md
+
+
+Add-Content `
+  -LiteralPath ".\.gitignore" `
+  -Encoding UTF8 `
+  -Value @"
+
+# Additional local reports
+patch_docs_semantic_v7_2_report.md
+patch_instrukcja_semantic_v7_2_report.md
+patch_instrukcja_semantic_v7_2b_report.md
+
+# Superseded local build launcher
+build_all_windows.ps1
+
+# Historical benchmark scanner
+scan_036l4g80_search_benchmark.py
+"@
+
+# Local release preparation scripts
+build_all_windows.ps1
+build_all_windows_183.ps1
+prepare_183a_final_cpu_onedir.py
+prepare_183b_final_cpu_portable_zip.py
+prepare_183c_final_cpu_inno_setup_installer.py
+prepare_183d_final_gpu_onedir.py
+prepare_183e_gpu_web_installer.py
+
+# Local GPU build audit input
+scan_182k_official_pytorch_wheel_gpu_runtime_extraction_results.json
+
+# Local build specifications and utilities
+Korpusuj_cpu_onedir.spec
+build_prng_world_runtime_index.py
+compare_lemma_repair_runs.py
+
+# Local application configuration
+config.json
+
+# Local resources and experimental tests
+resources/
+tests/semantic/

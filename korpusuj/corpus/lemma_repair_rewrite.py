@@ -39,6 +39,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from korpusuj.utils.text_normalization import sanitize_stored_lemma
+from .lemma_repair_rules import ner_broad, rule_context_matches
 
 
 SCRIPT_VERSION = "1.0.0"
@@ -760,175 +762,66 @@ def read_korpus_meta(schema: pa.Schema) -> dict[str, Any]:
         raise LemmaRepairError(f"Nie można odczytać korpus_meta: {exc}") from exc
 
 
-def rewrite_with_rules(
-    source: Path,
-    output: Path,
-    decisions_path: Path,
-    accepted: list[dict[str, Any]],
-    decision_payload: Mapping[str, Any],
-    *,
-    batch_size: int,
-) -> dict[str, Any]:
-    if output == source:
-        raise LemmaRepairError("Output musi być innym plikiem niż źródło.")
-    if output.exists():
-        raise LemmaRepairError(f"Output już istnieje: {output}")
-    output.parent.mkdir(parents=True, exist_ok=True)
-
-    source_schema, columns, _morph = schema_and_columns(source)
-    source_meta = read_korpus_meta(source_schema)
-    physical_metadata = {k: v for k, v in (source_schema.metadata or {}).items() if k != KORPUS_META_KEY}
-    physical_schema = source_schema.with_metadata(physical_metadata)
-
-    rule_map: dict[tuple[str, str, str], dict[str, Any]] = {}
+def rewrite_with_rules(source: Path,output: Path,decisions_path: Path,accepted: list[dict[str, Any]],decision_payload: Mapping[str, Any],*,batch_size: int) -> dict[str, Any]:
+    if output==source:raise LemmaRepairError("Output musi być innym plikiem niż źródło.")
+    if output.exists():raise LemmaRepairError(f"Output już istnieje: {output}")
+    output.parent.mkdir(parents=True,exist_ok=True);source_schema,columns,morph_column=schema_and_columns(source);ner_column="ners" if "ners" in columns else ("ner" if "ner" in columns else None);source_meta=read_korpus_meta(source_schema);physical_metadata={k:v for k,v in (source_schema.metadata or {}).items() if k!=KORPUS_META_KEY};physical_schema=source_schema.with_metadata(physical_metadata)
+    rules={}
     for rule in accepted:
-        key = (rule["orth"], rule["lemma"], rule["upos"].upper())
-        previous = rule_map.get(key)
-        if previous and previous["replacement"] != rule["replacement"]:
-            raise LemmaRepairError(f"Sprzeczne zaakceptowane reguły dla {key!r}")
-        rule_map[key] = rule
-
-    stage_data = output.with_name(output.name + ".lemma_repair_stage")
-    stage_final = output.with_name(output.name + ".lemma_repair_final_stage")
-    for stage in (stage_data, stage_final):
-        if stage.exists():
-            stage.unlink()
-
-    base_tf: Counter[str] = Counter()
-    corrected_by_rule: Counter[str] = Counter()
-    affected_docs: set[int] = set()
-    total_docs = 0
-    total_tokens = 0
-    changed_tokens = 0
-
-    pf = pq.ParquetFile(source)
-    writer = pq.ParquetWriter(stage_data, physical_schema, compression="snappy")
+        key=(rule["orth"],rule["lemma"],rule["upos"].upper(),clean_text(rule.get("morph_from")),clean_text(rule.get("required_ner_broad")).upper());prev=rules.get(key);target=(rule["replacement"],clean_text(rule.get("morph_to")))
+        if prev and (prev["replacement"],clean_text(prev.get("morph_to")))!=target:raise LemmaRepairError(f"Sprzeczne zaakceptowane reguły dla {key!r}")
+        if target[1] and not morph_column:raise LemmaRepairError("Reguła zmiany tagu wymaga kolumny full_postags albo postags.")
+        rules[key]=rule
+    stage=output.with_name(output.name+".lemma_repair_stage");final=output.with_name(output.name+".lemma_repair_final_stage")
+    for p in (stage,final):
+        if p.exists():p.unlink()
+    base_tf=Counter();by_rule=Counter();affected=set();total_docs=total_tokens=changed_tokens=changed_tags=sanitized_lemmas=empty_after_sanitization=0;pf=pq.ParquetFile(source);writer=pq.ParquetWriter(stage,physical_schema,compression="snappy")
     try:
-        doc_base = 0
-        for batch in pf.iter_batches(batch_size=max(1, batch_size)):
-            data = batch.to_pydict()
-            for row_index in range(batch.num_rows):
-                doc_id = doc_base + row_index
-                tokens = as_list(data["tokens"][row_index])
-                lemmas = as_list(data["lemmas"][row_index])
-                upos = as_list(data["upostags"][row_index])
-                if not (len(tokens) == len(lemmas) == len(upos)):
-                    raise LemmaRepairError(
-                        f"Nierównoległe tablice w doc_id={doc_id}: "
-                        f"tokens={len(tokens)}, lemmas={len(lemmas)}, upostags={len(upos)}"
-                    )
-                mutable = list(lemmas)
-                for pos, (orth_raw, lemma_raw, upos_raw) in enumerate(zip(tokens, lemmas, upos)):
-                    key = (clean_text(orth_raw), clean_text(lemma_raw), clean_text(upos_raw).upper())
-                    rule = rule_map.get(key)
-                    if rule is None:
-                        continue
-                    replacement = rule["replacement"]
-                    if mutable[pos] != replacement:
-                        mutable[pos] = replacement
-                        changed_tokens += 1
-                        affected_docs.add(doc_id)
-                        rule_id = "|".join((*key, replacement))
-                        corrected_by_rule[rule_id] += 1
-                data["lemmas"][row_index] = mutable
-                base_tf.update(clean_text(value) for value in mutable)
-                total_tokens += len(tokens)
-            table = pa.Table.from_pydict(data, schema=physical_schema)
-            writer.write_table(table)
-            doc_base += batch.num_rows
-        total_docs = doc_base
+        doc_base=0
+        for batch in pf.iter_batches(batch_size=max(1,batch_size)):
+            data=batch.to_pydict()
+            for i in range(batch.num_rows):
+                doc=doc_base+i;ts=as_list(data["tokens"][i]);ls=as_list(data["lemmas"][i]);us=as_list(data["upostags"][i]);ms=as_list(data[morph_column][i]) if morph_column else [""]*len(ts);ns=as_list(data[ner_column][i]) if ner_column else ["O"]*len(ts)
+                if not(len(ts)==len(ls)==len(us)==len(ms)==len(ns)):raise LemmaRepairError(f"Nierównoległe tablice w doc_id={doc}")
+                nls=[]
+                for original in ls:
+                    value=str(original or "")
+                    sanitized=sanitize_stored_lemma(value)
+                    if sanitized!=value:sanitized_lemmas+=1;affected.add(doc)
+                    if not sanitized:empty_after_sanitization+=1
+                    nls.append(sanitized)
+                nms=list(ms)
+                for pos,(o,l,u,m,n) in enumerate(zip(ts,ls,us,ms,ns)):
+                    base=(clean_text(o),clean_text(l),clean_text(u).upper());m=clean_text(m);broad=ner_broad(n);rule=rules.get((*base,m,broad)) or rules.get((*base,"",broad)) or rules.get((*base,m,"")) or rules.get((*base,"",""))
+                    if rule is None or not rule_context_matches(rule,n,doc,pos):continue
+                    repl=sanitize_stored_lemma(rule["replacement"]);mto=clean_text(rule.get("morph_to"));changed=False
+                    if nls[pos]!=repl:nls[pos]=repl;changed_tokens+=1;changed=True
+                    if mto and nms[pos]!=mto:nms[pos]=mto;changed_tags+=1;changed=True
+                    if changed:affected.add(doc);by_rule["|".join((*base,clean_text(rule.get("morph_from")),repl,mto))]+=1
+                data["lemmas"][i]=nls
+                if morph_column:data[morph_column][i]=nms
+                base_tf.update(clean_text(x) for x in nls);total_tokens+=len(ts)
+            writer.write_table(pa.Table.from_pydict(data,schema=physical_schema));doc_base+=batch.num_rows
+        total_docs=doc_base
     except Exception:
-        writer.close()
-        pf.close()
-        for stage in (stage_data, stage_final):
-            try:
-                if stage.exists():
-                    stage.unlink()
-            except OSError:
-                pass
+        writer.close();pf.close()
+        for p in (stage,final):
+            if p.exists():p.unlink()
         raise
-    else:
-        writer.close()
-        pf.close()
-
-    unused = []
-    for key, rule in rule_map.items():
-        rule_id = "|".join((*key, rule["replacement"]))
-        if corrected_by_rule[rule_id] == 0:
-            unused.append(rule_id)
-    if changed_tokens == 0:
-        stage_data.unlink(missing_ok=True)
-        raise LemmaRepairError("Żadna zaakceptowana reguła nie pasowała do wejściowego Parquet.")
-
-    source_sha = sha256_file(source)
-    repair_meta = {
-        "enabled": True,
-        "schema_version": 1,
-        "tool_version": SCRIPT_VERSION,
-        "generated_at": utc_now(),
-        "source_parquet_path": str(source),
-        "source_parquet_sha256": source_sha,
-        "decisions_path": str(decisions_path),
-        "decisions_sha256": sha256_file(decisions_path),
-        "accepted_rules": len(accepted),
-        "corrected_tokens": changed_tokens,
-        "affected_documents": len(affected_docs),
-        "counts_by_rule": dict(sorted(corrected_by_rule.items())),
-        "unused_accepted_rules": sorted(unused),
-    }
-    final_meta = dict(source_meta)
-    final_meta["base_tf"] = dict(sorted(base_tf.items()))
-    final_meta["total_tokens"] = total_tokens
-    final_meta["experimental_lemma_repairs"] = repair_meta
-
-    final_metadata = dict(physical_metadata)
-    final_metadata[KORPUS_META_KEY] = json.dumps(final_meta, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    final_schema = source_schema.with_metadata(final_metadata)
-
-    src_stage = pq.ParquetFile(stage_data)
-    writer2 = pq.ParquetWriter(stage_final, final_schema, compression="snappy")
+    else:writer.close();pf.close()
+    meta=dict(source_meta);meta["base_tf"]=dict(sorted(base_tf.items()));meta["total_tokens"]=total_tokens;history=list(meta.get("lemma_repair_history") or []);history.append({"applied_at":utc_now(),"source":str(source),"source_sha256":sha256_file(source),"decisions":str(decisions_path),"decisions_sha256":sha256_file(decisions_path),"accepted_rules":len(accepted),"corrected_tokens":changed_tokens,"sanitized_lemmas":sanitized_lemmas,"empty_after_sanitization":empty_after_sanitization,"corrected_morph_tags":changed_tags,"affected_documents":len(affected),"decision_config_sha256":decision_payload.get("config_sha256")});meta["lemma_repair_history"]=history;md=dict(physical_metadata);md[KORPUS_META_KEY]=json.dumps(meta,ensure_ascii=False,separators=(",",":")).encode("utf-8");final_schema=source_schema.with_metadata(md)
+    staged=pq.ParquetFile(stage);writer2=pq.ParquetWriter(final,final_schema,compression="snappy")
     try:
-        for batch in src_stage.iter_batches(batch_size=max(1, batch_size)):
-            table = pa.Table.from_batches([batch], schema=final_schema)
-            writer2.write_table(table)
-    finally:
-        writer2.close()
-        src_stage.close()
-
-    check = pq.ParquetFile(stage_final)
+        for batch in staged.iter_batches(batch_size=max(1,batch_size)):writer2.write_table(pa.Table.from_batches([batch],schema=final_schema))
+    finally:writer2.close();staged.close()
+    check=pq.ParquetFile(final)
     try:
-        if int(check.metadata.num_rows) != total_docs:
-            raise LemmaRepairError("Walidacja wyniku: zmieniła się liczba dokumentów.")
-        checked_meta = read_korpus_meta(check.schema_arrow)
-        if int(checked_meta.get("total_tokens", -1)) != total_tokens:
-            raise LemmaRepairError("Walidacja wyniku: niespójne total_tokens.")
-        if sum(int(value) for value in checked_meta.get("base_tf", {}).values()) != total_tokens:
-            raise LemmaRepairError("Walidacja wyniku: suma base_tf nie zgadza się z liczbą tokenów.")
-        stored_repair = checked_meta.get("experimental_lemma_repairs") or {}
-        if int(stored_repair.get("corrected_tokens", -1)) != changed_tokens:
-            raise LemmaRepairError("Walidacja wyniku: niespójny licznik korekt.")
-    finally:
-        check.close()
-
-    os.replace(stage_final, output)
-    stage_data.unlink(missing_ok=True)
-    result_sha = sha256_file(output)
-    return {
-        "success": True,
-        "source": str(source),
-        "source_sha256": source_sha,
-        "output": str(output),
-        "output_sha256": result_sha,
-        "documents": total_docs,
-        "tokens": total_tokens,
-        "accepted_rules": len(accepted),
-        "corrected_tokens": changed_tokens,
-        "affected_documents": len(affected_docs),
-        "counts_by_rule": dict(sorted(corrected_by_rule.items())),
-        "unused_accepted_rules": sorted(unused),
-        "rebuild_required": [str(output.with_suffix(".search")), str(output.with_suffix(".dep_cache"))],
-    }
-
+        if check.metadata.num_rows!=total_docs:raise LemmaRepairError("Walidacja liczby dokumentów po korekcie nie powiodła się.")
+    finally:check.close()
+    os.replace(final,output)
+    if stage.exists():stage.unlink()
+    ids={"|".join((r["orth"],r["lemma"],r["upos"].upper(),clean_text(r.get("morph_from")),r["replacement"],clean_text(r.get("morph_to")))) for r in accepted}
+    return {"schema_version":2,"stage":"apply_complete","source":str(source),"output":str(output),"output_sha256":sha256_file(output),"documents":total_docs,"tokens":total_tokens,"accepted_rules":len(accepted),"corrected_tokens":changed_tokens,"sanitized_lemmas":sanitized_lemmas,"empty_after_sanitization":empty_after_sanitization,"corrected_morph_tags":changed_tags,"affected_documents":len(affected),"counts_by_rule":dict(sorted(by_rule.items())),"unused_accepted_rules":sorted(ids-set(by_rule))}
 
 def write_apply_report(path: Path, result: Mapping[str, Any]) -> None:
     lines = [

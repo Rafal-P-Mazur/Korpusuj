@@ -1,13 +1,88 @@
 # -*- coding: utf-8 -*-
-"""Polityki decyzji D3: common-core i konserwatywne common-core-plus."""
+"""Jawny pipeline przygotowania decyzji naprawy lematyzacji."""
 from __future__ import annotations
+
+from dataclasses import dataclass
+
+PIPELINE_VERSION = "1.0.0"
+
+
+@dataclass(frozen=True)
+class LemmaRepairStage:
+    key: str
+    phase: str
+    callable_name: str
+    description: str
+    mutates_parquet: bool = False
+
+
+WORKFLOW_STAGES = (
+    LemmaRepairStage("audit", "analysis", "run_audit", "Agregacja statystyk, SGJP i kandydaci D3."),
+    LemmaRepairStage("base_decisions", "prepare", "engine.main", "Bazowy podział AUTO, REVIEW i REJECTED."),
+    LemmaRepairStage("common_core_plus", "prepare", "_augment_plus", "Bezpieczne rozszerzenie common-core-plus."),
+    LemmaRepairStage("direct_sgjp", "prepare", "augment_direct_sgjp", "Bezpośrednia walidacja form w SGJP."),
+    LemmaRepairStage("contextual_sgjp", "prepare", "augment_contextual_sgjp", "Kontekstowe rozstrzyganie SGJP."),
+    LemmaRepairStage("proper_names", "prepare", "augment_proper_name_repairs", "Nazwy własne w SGJP i PRNG."),
+    LemmaRepairStage("finalize_sgjp", "prepare", "finalize_sgjp_replacements", "Normalizacja finalnych celów SGJP."),
+    LemmaRepairStage("safety", "prepare", "filter_auto_rules", "Filtr bezpieczeństwa reguł AUTO."),
+    LemmaRepairStage("consistency", "prepare", "augment_lemma_consistency_repairs", "Końcowa spójność lematów."),
+    LemmaRepairStage("review_recovery", "prepare", "recover_safe_review_rules", "Odzysk ściśle bezpiecznych reguł REVIEW."),
+    LemmaRepairStage("residual_repairs", "prepare", "augment_residual_repairs", "Domknięcie bezpiecznych resztek."),
+    LemmaRepairStage("final_recount", "prepare", "recount_final_auto_rules", "Końcowe przeliczenie zasięgu reguł."),
+    LemmaRepairStage("preview", "validation", "preview", "Dry-run i kontrola liczników."),
+    LemmaRepairStage("apply", "rewrite", "apply", "Zapis poprawionego Parquetu.", True),
+)
+
+PREPARE_STAGE_KEYS = tuple(stage.key for stage in WORKFLOW_STAGES if stage.phase == "prepare")
+EXPECTED_PREPARE_STAGE_KEYS = (
+    "base_decisions",
+    "common_core_plus",
+    "direct_sgjp",
+    "contextual_sgjp",
+    "proper_names",
+    "finalize_sgjp",
+    "safety",
+    "consistency",
+    "review_recovery",
+    "residual_repairs",
+    "final_recount",
+)
+
+
+def pipeline_manifest() -> tuple[LemmaRepairStage, ...]:
+    """Return the immutable public description of the current workflow."""
+    return WORKFLOW_STAGES
+
+
+def validate_pipeline_manifest() -> None:
+    """Fail fast if keys, order, or destructive-stage declarations drift."""
+    keys = tuple(stage.key for stage in WORKFLOW_STAGES)
+    if len(keys) != len(set(keys)):
+        raise RuntimeError("Powielone klucze etapów lemma repair.")
+    if PREPARE_STAGE_KEYS != EXPECTED_PREPARE_STAGE_KEYS:
+        raise RuntimeError(
+            "Zmieniono kolejność etapów prepare bez aktualizacji kontraktu regresyjnego: "
+            f"{PREPARE_STAGE_KEYS}"
+        )
+    mutating = tuple(stage.key for stage in WORKFLOW_STAGES if stage.mutates_parquet)
+    if mutating != ("apply",):
+        raise RuntimeError(f"Tylko apply może modyfikować Parquet; otrzymano: {mutating}")
+
+
+validate_pipeline_manifest()
+
 import json
 import re
 from collections import defaultdict
 from typing import Any
 from .lemma_repair_models import LemmaRepairError, LemmaRepairOptions, LemmaRepairPaths
-from . import _lemma_repair_policy_engine as engine
-from .lemma_repair_direct_sgjp import augment_direct_sgjp
+from . import lemma_repair_base_decisions as engine
+from .lemma_repair_sgjp import augment_contextual_sgjp, augment_direct_sgjp, finalize_sgjp_replacements
+from .lemma_repair_proper_names import augment_proper_name_repairs
+from .lemma_repair_decisions import filter_auto_rules
+from .lemma_repair_consistency import augment_lemma_consistency_repairs
+from .lemma_repair_decisions import recover_safe_review_rules
+from .lemma_repair_residuals import augment_residual_repairs
 
 
 def _clean(value: Any) -> str:
@@ -179,7 +254,23 @@ def prepare_policy(paths: LemmaRepairPaths, options: LemmaRepairOptions, reporte
         if reporter:
             reporter.status("Bezposrednia walidacja obserwowanych form w SGJP...")
         direct = augment_direct_sgjp(paths, reporter)
-        extra = {**extra, **direct}
+        if reporter:
+            reporter.status("Kontekstowe rozstrzyganie SGJP...")
+        contextual = augment_contextual_sgjp(paths, reporter)
+        if reporter:
+            reporter.status("Walidacja jednotokenowych nazw własnych w SGJP i PRNG...")
+        proper_names = augment_proper_name_repairs(paths, reporter)
+        normalized_sgjp = finalize_sgjp_replacements(paths)
+        filter_auto_rules(paths)
+        consistency = augment_lemma_consistency_repairs(paths, reporter)
+        review_recovery = recover_safe_review_rules(paths, reporter)
+        residual = augment_residual_repairs(paths, reporter)
+        # Finalizacja może zmienić cel lub usunąć reguły puste. Liczniki AUTO
+        # muszą więc zostać policzone jeszcze raz według dokładnie tej samej
+        # hierarchii dopasowania co preview/apply, łącznie z regułami pozycyjnymi.
+        from .lemma_repair_proper_names import recount_final_auto_rules
+        recounted = recount_final_auto_rules(paths)
+        extra = {**extra, **direct, **contextual, **proper_names, **normalized_sgjp, **consistency, **review_recovery, **residual, **recounted}
     else:
         extra = {
             "plus_promoted_rules": 0,

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from .lemma_repair_models import LemmaRepairOptions, LemmaRepairPaths, LemmaRepairResult
 from .lemma_repair_audit import run_audit
-from .lemma_repair_policy import prepare_policy
+from .lemma_repair_pipeline import prepare_policy
 from .lemma_repair_apply import preview, apply
 
 def _status(paths, stage, data):
