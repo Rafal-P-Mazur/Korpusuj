@@ -24,7 +24,7 @@ import pyarrow.parquet as pq
 from . import lemma_repair_analysis as d3
 from .lemma_repair_models import LemmaRepairPaths
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 ALLOWED_UPOS = {"NOUN", "VERB", "ADJ", "ADV"}
 TECHNICAL_KINDS = {"ign", "xxx", "burk", "interp", "brev"}
 
@@ -66,22 +66,55 @@ def choose_resource_case(targets: set[str]) -> tuple[str | None, str]:
     return None, "ambiguous_resource_lemmas"
 
 
+def _explicit_nominal_subtype_conflict(stanza_tag: str, resource_tag: str) -> bool:
+    """Reject only an explicit ncol/pt contradiction hidden by coarse gender matching."""
+    stanza_parts = set(clean(stanza_tag).split(":"))
+    resource_parts = set(clean(resource_tag).split(":"))
+    return (
+        ("ncol" in stanza_parts and "pt" in resource_parts)
+        or ("pt" in stanza_parts and "ncol" in resource_parts)
+    )
+
+
 def unique_full_xpos_target(engine: Any, orth: str, lemma: str, upos: str, morph: str):
     status, analyses = analyses_for_form(engine, orth)
     if status != "ok":
         return None, {"status": status, "analyses": analyses}
     compatible = []
     current_confirmed = False
+    # Confirmation outside the full-XPOS filter is used only by the explicit
+    # ncol/pt safety gate. It must not globally suppress ordinary repairs.
+    current_any_nontechnical_confirmed = any(
+        d3.normalize_lemma(analysis.get("lemma")).casefold() == lemma.casefold()
+        and clean(analysis.get("upos")).upper() == upos
+        and clean(analysis.get("tag")).split(":", 1)[0].casefold() not in TECHNICAL_KINDS
+        for analysis in analyses
+        if d3.normalize_lemma(analysis.get("lemma"))
+    )
+    nominal_subtype_conflicts = []
     for analysis in analyses:
         target = d3.normalize_lemma(analysis.get("lemma"))
         analysis_upos = clean(analysis.get("upos")).upper()
-        kind = clean(analysis.get("tag")).split(":", 1)[0].casefold()
+        analysis_tag = clean(analysis.get("tag"))
+        kind = analysis_tag.split(":", 1)[0].casefold()
         if not target or analysis_upos != upos or kind in TECHNICAL_KINDS:
             continue
-        comparison = d3.compare_tags(morph, analysis.get("tag", ""))
+        if (
+            kind == "subst"
+            and _explicit_nominal_subtype_conflict(morph, analysis_tag)
+            and current_any_nontechnical_confirmed
+        ):
+            nominal_subtype_conflicts.append({
+                "lemma": target,
+                "stanza_tag": morph,
+                "resource_tag": analysis_tag,
+                "reason": "EXPLICIT_NCOL_PT_CONFLICT_CURRENT_LEMMA_CONFIRMED",
+            })
+            continue
+        comparison = d3.compare_tags(morph, analysis_tag)
         if comparison.get("mismatches") or not comparison.get("shared"):
             continue
-        compatible.append({"lemma": target, "tag": clean(analysis.get("tag")), "comparison": comparison})
+        compatible.append({"lemma": target, "tag": analysis_tag, "comparison": comparison})
         if target.casefold() == lemma.casefold():
             current_confirmed = True
     targets = {item["lemma"] for item in compatible if item["lemma"]}
@@ -89,11 +122,15 @@ def unique_full_xpos_target(engine: Any, orth: str, lemma: str, upos: str, morph
     if current_confirmed or target is None:
         return None, {
             "status": status, "current_confirmed": current_confirmed,
-            "compatible": compatible, "case_policy": case_policy,
+            "current_any_nontechnical_confirmed": current_any_nontechnical_confirmed,
+            "compatible": compatible, "nominal_subtype_conflicts": nominal_subtype_conflicts,
+            "case_policy": case_policy,
         }
     return target, {
         "status": status, "current_confirmed": False,
-        "compatible": compatible, "case_policy": case_policy,
+        "current_any_nontechnical_confirmed": current_any_nontechnical_confirmed,
+        "compatible": compatible, "nominal_subtype_conflicts": nominal_subtype_conflicts,
+        "case_policy": case_policy,
     }
 
 
@@ -380,6 +417,16 @@ def augment_tokenwise_repairs(paths: LemmaRepairPaths, reporter: Any = None) -> 
                 continue
             counters["scanned"] += 1
             target, evidence = unique_full_xpos_target(engine, orth, lemma, upos, morph)
+            if evidence.get("nominal_subtype_conflicts"):
+                counters["nominal_subtype_conflicts_blocked"] += 1
+                diagnostics.append({
+                    "orth": orth, "lemma": lemma, "upos": upos, "morph_from": morph,
+                    "classification": "BLOCKED_EXPLICIT_NCOL_PT_CONFLICT",
+                    "decision_source": "TOKENWISE_MORFEUSZ_FULL_XPOS",
+                    "observed_count": int(token_count),
+                    "source_document_count": int(document_count),
+                    "morfeusz_evidence": evidence,
+                })
             if not target or target == lemma:
                 continue
             rule = {
@@ -456,16 +503,18 @@ def augment_tokenwise_repairs(paths: LemmaRepairPaths, reporter: Any = None) -> 
         "brev_policy": "keep underscore multiword; keep any nontechnical analysis of current expansion; otherwise FORM fallback; never infer expansion from FORM brev analysis",
         "technical_tags_not_lexical_confirmation": sorted(TECHNICAL_KINDS),
         "non_propn_case_policy": "prefer actual resource lowercase; otherwise preserve sole resource spelling",
+        "nominal_subtype_policy": "explicit ncol/pt contradiction is blocked only when the current lemma has another nontechnical Morfeusz analysis; unspecified n remains eligible",
     }
     auto_path.write_text(json.dumps(auto, ensure_ascii=False, indent=2), encoding="utf-8")
     report = {
-        "schema_version": 5, "version": VERSION, "counters": dict(counters),
+        "schema_version": 6, "version": VERSION, "counters": dict(counters),
         "rules": promoted, "conflicts": diagnostics, "brev_conflicts": brev_diagnostics,
     }
     paths.artifact_prefix.with_suffix(".tokenwise_repairs.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "tokenwise_scanned": int(counters["scanned"]),
         "tokenwise_morfeusz_promoted_rules": int(counters["morfeusz"]),
+        "tokenwise_nominal_subtype_conflicts_blocked": int(counters["nominal_subtype_conflicts_blocked"]),
         "tokenwise_brev_scanned": int(counters["brev_scanned"]),
         "tokenwise_brev_promoted_rules": int(counters["brev"]),
         "tokenwise_brev_keep_nontechnical": int(counters["brev_keep_any_nontechnical_current_analysis"]),
