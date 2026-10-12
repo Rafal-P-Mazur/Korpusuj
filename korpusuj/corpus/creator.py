@@ -514,7 +514,7 @@ import glob
 
 def process_files_thread_target(status_label, progress_bar_current, progress_bar_total, lbl_size_info, app,
                                 output_parquet_file, metadata_path, model_name,
-                                excel_mappings, enable_ner=True, enable_coreference=True,
+                                stanza_lemmatizer, excel_mappings, enable_ner=True, enable_coreference=True,
                                 resume_mode=False, completion_callback=None):
     """Thin GUI adapter over the shared creator orchestrator."""
     paths = [path for path, var in selected_files.items() if var.get() == 1]
@@ -528,6 +528,7 @@ def process_files_thread_target(status_label, progress_bar_current, progress_bar
     options = CreatorRunOptions(
         input_files=paths, output_parquet_file=output_parquet_file,
         metadata_path=metadata_path, model_name=model_name,
+        stanza_lemmatizer=stanza_lemmatizer,
         excel_mappings=excel_mappings or {}, resume_mode=bool(resume_mode),
         enable_ner=bool(enable_ner),
         enable_coreference=bool(enable_coreference),
@@ -754,12 +755,58 @@ def main(parent_window=None):
         dropdown_fg_color="#4B6CB7",
         width=120, height=35, corner_radius=8
     )
-    option_model.grid(row=0, column=0, columnspan=2, pady=10)
+    option_model.grid(row=0, column=0, columnspan=2, pady=(10, 4))
+
+    # KORPUSUJ_PRODUCTION_LEMMATIZER_20261012
+    # KORPUSUJ_PATCH_LEMMATIZER_GUI_LAYOUT_20261012
+    stanza_lemmatizer_labels = {
+        "Lematyzator Korpusuj": "korpusuj",
+        "Domyślny lematyzator Stanza": "stanza",
+    }
+    stanza_lemmatizer_gui = ctk.StringVar(value="Lematyzator Korpusuj")
+    stanza_lemmatizer_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+    stanza_lemmatizer_frame.grid(
+        row=1, column=0, columnspan=2, pady=(0, 8), sticky="n"
+    )
+    stanza_lemmatizer_label = ctk.CTkLabel(
+        stanza_lemmatizer_frame,
+        text="Lematyzator w pipeline Stanza",
+        font=("Verdana", 11),
+    )
+    stanza_lemmatizer_label.pack(side="left", padx=(0, 8))
+    option_stanza_lemmatizer = ctk.CTkOptionMenu(
+        stanza_lemmatizer_frame,
+        values=list(stanza_lemmatizer_labels),
+        variable=stanza_lemmatizer_gui,
+        font=("Verdana", 12, "bold"),
+        fg_color="#4B6CB7",
+        dropdown_fg_color="#4B6CB7",
+        width=250,
+        height=35,
+        corner_radius=8,
+    )
+    option_stanza_lemmatizer.pack(side="left")
+
+    def _sync_stanza_lemmatizer(*_args):
+        enabled = model.get() == "Stanza"
+        option_stanza_lemmatizer.configure(
+            state="normal" if enabled else "disabled"
+        )
+        stanza_lemmatizer_label.configure(
+            text=(
+                "Lematyzator w pipeline Stanza"
+                if enabled
+                else "Lematyzator (nie dotyczy spaCy)"
+            )
+        )
+
+    model.trace_add("write", _sync_stanza_lemmatizer)
+    _sync_stanza_lemmatizer()
 
     enable_ner_var = ctk.BooleanVar(value=True)
     enable_coreference_var = ctk.BooleanVar(value=True)
     annotation_options_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-    annotation_options_frame.grid(row=1, column=0, columnspan=2, pady=(0, 8))
+    annotation_options_frame.grid(row=2, column=0, columnspan=2, pady=(0, 8))
     enable_ner_checkbox = ctk.CTkCheckBox(
         annotation_options_frame,
         text="Rozpoznawanie nazw własnych (NER)",
@@ -782,13 +829,13 @@ def main(parent_window=None):
         corner_radius=8, height=35,
         fg_color='#4B6CB7', hover_color="#5B7CD9",
     )
-    select_button.grid(row=2, column=0, columnspan=2, pady=10)
+    select_button.grid(row=3, column=0, columnspan=2, pady=10)
 
     # --- PASKI POSTĘPU ---
 
     # 1. Total Label
     lbl_total = ctk.CTkLabel(main_frame, text="Postęp całkowity:", font=("Verdana", 10))
-    lbl_total.grid(row=4, column=0, sticky="w", padx=20)
+    lbl_total.grid(row=5, column=0, sticky="w", padx=20)
 
     # NOWY ELEMENT: Etykieta rozmiaru (np. 15 MB / 100 MB)
     CREATOR_STATUS_WIDTH = 520
@@ -803,21 +850,21 @@ def main(parent_window=None):
         font=("Verdana", 10, "bold"),
         text_color="#555555",
     )
-    lbl_size_info.grid(row=4, column=1, sticky="e", padx=20)
+    lbl_size_info.grid(row=5, column=1, sticky="e", padx=20)
 
     # 2. Total Bar
     progress_bar_total = ctk.CTkProgressBar(main_frame, progress_color="#32CD32")
     progress_bar_total.set(0)
-    progress_bar_total.grid(row=5, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
+    progress_bar_total.grid(row=6, column=0, columnspan=2, padx=20, pady=(0, 10), sticky="ew")
 
     # 3. Current Label
     lbl_current = ctk.CTkLabel(main_frame, text="Bieżący plik:", font=("Verdana", 10))
-    lbl_current.grid(row=6, column=0, columnspan=2, sticky="w", padx=20)
+    lbl_current.grid(row=7, column=0, columnspan=2, sticky="w", padx=20)
 
     # 4. Current Bar
     progress_bar_current = ctk.CTkProgressBar(main_frame)
     progress_bar_current.set(0)
-    progress_bar_current.grid(row=7, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
+    progress_bar_current.grid(row=8, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew")
 
     status_label = ctk.CTkLabel(
         main_frame,
@@ -971,6 +1018,7 @@ def main(parent_window=None):
             args=(
                 status_label, progress_bar_current, progress_bar_total, lbl_size_info, app, output_file, metadata_path,
                 model.get(),
+                stanza_lemmatizer_labels[stanza_lemmatizer_gui.get()],
                 excel_mappings,
                 enable_ner,
                 enable_coreference,
@@ -983,7 +1031,7 @@ def main(parent_window=None):
                                    font=("Verdana", 12, 'bold'),
                                    corner_radius=8, height=35,
                                    fg_color='#4B6CB7', hover_color="#5B7CD9")
-    process_button.grid(row=3, column=0, columnspan=2, pady=10)
+    process_button.grid(row=4, column=0, columnspan=2, pady=10)
 
     # Prawy panel: osobno kontrolki paginacji, osobno scrollowana lista checkboxów
     right_panel = ctk.CTkFrame(app)

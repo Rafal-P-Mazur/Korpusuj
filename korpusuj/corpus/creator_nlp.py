@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 import gc
 import logging
+from korpusuj.runtime_paths import resource_root
 from korpusuj.runtime_paths import configure_ml_cache_environment as _configure_ml_cache_environment_182n
 _configure_ml_cache_environment_182n()
 
@@ -132,8 +133,9 @@ def initialize_stanza(
     models_dir: str,
     enable_ner: bool = True,
     enable_coreference: bool = True,
+    stanza_lemmatizer: str = "korpusuj",
 ):
-    """Load Stanza into ``state`` without tkinter/messagebox dependencies."""
+    """Load Stanza; KORPUSUJ_PRODUCTION_LEMMATIZER_20261012 selects only the lemma model."""
     import os
 
     if stanza_module is None:
@@ -162,13 +164,19 @@ def initialize_stanza(
         processors.append("depparse")
         if enable_coreference:
             processors.append("coref")
-        state.nlp_stanza = stanza_module.Pipeline(
-            "pl",
-            model_dir=stanza_dir,
-            processors=",".join(processors),
-            use_gpu=bool(torch.cuda.is_available()),
-            n_process=1,
-        )
+        lemmatizer = str(stanza_lemmatizer or "korpusuj").strip().lower()
+        if lemmatizer not in {"korpusuj", "stanza"}:
+            raise ValueError(f"Nieznany lematyzator Stanza: {lemmatizer!r}")
+        options = {"model_dir": stanza_dir, "processors": ",".join(processors), "use_gpu": bool(torch.cuda.is_available()), "n_process": 1}
+        if lemmatizer == "korpusuj":
+            model = resource_root() / "temp" / "lemmatizer_korpusuj.pt"
+            if not model.is_file():
+                raise FileNotFoundError(f"Brak produkcyjnego lematyzatora Korpusuj: {model}")
+            options["lemma_model_path"] = str(model)
+            reporter.status("Ładuję lematyzator Korpusuj dla pipeline Stanza...")
+        else:
+            reporter.status("Ładuję domyślny lematyzator Stanza...")
+        state.nlp_stanza = stanza_module.Pipeline("pl", **options)
         reporter.status("Model Stanza załadowany pomyślnie")
         return True
     except Exception as exc:

@@ -90,6 +90,8 @@ nlp_stanza = None
 nlp_spacy = None
 _enable_ner = True
 _enable_coreference = True
+# KORPUSUJ_PRODUCTION_LEMMATIZER_20261012
+_stanza_lemmatizer = "korpusuj"
 
 def _sync_models():
     global nlp_stanza, nlp_spacy
@@ -99,6 +101,7 @@ def initialize_stanza(_label, _app):
     result = _initialize_stanza(
         _model_state, _reporter, stanza_module=stanza, models_dir=_models_dir,
         enable_ner=_enable_ner, enable_coreference=_enable_coreference,
+        stanza_lemmatizer=_stanza_lemmatizer,
     )
     _sync_models(); return bool(result)
 
@@ -275,6 +278,7 @@ def _write_creator_part(dataframe, part_file):
     part_meta = {
         "annotation_layers": _annotation_layers_metadata(),
         "lemma_corrections": _lemma_corrections_metadata(),
+        "nlp_configuration": {"backend": "stanza" if nlp_stanza is not None else "spacy", "stanza_lemmatizer": _stanza_lemmatizer if nlp_stanza is not None else None},
     }
     merged_meta = {
         **existing_meta,
@@ -955,12 +959,13 @@ def _run_creator_job_impl(status_label, progress_bar_current, progress_bar_total
 def run_creator_job(options, reporter=None, *, model_state=None, models_dir=None, cancel_requested=None):
     """Run the existing creator workflow without Tkinter dependencies."""
     global _model_state, _reporter, _models_dir, _active_input_selection
-    global _enable_ner, _enable_coreference, _active_lemma_corrections
+    global _enable_ner, _enable_coreference, _active_lemma_corrections, _stanza_lemmatizer
     _reporter = reporter or NullProgressReporter()
     _model_state = model_state or CreatorModelState()
     _models_dir = str(models_root(models_dir or _option(options, "models_dir", None)))
     _enable_ner = bool(_option(options, "enable_ner", True))
     _enable_coreference = bool(_option(options, "enable_coreference", True))
+    _stanza_lemmatizer = str(_option(options, "stanza_lemmatizer", "korpusuj") or "korpusuj").strip().lower()
     try:
         _active_lemma_corrections = load_lemma_corrections(
             _option(options, "lemma_corrections_path", None)

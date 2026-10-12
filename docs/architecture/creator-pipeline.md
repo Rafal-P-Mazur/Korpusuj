@@ -9,6 +9,7 @@ GUI creatora i `korpusuj.corpus.creator_cli` wywołują `run_creator_job`. Param
 - listę wejść;
 - ścieżkę wynikowego Parquet;
 - wybór Stanza albo spaCy;
+- wybór lematyzatora dla pipeline Stanza (`korpusuj` albo `stanza`);
 - ustawienia NER i koreferencji;
 - opcjonalny XLSX metadanych;
 - mapowanie kolumn XLSX;
@@ -40,6 +41,14 @@ Analiza tworzy tokeny, lematy, tagi, cechy morfologiczne i relacje zależnościo
 
 Jeśli NER jest wyłączony, `ners` zawiera `O` dla każdego tokenu. Jeśli koreferencja jest wyłączona, `corefs` i `coref_mentions` są puste.
 
+## Lematyzator pipeline'u Stanza
+
+`CreatorRunOptions.stanza_lemmatizer` przyjmuje `korpusuj` albo `stanza`; wartością domyślną jest `korpusuj`. Opcja jest interpretowana wyłącznie wtedy, gdy `model_name` wskazuje Stanza.
+
+Inicjalizacja Stanza zachowuje dotychczasowy mechanizm pobierania pakietu polskiego do katalogu modeli. Dla wariantu `korpusuj` `initialize_stanza(...)` przekazuje dodatkowo `lemma_model_path`, wskazujący dołączony do aplikacji zasób `temp/lemmatizer_korpusuj.pt`. Pozostałe procesory są wybierane i ładowane przez Stanza tak samo jak wcześniej. Dla wariantu `stanza` nie jest przekazywana niestandardowa ścieżka i używany jest oficjalny lematyzator z pobranego pakietu.
+
+Wybór lematyzatora jest niezależny od późniejszej korekty lematów. Lematyzator tworzy pierwotną kolumnę `lemmas` podczas anotacji. Korekta lematyzacji gotowego korpusu działa po NLP, analizuje istniejące anotacje i zapisuje nowy Parquet.
+
 ## Korekty lematów
 
 Opcjonalny plik JSON zawiera reguły dopasowujące formę tekstową, lemat i UPOS. Reguła zmienia lemat po wykonaniu NLP. Creator zapisuje hash pliku reguł i statystyki zastosowań w `korpus_meta`.
@@ -63,6 +72,7 @@ CreatorRunOptions(
     output_parquet_file: str,
     metadata_path: str | None = None,
     model_name: str = "stanza",
+    stanza_lemmatizer: str = "korpusuj",
     excel_mappings: dict[str, Any] | None = None,
     resume_mode: bool = False,
     processed_set: set[str] | None = None,
@@ -80,6 +90,7 @@ CreatorRunOptions(
 - `output_parquet_file` jest ścieżką finalnego Parquet. Pliki częściowe są wyprowadzane przez orkiestrator i nie są podawane w opcjach.
 - `metadata_path` wskazuje zewnętrzny XLSX z metadanymi. `None` oznacza brak osobnego arkusza.
 - `model_name` wybiera backend. `run_creator_job()` akceptuje po normalizacji wyłącznie `stanza` albo `spacy`.
+- `stanza_lemmatizer` wybiera `korpusuj` albo `stanza`; dla spaCy wartość nie wpływa na przebieg.
 - `excel_mappings` mapuje pola rozpoznawane przez Korpusuj na nagłówki kolumn arkusza. `None` jest przekazywane dalej jako pusty słownik.
 - `resume_mode` zezwala orkiestratorowi na wykorzystanie zgodnych plików częściowych. Samo `True` nie pomija kontroli warstw anotacji i korekt lematów.
 - `processed_set` jest deklarowane w dataclassie, ale bieżący `run_creator_job()` nie przekazuje tego pola do `_run_creator_job_impl()`. Pole nie steruje więc aktualnym przebiegiem uruchamianym przez tę funkcję.

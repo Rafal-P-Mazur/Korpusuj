@@ -32,10 +32,11 @@ Jeżeli nie masz gotowego pliku `.parquet`:
 
 1. Wybierz **Utwórz korpus**.
 2. Wybierz Stanza albo spaCy.
-3. Zdecyduj, czy korpus ma zawierać rozpoznawanie jednostek nazwanych i koreferencję.
-4. Wybierz pliki źródłowe.
-5. Pozostaw zaznaczone dokumenty przeznaczone do przetworzenia.
-6. Wybierz **Przetwórz pliki** i wskaż miejsce zapisania korpusu.
+3. Jeżeli wybrano Stanza, wybierz **Lematyzator Korpusuj** (wariant domyślny) albo **Domyślny lematyzator Stanza**.
+4. Zdecyduj, czy korpus ma zawierać rozpoznawanie jednostek nazwanych i koreferencję.
+5. Wybierz pliki źródłowe.
+6. Pozostaw zaznaczone dokumenty przeznaczone do przetworzenia.
+7. Wybierz **Przetwórz pliki** i wskaż miejsce zapisania korpusu.
 
 Kreator zapisuje wynik w pliku `.parquet`. Pierwsze użycie wybranych funkcji może wymagać pobrania modeli językowych. Podstawowy polski pakiet Stanza zajmuje około 413 MB. Koreferencja może dodatkowo pobrać adapter o wielkości około 132 MB i model XLM-RoBERTa Large o wielkości około 2,24 GB.
 

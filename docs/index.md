@@ -14,6 +14,7 @@ Dokumentacja obejmuje instalację, pierwsze uruchomienie, obsługę interfejsu g
 - [Język zapytań CQL](cql.md) — składnia zapytań od podstawowych warunków tokenowych po relacje składniowe, NER, koreferencję, filtry zdań i metadane.
 - [Scalanie gotowych korpusów](corpus_merger.md)
 - [Korekta lematyzacji gotowego korpusu](lemma-repair.md) — audyt SGJP, bezpieczne reguły, walidacja i artefakty.
+- [Lematyzacja](lemmatization.md) — Lematyzator Korpusuj, wybór modelu Stanza, wyniki PDB i relacja między lematyzatorem a korektą lematyzacji.
 
 ### Architektura
 

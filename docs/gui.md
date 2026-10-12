@@ -77,7 +77,20 @@ Aby dołączyć plik z metadanymi należy wybrać **Tak** i wskazać odpowiedni 
 * Brak przypisanego wiersza w pliku metadanych nie wstrzymuje przetwarzania danego dokumentu. Zostanie on załadowany z domyślnymi wartościami (np. data ``0000-00-00``).
 * Najlepiej stosować jednolity format daty (np. ``YYYY-MM-DD``). Aplikacja rozpoznaje polskie nazwy miesięcy, jednak ujednolicony zapis gwarantuje poprawne wyświetlanie na późniejszych wykresach.
 
-### Analiza językowa i zapis
+## Wybór lematyzatora w pipeline Stanza
+
+Po wybraniu backendu **Stanza** kreator udostępnia dodatkową listę **Lematyzator w pipeline Stanza**:
+
+- **Lematyzator Korpusuj** — wariant domyślny, wykorzystujący model dołączony do aplikacji;
+- **Domyślny lematyzator Stanza** — oficjalny model dostarczany z polskim pakietem Stanza.
+
+Wybór dotyczy wyłącznie procesora lematyzacji. Tokenizacja, MWT, tagowanie, NER, analiza zależnościowa i koreferencja nadal pochodzą z wybranego pipeline'u Stanza. Po przełączeniu backendu na **spaCy** lista lematyzatora Stanza jest wyłączona i nie wpływa na wynik.
+
+Model Lematyzatora Korpusuj jest składnikiem aplikacji. Pozostałe modele Stanza i spaCy są nadal pobierane przy pierwszym tworzeniu korpusu, jeżeli nie ma ich jeszcze w katalogu modeli.
+
+Szczegóły wariantów, wyniki ewaluacji oraz rozróżnienie między lematyzatorem a późniejszą korektą gotowego korpusu opisano w dokumencie [Lematyzacja](lemmatization.md).
+
+## Analiza językowa i zapis
 
 Przed rozpoczęciem należy wybrać mechanizm analizy językowej: [Stanza](https://stanfordnlp.github.io/stanza/) lub [spaCy](https://spacy.io/). Można także wybrać dodatkowe warstwy przetwarzania tekstu, w tym rozpoznawanie jednostek nazwanych i koreferencję. Koreferencja języka polskiego w spaCy korzysta z [Herference](https://github.com/ipipan/herference).
 

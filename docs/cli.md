@@ -68,6 +68,7 @@ python -m korpusuj.corpus.creator_cli `
 - `--input PATH` — wymagany plik lub katalog wejściowy; opcja powtarzalna.
 - `--output FILE.parquet` — wymagany docelowy plik korpusu.
 - `--model {stanza,spacy}` — mechanizm analizy językowej; domyślnie `stanza`.
+- `--stanza-lemmatizer {korpusuj,stanza}` — lematyzator używany tylko przez pipeline Stanza; domyślnie `korpusuj`.
 - `--metadata FILE.xlsx` — opcjonalny zewnętrzny arkusz metadanych.
 - `--mapping FILE.json` — mapowanie pól Korpusuj na rzeczywiste nazwy kolumn arkusza XLSX.
 - `--resume` — wznowienie zgodnego, wcześniej przerwanego zadania.
@@ -98,6 +99,30 @@ python -m korpusuj.corpus.creator_cli `
 ```
 
 Wyniki Stanza i spaCy mogą się różnić. Korpusy przeznaczone do bezpośredniego porównania najlepiej przygotowywać za pomocą tego samego mechanizmu i tego samego zestawu warstw.
+
+### Wybór lematyzatora Stanza
+
+Dla backendu Stanza domyślnie używany jest **Lematyzator Korpusuj**:
+
+```powershell
+python -m korpusuj.corpus.creator_cli `
+    --input dokumenty `
+    --output korpus_korpusuj.parquet `
+    --model stanza `
+    --stanza-lemmatizer korpusuj
+```
+
+Opcję `--stanza-lemmatizer korpusuj` można pominąć, ponieważ jest domyślna. Aby użyć oficjalnego lematyzatora z pobranego pakietu Stanza:
+
+```powershell
+python -m korpusuj.corpus.creator_cli `
+    --input dokumenty `
+    --output korpus_stanza.parquet `
+    --model stanza `
+    --stanza-lemmatizer stanza
+```
+
+Parametr nie zmienia działania backendu spaCy. Przy porównywaniu korpusów należy zapisać nie tylko backend, lecz również wybrany lematyzator Stanza. Szczegóły i wyniki ewaluacji znajdują się w dokumencie [Lematyzacja](lemmatization.md).
 
 ### NER i koreferencja
 

@@ -70,6 +70,8 @@ class CreatorRunOptions:
     output_parquet_file: str
     metadata_path: str | None = None
     model_name: str = "stanza"
+    # KORPUSUJ_PRODUCTION_LEMMATIZER_20261012
+    stanza_lemmatizer: str = "korpusuj"
     excel_mappings: dict[str, Any] | None = None
     resume_mode: bool = False
     processed_set: set[str] | None = None
@@ -84,7 +86,10 @@ class CreatorRunOptions:
             self.metadata_path = str(self.metadata_path)
         if self.lemma_corrections_path is not None:
             self.lemma_corrections_path = str(self.lemma_corrections_path)
-        self.model_name = str(self.model_name or "stanza")
+        self.model_name = str(self.model_name or "stanza").strip().lower()
+        self.stanza_lemmatizer = str(self.stanza_lemmatizer or "korpusuj").strip().lower()
+        if self.stanza_lemmatizer not in {"korpusuj", "stanza"}:
+            raise ValueError(f"Nieznany lematyzator Stanza: {self.stanza_lemmatizer}")
         self.lemma_repair_mode = str(self.lemma_repair_mode or "off").strip().lower()
         if self.lemma_repair_mode not in {"off", "common-core", "common-core-plus"}:
             raise ValueError(f"Nieznany tryb korekty lematyzacji: {self.lemma_repair_mode}")

@@ -38,6 +38,14 @@ Korekta jest blokowana między innymi wtedy, gdy:
 
 Morfeusz 2 jest analizatorem morfologicznym, a nie kontekstowym dezambiguatorem. Dlatego sama analiza formy nie rozstrzyga homografii. Korpusuj wykorzystuje informacje z korpusu, lecz zachowuje konserwatywne blokady i nie zmienia automatycznie form wieloznacznych.
 
+## Aktualna polityka produkcyjna
+
+Produkcyjny wariant `common-core-plus` łączy bazową analizę paradygmatów z konserwatywnymi regułami tokenowymi. Reguły tokenowe wykorzystują pełny XPOS i analizy Morfeusza, chronią skróty `brev`, nazwy własne oraz przypadki wieloznaczne. Dodatkowe reguły kapitalizacji mogą normalizować zwykłe leksemy na początku zdania tylko wtedy, gdy wszystkie wystąpienia dokładnego selektora są zdaniowopoczątkowe, NER ma wartość `O`, a zasób potwierdza wyłącznie cel różniący się wielkością liter. Osobna reguła zachowuje kapitalizację skrótowca przed łącznikiem, np. w formach typu `HIV-dodatni`.
+
+Przygotowanie decyzji wykonuje następnie konsolidację konfliktów, końcowe przeliczenie trafień i usuwa reguły bez trafień produkcyjnych przed podglądem. Nadal obowiązuje zasada konserwatywna: niejednoznaczność albo sprzeczne dowody prowadzą do `REVIEW` lub odrzucenia, nie do automatycznej zmiany.
+
+Korekta lematyzacji nie uruchamia ponownie Lematyzatora Korpusuj. Może być stosowana również do korpusów przygotowanych innym lematyzatorem, ale jakość i liczba decyzji zależą od całego zestawu anotacji wejściowych, zwłaszcza tokenizacji, UPOS, XPOS i NER.
+
 ## Artefakty analizy
 
 Najważniejsze pliki w katalogu roboczym:

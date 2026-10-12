@@ -2,7 +2,9 @@
 
 ## `build_arg_parser()`
 
-Tworzy parser dla wejść, outputu, backendu NLP, metadanych, mapowania kolumn, wznowienia, warstw NER i koreferencji, korekt lematów oraz formatu statusu.
+Tworzy parser dla wejść, outputu, backendu NLP, lematyzatora Stanza, metadanych, mapowania kolumn, wznowienia, warstw NER i koreferencji, korekt lematów oraz formatu statusu.
+
+`--stanza-lemmatizer {korpusuj,stanza}` wybiera model procesora lemma wyłącznie dla backendu Stanza. Domyślne `korpusuj` oznacza Lematyzator Korpusuj; `stanza` pozostawia oficjalny model z pakietu Stanza. W końcowym statusie pole `stanza_lemmatizer` jest wypełniane dla Stanza, a dla spaCy ma wartość pustą.
 
 `--input` jest opcją powtarzalną. `_expand_input_paths(...)` rozwija katalog do obsługiwanych plików bez rekurencyjnego przechodzenia po podkatalogach. Duplikaty ścieżek są usuwane z zachowaniem kolejności.
 

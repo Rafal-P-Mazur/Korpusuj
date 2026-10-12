@@ -7,6 +7,9 @@ from typing import Any
 from .lemma_repair_models import LemmaRepairOptions, LemmaRepairPaths, LemmaRepairResult
 from .lemma_repair_audit import run_audit
 from .lemma_repair_pipeline import prepare_policy
+from .lemma_repair_exact_morfeusz import augment_exact_morfeusz_propn
+from .lemma_repair_tokenwise import augment_tokenwise_repairs
+from .lemma_repair_finalization import consolidate_and_recount_auto_rules
 from .lemma_repair_apply import preview, apply
 
 def _status(paths, stage, data):
@@ -17,8 +20,16 @@ def _status(paths, stage, data):
 def audit(paths: LemmaRepairPaths, options: LemmaRepairOptions, reporter: Any=None):
     data=run_audit(paths,options,reporter); _status(paths,"audit_complete",data); return LemmaRepairResult(True,"audit_complete",str(paths.status_json()),data)
 
+# KORPUSUJ_PATCH_PRODUCTION_LEMMA_REPAIR_HARDENING_20261010
 def prepare(paths: LemmaRepairPaths, options: LemmaRepairOptions, reporter: Any=None):
-    data=prepare_policy(paths,options,reporter); _status(paths,"decisions_ready",data); return LemmaRepairResult(True,"decisions_ready",str(paths.status_json()),data)
+    data=prepare_policy(paths,options,reporter)
+    data.update(augment_tokenwise_repairs(paths,reporter))
+    data.update(augment_exact_morfeusz_propn(paths,reporter))
+    # All augmentation layers have now run. Consolidate equivalent targets,
+    # move genuine target conflicts to REVIEW, then recount/remove zero-hit rules.
+    data.update(consolidate_and_recount_auto_rules(paths))
+    _status(paths,"decisions_ready",data)
+    return LemmaRepairResult(True,"decisions_ready",str(paths.status_json()),data)
 
 def dry_run(paths: LemmaRepairPaths, options: LemmaRepairOptions, reporter: Any=None):
     data=preview(paths,options.batch_size,reporter); _status(paths,"preview_complete",data); return LemmaRepairResult(True,"preview_complete",str(paths.status_json()),data)

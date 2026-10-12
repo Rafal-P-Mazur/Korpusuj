@@ -28,6 +28,9 @@ WORKFLOW_STAGES = (
     LemmaRepairStage("consistency", "prepare", "augment_lemma_consistency_repairs", "Końcowa spójność lematów."),
     LemmaRepairStage("review_recovery", "prepare", "recover_safe_review_rules", "Odzysk ściśle bezpiecznych reguł REVIEW."),
     LemmaRepairStage("residual_repairs", "prepare", "augment_residual_repairs", "Domknięcie bezpiecznych resztek."),
+    LemmaRepairStage("tokenwise_morfeusz", "prepare", "augment_tokenwise_repairs", "Jednoznaczne tokenowe analizy Morfeusza i ochrona brev."),
+    LemmaRepairStage("exact_propn", "prepare", "augment_exact_morfeusz_propn", "Ścisła korekta PROPN przez XPOS, NER i PRNG."),
+    LemmaRepairStage("auto_finalization", "prepare", "consolidate_and_recount_auto_rules", "Konsolidacja celów i usunięcie reguł zero-hit."),
     LemmaRepairStage("final_recount", "prepare", "recount_final_auto_rules", "Końcowe przeliczenie zasięgu reguł."),
     LemmaRepairStage("preview", "validation", "preview", "Dry-run i kontrola liczników."),
     LemmaRepairStage("apply", "rewrite", "apply", "Zapis poprawionego Parquetu.", True),
@@ -45,6 +48,9 @@ EXPECTED_PREPARE_STAGE_KEYS = (
     "consistency",
     "review_recovery",
     "residual_repairs",
+    "tokenwise_morfeusz",
+    "exact_propn",
+    "auto_finalization",
     "final_recount",
 )
 

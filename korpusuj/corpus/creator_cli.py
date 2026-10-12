@@ -83,6 +83,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--model", choices=["stanza", "spacy"], default="stanza",
         help="NLP backend; default: stanza.",
     )
+    # KORPUSUJ_PRODUCTION_LEMMATIZER_20261012
+    parser.add_argument("--stanza-lemmatizer", choices=["korpusuj", "stanza"], default="korpusuj", help="Lematyzator pipeline Stanza; default: korpusuj.")
     parser.add_argument(
         "--metadata", default=None, metavar="FILE.xlsx",
         help="Optional XLSX metadata file.",
@@ -238,6 +240,7 @@ def _result_payload(result: Any, options: CreatorRunOptions) -> dict[str, Any]:
             "warnings": list(getattr(result, "warnings", []) or []),
         }
     payload["model"] = options.model_name
+    payload["stanza_lemmatizer"] = options.stanza_lemmatizer if options.model_name == "stanza" else None
     payload["enable_ner"] = options.enable_ner
     payload["enable_coreference"] = options.enable_coreference
     payload["resume"] = options.resume_mode
@@ -291,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
             output_parquet_file=str(output),
             metadata_path=metadata_path,
             model_name=args.model,
+            stanza_lemmatizer=args.stanza_lemmatizer,
             excel_mappings=excel_mappings,
             resume_mode=bool(args.resume),
             enable_ner=bool(args.enable_ner),

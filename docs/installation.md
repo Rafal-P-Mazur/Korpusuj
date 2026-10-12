@@ -38,7 +38,9 @@ Rozpakuj całe archiwum ZIP i uruchom znajdujący się w nim plik `Korpusuj.exe`
 
 ## Katalog modeli językowych
 
-Modele Stanza, spaCy, EasyOCR, Sentence Transformers i inne modele używane przez Korpusuj nie są dołączone do instalatora. Są pobierane przy pierwszym użyciu odpowiedniej funkcji.
+Większość dużych modeli Stanza, spaCy, EasyOCR i Sentence Transformers nie jest dołączona do instalatora. Są pobierane przy pierwszym użyciu odpowiedniej funkcji.
+
+Wyjątkiem jest model **Lematyzatora Korpusuj**, który jest dołączony do zasobów aplikacji. Model zastępuje wyłącznie procesor lematyzacji w pipeline Stanza. Nie zastępuje tokenizatora, taggera, parsera, NER ani koreferencji, dlatego pierwsze utworzenie korpusu za pomocą Stanza nadal może wymagać pobrania polskiego pakietu Stanza i modeli koreferencji.
 
 W wersji instalacyjnej katalog modeli wybiera się podczas instalacji. Jeśli na dysku systemowym jest mało wolnego miejsca, można wskazać inny dysk.
 
