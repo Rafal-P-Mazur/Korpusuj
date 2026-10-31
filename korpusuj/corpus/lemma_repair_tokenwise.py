@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Conservative token-level lemma repairs.
 
 Policies:
@@ -23,8 +23,9 @@ import pyarrow.parquet as pq
 
 from . import lemma_repair_analysis as d3
 from .lemma_repair_models import LemmaRepairPaths
+from .lemma_repair_rules import ner_broad
 
-VERSION = "1.4.1"
+VERSION = "1.5.2"
 ALLOWED_UPOS = {"NOUN", "VERB", "ADJ", "ADV"}
 TECHNICAL_KINDS = {"ign", "xxx", "burk", "interp", "brev"}
 
@@ -117,6 +118,23 @@ def unique_full_xpos_target(engine: Any, orth: str, lemma: str, upos: str, morph
         compatible.append({"lemma": target, "tag": analysis_tag, "comparison": comparison})
         if target.casefold() == lemma.casefold():
             current_confirmed = True
+    # Prefer the exact Morfeusz tag kind encoded by complete XPOS.  Coarse
+    # UPOS intentionally merges ger/subst into NOUN and pact/ppas/adj into ADJ;
+    # without this narrowing, valid analyses compete across lemma conventions.
+    # This is a preference, not a new hard requirement: when Morfeusz has no
+    # exact-kind compatible analysis, the previous conservative behavior stays.
+    stanza_kind = clean(morph).split(":", 1)[0].casefold()
+    same_kind = [
+        item for item in compatible
+        if clean(item.get("tag")).split(":", 1)[0].casefold() == stanza_kind
+    ]
+    kind_preference_applied = bool(same_kind)
+    if same_kind:
+        compatible = same_kind
+        current_confirmed = any(
+            clean(item.get("lemma")).casefold() == lemma.casefold()
+            for item in compatible
+        )
     targets = {item["lemma"] for item in compatible if item["lemma"]}
     target, case_policy = choose_resource_case(targets)
     if current_confirmed or target is None:
@@ -124,12 +142,14 @@ def unique_full_xpos_target(engine: Any, orth: str, lemma: str, upos: str, morph
             "status": status, "current_confirmed": current_confirmed,
             "current_any_nontechnical_confirmed": current_any_nontechnical_confirmed,
             "compatible": compatible, "nominal_subtype_conflicts": nominal_subtype_conflicts,
+            "stanza_kind": stanza_kind, "kind_preference_applied": kind_preference_applied,
             "case_policy": case_policy,
         }
     return target, {
         "status": status, "current_confirmed": False,
         "current_any_nontechnical_confirmed": current_any_nontechnical_confirmed,
         "compatible": compatible, "nominal_subtype_conflicts": nominal_subtype_conflicts,
+        "stanza_kind": stanza_kind, "kind_preference_applied": kind_preference_applied,
         "case_policy": case_policy,
     }
 
@@ -188,7 +208,6 @@ def abbreviation_target(engine: Any, orth: str, lemma: str, morph: str):
 
 
 
-# KORPUSUJ_PATCH_CAPITALIZATION_REPAIRS_20261012
 _CASE_ALLOWED_UPOS = {"NOUN", "VERB", "ADJ", "ADV", "INTJ", "PRON"}
 _ACRONYM_PREFIX_RE = re.compile(r"^[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]+$")
 
@@ -255,6 +274,100 @@ def _hyphenated_acronym_target(orth: str, lemma: str):
     return target if target.casefold() == lemma.casefold() and target != lemma else None
 
 
+_ACRONYM_INFLECTION_RE = re.compile(
+    r"^(?P<stem>[A-ZĄĆĘŁŃÓŚŹŻ0-9][A-ZĄĆĘŁŃÓŚŹŻ0-9.]{1,})-(?P<suffix>[a-ząćęłńóśźż]+)$"
+)
+
+# Conservative surface endings for direct inflection of an acronym.  The
+# ending must agree with the complete subst:number:case XPOS selector.
+_ACRONYM_NOUN_SUFFIXES = {
+    ("sg", "gen"): {"a", "u"},
+    ("sg", "acc"): {"a"},
+    ("sg", "dat"): {"owi"},
+    ("sg", "inst"): {"em"},
+    ("sg", "loc"): {"ie", "ze", "u"},
+    ("sg", "voc"): {"ie", "ze", "u"},
+    ("pl", "nom"): {"i", "y"},
+    ("pl", "gen"): {"ów"},
+    ("pl", "acc"): {"ów"},
+    ("pl", "dat"): {"om"},
+    ("pl", "inst"): {"ami"},
+    ("pl", "loc"): {"ach"},
+}
+
+# Regular personal derivative in -owiec.  This path reconstructs the derivative
+# lemma instead of incorrectly reducing PSL-owca / ONR-owcy to PSL / ONR.
+_ACRONYM_OWIEC_SUFFIXES = {
+    ("sg", "nom"): {"owiec"},
+    ("sg", "gen"): {"owca"},
+    ("sg", "acc"): {"owca"},
+    ("sg", "dat"): {"owcowi"},
+    ("sg", "inst"): {"owcem"},
+    ("sg", "loc"): {"owcu"},
+    ("sg", "voc"): {"owcu"},
+    ("pl", "nom"): {"owcy"},
+    ("pl", "gen"): {"owców"},
+    ("pl", "acc"): {"owców"},
+    ("pl", "dat"): {"owcom"},
+    ("pl", "inst"): {"owcami"},
+    ("pl", "loc"): {"owcach"},
+    ("pl", "voc"): {"owcy"},
+}
+
+
+def _subst_number_case(morph: str):
+    parts = clean(morph).casefold().split(":")
+    if len(parts) < 3 or parts[0] != "subst":
+        return None
+    numbers = [value for value in ("sg", "pl") if value in parts[1].split(".")]
+    cases = [
+        value for value in ("nom", "gen", "dat", "acc", "inst", "loc", "voc")
+        if value in parts[2].split(".")
+    ]
+    if len(numbers) != 1 or len(cases) != 1:
+        return None
+    return numbers[0], cases[0]
+
+
+def _hyphenated_acronym_inflection_target(engine: Any, orth: str, morph: str):
+    """Return an XPOS-licensed acronym or regular -owiec derivative lemma."""
+    match = _ACRONYM_INFLECTION_RE.fullmatch(orth)
+    if not match:
+        return None, {"status": "shape_mismatch"}
+    stem, suffix = match.group("stem"), match.group("suffix")
+    if sum(char.isupper() for char in stem) < 2:
+        return None, {"status": "insufficient_uppercase"}
+    number_case = _subst_number_case(morph)
+    if number_case is None:
+        return None, {"status": "unsupported_xpos", "morph": clean(morph)}
+
+    status, analyses = analyses_for_form(engine, orth)
+    segment_orths = {clean(item.get("orth")) for item in analyses}
+    split_confirmed = {stem, "-", suffix}.issubset(segment_orths)
+    evidence = {
+        "status": status, "stem": stem, "suffix": suffix,
+        "morph": clean(morph), "number_case": list(number_case),
+        "segment_orths": sorted(segment_orths), "analyses": analyses,
+        "split_confirmed": split_confirmed,
+    }
+    if status != "tokenization_mismatch" or not split_confirmed:
+        return None, evidence
+
+    if suffix in _ACRONYM_OWIEC_SUFFIXES.get(number_case, set()):
+        evidence["repair_kind"] = "derivative_owiec"
+        evidence["licensed_suffixes"] = sorted(_ACRONYM_OWIEC_SUFFIXES[number_case])
+        return stem + "-owiec", evidence
+    if suffix in _ACRONYM_NOUN_SUFFIXES.get(number_case, set()):
+        evidence["repair_kind"] = "acronym_inflection"
+        evidence["licensed_suffixes"] = sorted(_ACRONYM_NOUN_SUFFIXES[number_case])
+        return stem, evidence
+
+    evidence["status"] = "suffix_xpos_mismatch"
+    evidence["licensed_simple_suffixes"] = sorted(_ACRONYM_NOUN_SUFFIXES.get(number_case, set()))
+    evidence["licensed_owiec_suffixes"] = sorted(_ACRONYM_OWIEC_SUFFIXES.get(number_case, set()))
+    return None, evidence
+
+
 def augment_capitalization_repairs(
     paths: LemmaRepairPaths,
     engine: Any,
@@ -272,10 +385,16 @@ def augment_capitalization_repairs(
     parquet = pq.ParquetFile(paths.parquet)
     columns = set(parquet.schema_arrow.names)
     morph_column = "full_postags" if "full_postags" in columns else ("postags" if "postags" in columns else None)
-    if not morph_column or "sentence_starts" not in columns or "ners" not in columns:
+    # Acronym repairs need NER and XPOS, but not sentence boundaries.
+    # Keep sentence_starts optional so only sentence-initial case recovery is
+    # disabled for older/relemmatized corpora lacking that column.
+    if not morph_column or "ners" not in columns:
         counters["case_scan_unavailable"] += 1
         parquet.close()
         return
+    has_sentence_starts = "sentence_starts" in columns
+    if not has_sentence_starts:
+        counters["sentence_initial_scan_unavailable"] += 1
 
     groups = defaultdict(lambda: {
         "count": 0, "docs": set(), "all_sentence_initial": True,
@@ -284,13 +403,19 @@ def augment_capitalization_repairs(
     })
     doc_id = 0
     try:
-        scan_columns = ["tokens", "lemmas", "upostags", morph_column, "ners", "sentence_starts"]
+        scan_columns = ["tokens", "lemmas", "upostags", morph_column, "ners"]
+        if has_sentence_starts:
+            scan_columns.append("sentence_starts")
         for batch in parquet.iter_batches(batch_size=128, columns=scan_columns):
             data = batch.to_pydict()
-            for tokens, lemmas, upos_rows, morphs, ners, starts in zip(
-                data["tokens"], data["lemmas"], data["upostags"],
-                data[morph_column], data["ners"], data["sentence_starts"],
-            ):
+            row_count = len(data["tokens"])
+            for row_index in range(row_count):
+                tokens = data["tokens"][row_index]
+                lemmas = data["lemmas"][row_index]
+                upos_rows = data["upostags"][row_index]
+                morphs = data[morph_column][row_index]
+                ners = data["ners"][row_index]
+                starts = data["sentence_starts"][row_index] if has_sentence_starts else []
                 start_set = {int(value) for value in (starts or [])}
                 for index, (orth, lemma, upos, morph, ner) in enumerate(zip(
                     tokens or [], lemmas or [], upos_rows or [], morphs or [], ners or []
@@ -299,6 +424,30 @@ def augment_capitalization_repairs(
                     upos, morph, ner = clean(upos).upper(), clean(morph), clean(ner).upper()
                     if not orth or not lemma or not morph:
                         continue
+                    broad_ner = ner_broad(ner)
+                    inflection_target, inflection_evidence = (
+                        _hyphenated_acronym_inflection_target(engine, orth, morph)
+                        if upos == "PROPN" and broad_ner != "O" else (None, {})
+                    )
+                    if inflection_target and inflection_target != lemma:
+                        selector_key = (orth, lemma, upos, morph, broad_ner)
+                        item = groups[selector_key]
+                        item["count"] += 1
+                        item["docs"].add(doc_id)
+                        repair_kind = inflection_evidence.get("repair_kind")
+                        candidate_kind = (
+                            "hyphenated_acronym_owiec"
+                            if repair_kind == "derivative_owiec"
+                            else "hyphenated_acronym_inflection"
+                        )
+                        item["kind"] = item["kind"] or candidate_kind
+                        if item["kind"] != candidate_kind:
+                            item["blocked"]["mixed_policy"] += 1
+                        item["targets"].add(inflection_target)
+                        item["all_ner_o"] = False
+                        item["evidence"].append(inflection_evidence)
+                        continue
+
                     selector_key = (orth, lemma, upos, morph, "O")
                     item = groups[selector_key]
                     item["count"] += 1
@@ -313,6 +462,8 @@ def augment_capitalization_repairs(
                         item["all_ner_o"] = item["all_ner_o"] and ner == "O"
                         continue
 
+                    if not has_sentence_starts:
+                        continue
                     if upos not in _CASE_ALLOWED_UPOS:
                         item["blocked"]["blocked_by_upos"] += 1
                         continue
@@ -348,7 +499,7 @@ def augment_capitalization_repairs(
         if not kind:
             continue
         counters["case_candidates_scanned"] += 1
-        if not item["all_ner_o"]:
+        if kind not in {"hyphenated_acronym_inflection", "hyphenated_acronym_owiec"} and not item["all_ner_o"]:
             counters["case_blocked_by_ner"] += 1
             continue
         if kind == "sentence_initial" and not item["all_sentence_initial"]:
@@ -360,7 +511,25 @@ def augment_capitalization_repairs(
         target = next(iter(item["targets"]))
         if target == lemma:
             continue
-        if kind == "sentence_initial":
+        if kind == "hyphenated_acronym_owiec":
+            classification = "SAFE_HYPHENATED_ACRONYM_DERIVATIVE_OWIEC"
+            source = "TOKENWISE_HYPHENATED_ACRONYM_DERIVATIVE_OWIEC"
+            reasons = [
+                "HYPHENATED_ACRONYM_DERIVATIVE_OWIEC", "XPOS_LICENSED_SUFFIX",
+                "PROPN_ONLY", "NER_REQUIRED", "MORFEUSZ_PREFIX_HYPHEN_SUFFIX_SPLIT",
+                "FORM_PREFIX_PRESERVED",
+            ]
+            reason = "Forma regularnego derywatu od skrótowca została sprowadzona do lematu -owiec."
+        elif kind == "hyphenated_acronym_inflection":
+            classification = "SAFE_HYPHENATED_ACRONYM_INFLECTION"
+            source = "TOKENWISE_HYPHENATED_ACRONYM_INFLECTION"
+            reasons = [
+                "HYPHENATED_ACRONYM_INFLECTION", "XPOS_LICENSED_SUFFIX",
+                "PROPN_ONLY", "NER_REQUIRED", "MORFEUSZ_PREFIX_HYPHEN_SUFFIX_SPLIT",
+                "FORM_PREFIX_PRESERVED",
+            ]
+            reason = "Końcówka fleksyjna zgodna z XPOS została odcięta od skrótowca z FORM."
+        elif kind == "sentence_initial":
             classification = "SAFE_SENTENCE_INITIAL_RESOURCE_CASE"
             source = "TOKENWISE_SENTENCE_INITIAL_CASE"
             reasons = [
@@ -391,7 +560,13 @@ def augment_capitalization_repairs(
         if previous is None:
             existing[key(rule)] = rule
             promoted.append(rule)
-            counters["sentence_initial_case_promoted" if kind == "sentence_initial" else "hyphenated_acronym_case_promoted"] += 1
+            counter_name = {
+                "sentence_initial": "sentence_initial_case_promoted",
+                "hyphenated_acronym": "hyphenated_acronym_case_promoted",
+                "hyphenated_acronym_inflection": "hyphenated_acronym_inflection_promoted",
+                "hyphenated_acronym_owiec": "hyphenated_acronym_owiec_promoted",
+            }[kind]
+            counters[counter_name] += 1
         elif clean(previous.get("replacement")) != target:
             counters["case_conflicts_deferred"] += 1
             diagnostics.append({"rule": rule, "existing": previous})
@@ -524,6 +699,9 @@ def augment_tokenwise_repairs(paths: LemmaRepairPaths, reporter: Any = None) -> 
         "case_candidates_scanned": int(counters["case_candidates_scanned"]),
         "sentence_initial_case_promoted": int(counters["sentence_initial_case_promoted"]),
         "hyphenated_acronym_case_promoted": int(counters["hyphenated_acronym_case_promoted"]),
+        "hyphenated_acronym_inflection_promoted": int(counters["hyphenated_acronym_inflection_promoted"]),
+        "hyphenated_acronym_owiec_promoted": int(counters["hyphenated_acronym_owiec_promoted"]),
+        "sentence_initial_scan_unavailable": int(counters["sentence_initial_scan_unavailable"]),
         "case_blocked_by_ner": int(counters["case_blocked_by_ner"]),
         "case_blocked_by_noninitial_occurrence": int(counters["case_blocked_by_noninitial_occurrence"]),
         "case_blocked_by_resource_or_ambiguity": int(counters["case_blocked_by_resource_or_ambiguity"]),

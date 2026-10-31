@@ -253,25 +253,20 @@ class ReportConfigV7_1:
     output_dir: str
     use_sense_inducer: bool = True
     export_csv: bool = True
-    # SEMANTIC_MUTUAL_KNN_D1: jawna konstrukcja grafu klasteryzacji.
+    # Parametry grafu mutual k-NN używanego do klasteryzacji.
     frame_graph_mode: str = "mutual_knn"
     frame_graph_knn_k: int = 5
     frame_graph_seed: int = 42
     frame_graph_iterations: int = 100
 
 
-# KORPUSUJ_PATCH_D14E_FULL_ARTIFACT_FIELD_AND_REVERSE_FIELD_EXPLANATION
-# KORPUSUJ_PATCH_D14D_FULL_PCA_AND_REMOVE_LEGACY_PRESENTATION_LIMITS
-# KORPUSUJ_PATCH_D14C_COMPACT_RUNTIME_DISCLOSURE
-# KORPUSUJ_PATCH_D14B_METHOD_CONTRACT_CLARIFICATION
-# KORPUSUJ_PATCH_D14_RELATIONAL_MEASURES_AND_REPORT_POLISH
 class AnalyticalSemanticReportBuilderV7_1:
-    # SEMANTIC_METHOD_CONTRACT_V1: metadata-only contract; baseline calculations stay unchanged.
+    # Wersja kontraktu metodologicznego zapisywanego z raportem.
     ANALYSIS_METHOD_VERSION = "semantic_report_v7_2"
-    # D13_REMOVE_THRESHOLDS_AND_HELPER_GRAPH: globality bez progu; usunięto pomocniczy graf progowy raportu.
-    # D11_CHINESE_WHISPERS_CONVERGENCE: CW kończy się po zbieżności; limit iteracji jest zabezpieczeniem.
-    # D9A_REMOVE_FRAME_SALIENCE: brak zagregowanej nośności ramowej; pozostają miary bezpośrednie.
-    # D10_REMOVE_FIELD_SALIENCE_DISCLOSE_CONTRACT: usunięto nośność pola i ujawniono granice pola oraz filtr rozmiaru ram.
+    # Chinese Whispers kończy pracę po osiągnięciu zbieżności;
+    # limit iteracji pozostaje zabezpieczeniem.
+    # Raport prezentuje osobne miary lematów, ram i całego pola,
+    # bez łączenia ich w jeden złożony indeks.
     CLUSTERING_GRAPH_NAME = "mutual_knn_clustering_graph"
 
     def build_method_contract(self, key: str) -> Dict[str, object]:
@@ -347,7 +342,7 @@ class AnalyticalSemanticReportBuilderV7_1:
                 "frame_level": ["typicality", "distinctiveness"],
                 "field_level": ["field_typicality", "globality", "field_distinctiveness"],
                 "descriptive": ["frequency", "similarity_to_lemma"],
-                "aggregated_indices": False,
+                "aggregated_indices": True,
             },
             "export": {"csv": bool(self.config.export_csv)},
         }
@@ -358,14 +353,9 @@ class AnalyticalSemanticReportBuilderV7_1:
         self.output_dir = Path(config.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._globality_index: Optional[Dict[str, float]] = None
-        # SEMANTIC_DIAGNOSTICS_D2: diagnostyka nie zmienia wynikow.
-        # SEMANTIC_FRAME_RELATIONS_D4: centroid opisuje zwiazek, nie czlonkostwo.
-        # SEMANTIC_PRESENTATION_D4B: spojne nazwy, statusy i eksporty.
-        # SEMANTIC_UNIFIED_FRAME_TABLE_D4C: jedna tabela bez redundantnych zakladek.
-        # SEMANTIC_FULL_FIELD_KNN5_D6: klasteryzacja calego pola, domyslne k=5.
-        # SEMANTIC_HIDE_LOCAL_STRENGTH_D6B: kolumna ukryta w HTML; obliczenia i CSV bez zmian.
-        # SEMANTIC_REMOVE_RESOLVED_PARAMETERS_D7: pelna lista sasiadow, relacje bez progu, bez core/periphery.
-        # SEMANTIC_D7_HTML_REPAIR_V3: przywrocono kod JS usuniety przez zbyt szeroka kotwice.
+        # Diagnostyka opisuje wykonanie analizy, ale nie zmienia jej wyników.
+        # Relacja centroidowa opisuje związek lematu z ramą,
+        # lecz nie zmienia członkostwa ani centroidu ramy.
         self._clustering_graph_diagnostics: Dict[str, object] = {}
         self._assignment_diagnostics: Dict[str, Dict[str, object]] = {}
 
@@ -733,7 +723,10 @@ class AnalyticalSemanticReportBuilderV7_1:
                 for fid, centroid in frame_centroids.items()
                 if fid != metric_frame_id
             ]
-            frame_distinctiveness = frame_typicality - (max(other_sims) if other_sims else 0.0)
+            frame_distinctiveness = (
+                frame_typicality - max(other_sims)
+                if other_sims else None
+            )
 
             # ---------------------------
             # NOWE MIARY FIELD-LEVEL
@@ -760,7 +753,7 @@ class AnalyticalSemanticReportBuilderV7_1:
 
                 # stare miary ramowe
                 "typicality": float(frame_typicality),
-                "distinctiveness": float(frame_distinctiveness),
+                "distinctiveness": (float(frame_distinctiveness) if frame_distinctiveness is not None else None),
 
                 # nowe miary field-level
                 "field_typicality": float(field_typicality),
@@ -816,7 +809,10 @@ class AnalyticalSemanticReportBuilderV7_1:
                 "coverage_share": float(len(members_df) / len(word_df)) if len(word_df) else 0.0,
                 "cohesion_pairwise": float(pairwise_mean_cos(member_vectors)),
                 "cohesion_centroid_mean": float(members_df["typicality"].mean()),
-                "distinctiveness_mean": float(members_df["distinctiveness"].mean()),
+                "distinctiveness_mean": (
+                    float(members_df["distinctiveness"].dropna().mean())
+                    if members_df["distinctiveness"].notna().any() else None
+                ),
                 "globality_mean": float(members_df["globality"].mean()),
                 "similarity_centroid_to_lemma": float(
                     cosine_similarity(key_vec, centroid)) if key_vec is not None else 0.0,
@@ -859,10 +855,15 @@ class AnalyticalSemanticReportBuilderV7_1:
             "field_globality_mean": float(np.mean(globalities)) if globalities else 0.0,
             "field_dispersion_mean": float(np.mean(dispersion_vals)) if dispersion_vals else 0.0,
             "field_cohesion_pairwise": float(pairwise_mean_cos(field_vectors)) if field_vectors else 0.0,
-            "frame_cohesion_weighted": float(np.average(frame_df["cohesion_centroid_mean"],
-                                                        weights=frame_df["size"])) if not frame_df.empty else 0.0,
-            "frame_separation_mean": float(
-                frame_df["separation_from_other_frames"].mean()) if not frame_df.empty else 0.0,
+            "frame_cohesion_weighted": (
+                float(np.average(frame_df["cohesion_centroid_mean"], weights=frame_df["size"]))
+                if not frame_df.empty else None
+            ),
+            "frame_separation_mean": (
+                float(frame_df["separation_from_other_frames"].dropna().mean())
+                if (not frame_df.empty and frame_df["separation_from_other_frames"].notna().any())
+                else None
+            ),
             "neighbors_top_k": int(self.bundle.max_neighbors_for(key)),
         }
 
@@ -1089,7 +1090,7 @@ class AnalyticalSemanticReportBuilderV7_1:
         <head>
           <meta charset="UTF-8">
           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Raport semantyczny</title>
+          <title>Analiza pola semantycznego</title>
           <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
           <style>
             :root {
@@ -1118,8 +1119,9 @@ class AnalyticalSemanticReportBuilderV7_1:
             .plot-tab-panel { flex:1; min-height:620px; }
             .plot-tab-panel.active { display:flex; }
             .plot-container { width:100%; height:100%; min-height:620px; }
-            #relations-heatmap { height:360px; }
-            .chart { height:280px; }
+            #relations-heatmap { width:100%; min-height:420px; }
+            .chart { width:100%; min-height:340px; }
+            .plotly-graph-div { max-width:100%; }
             .table-wrap { max-height:420px; overflow:auto; border:1px solid var(--border); border-radius:10px; }
             table { width:100%; border-collapse:collapse; font-size:13px; }
             th, td { padding:8px 10px; border-bottom:1px solid var(--border); text-align:left; vertical-align:middle; }
@@ -1129,7 +1131,7 @@ class AnalyticalSemanticReportBuilderV7_1:
             .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; background:#dbeafe; color:#1d4ed8; }
             .section-note { font-size:12px; color:var(--muted); margin-top:4px; }
             .empty { min-height:240px; display:flex; align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:24px; }
-            .metrics { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:10px; margin-bottom:16px; }
+            .metrics { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; margin-bottom:16px; }
             .metric { padding:12px; border:1px solid var(--border); border-radius:10px; background:#fcfdff; }
             .metric .k { font-size:12px; color:var(--muted); }
             .metric .v { font-size:20px; font-weight:700; margin-top:4px; }
@@ -1158,7 +1160,6 @@ class AnalyticalSemanticReportBuilderV7_1:
         <body>
           <header>
             <div>
-              <div style="font-size: 21px; font-weight: 700;">Raport semantyczny</div>
               <div id="header-meta" class="meta"></div>
             </div>
             <button class="btn" id="method-btn">Metodologia</button>
@@ -1170,22 +1171,22 @@ class AnalyticalSemanticReportBuilderV7_1:
 
             <section class="panel">
               <div class="panel-head">
-                <h2>Globalne rankingi słów</h2>
+                <h2>Globalne rankingi lematów</h2>
                 <div class="section-note">
-                25 lematów o najwyższej centralności i specyficzności w całym analizowanym polu.
+                25 lematów o najwyższej typowości i swoistości dla całego analizowanego pola.
                 </div>
               </div>
               <div class="panel-body">
                 <div class="two-col">
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Najwyższa centralność pola</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
+                      <thead><tr><th>Najwyższa typowość w polu</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
                       <tbody id="global-typ-tbody"></tbody>
                     </table>
                   </div>
                   <div class="table-wrap">
                     <table>
-                      <thead><tr><th>Najwyższa specyficzność pola</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
+                      <thead><tr><th>Najwyższa swoistość dla pola</th><th>Powiązane ramy</th><th>Wynik</th></tr></thead>
                       <tbody id="global-dis-tbody"></tbody>
                     </table>
                   </div>
@@ -1215,7 +1216,7 @@ class AnalyticalSemanticReportBuilderV7_1:
 
               <div class="panel">
                 <div class="panel-head">
-                  <h2 id="detail-title">Rama semantyczna</h2>
+                  <h2 id="detail-title">Rama</h2>
                   <div id="detail-subtitle" class="section-note">Wybierz ramę z mapy lub tabeli poniżej.</div>
                 </div>
                 <div class="panel-body">
@@ -1260,9 +1261,10 @@ class AnalyticalSemanticReportBuilderV7_1:
                     <thead>
                       <tr>
                         <th>Rama</th>
-                        <th>Rozmiar</th>
-                        <th title="Średnia wartość typowości wszystkich elementów należących do ramy. Stanowi wskaźnik wewnętrznej spójności i jednorodności semantycznej grupy.">Zwartość <span class="help">?</span></th>
-                        <th title="Miara dystansu semantycznego między centroidem danej ramy a najbliższym sąsiadującym klastrem. Odzwierciedla stopień odrębności tematycznej.">Separacja <span class="help">?</span></th>
+                        <th>Rozmiar ramy</th>
+                        <th title="Udział członków ramy wśród wszystkich lematów analizowanego pola. Miara przyjmuje wartości od 0 do 1.">Udział ramy w polu <span class="help">?</span></th>
+                        <th title="Średnie podobieństwo członków ramy do jej centroidu. Miara może przyjmować wartości od −1 do 1.">Zwartość ramy <span class="help">?</span></th>
+                        <th title="Jeden minus podobieństwo centroidu ramy do centroidu najbardziej podobnej innej ramy. Miara może przyjmować wartości od 0 do 2.">Separacja ramy <span class="help">?</span></th>
                         <th>Najbliższa rama</th>
                       </tr>
                     </thead>
@@ -1280,12 +1282,12 @@ class AnalyticalSemanticReportBuilderV7_1:
                 </div>
                 <div class="panel-body"><div id="relations-heatmap"></div></div>
               </div>
-            
+
               <div class="panel" id="reverse-field-panel">
                 <div class="panel-head">
                   <h2>Obecność w innych polach</h2>
                   <div class="section-note">
-                    Pokazuje, w polach semantycznych jakich innych pojęć występuje badany lemat oraz jak centralne zajmuje w nich miejsce.
+                    Pokazuje, w polach semantycznych jakich innych pojęć występuje badany lemat oraz jak blisko centrum każdego z tych pól się znajduje.
                   </div>
                 </div>
                 <div class="panel-body" id="reverse-field-body"></div>
@@ -1296,55 +1298,113 @@ class AnalyticalSemanticReportBuilderV7_1:
             <div class="modal-box">
               <span class="close-x" id="close-modal">×</span>
               <h2>Metodologia i interpretacja miar</h2>
-              <!-- D13F_METHODOLOGY_LAYOUT -->
-              <p style="line-height:1.6; color:#334155;">Raport wykorzystuje graf wzajemnego sąsiedztwa oraz reprezentacje wektorowe do wydobycia lokalnych skupień podobieństwa wokół badanej lemy. Podobieństwo wektorowe może odzwierciedlać zarówno podobieństwo kontekstów użycia, jak i podobieństwo budowy wyrazów wynikające z reprezentacji subwordowych modelu FastText.</p>
+              <p style="line-height:1.6; color:#334155;">Raport wykorzystuje graf wzajemnego sąsiedztwa oraz reprezentacje wektorowe do wydobycia lokalnych skupień podobieństwa wokół badanego lematu. Podobieństwo wektorowe może odzwierciedlać zarówno podobieństwo kontekstów użycia, jak i podobieństwo budowy wyrazów wynikające z reprezentacji subwordowych modelu FastText.</p>
 
               <div style="margin:14px 0 18px 0; line-height:1.65; color:#334155;">
                 <p>Każdy lemat <code>w</code> jest reprezentowany przez wektor <code>v(w)</code>. Centroid ramy <code>c(r)</code> reprezentuje wspólne położenie lematów należących do ramy <code>r</code>, a centroid pola <code>c(F)</code> reprezentuje wspólne położenie wszystkich lematów analizowanego pola. Centroid zbioru <code>A</code> jest obliczany jako znormalizowana suma jego wektorów:</p>
                 <p style="font-family:Consolas,monospace; font-size:1.04em; margin:10px 0;"><b>c(A) = Σ<sub>w∈A</sub> v(w) / ||Σ<sub>w∈A</sub> v(w)||</b></p>
               </div>
 
-              <h3 style="margin:18px 0 10px 0;">Miary ramowe</h3>
+              <h3 style="margin:18px 0 8px 0;">Miary poszczególnych lematów</h3>
+              <p style="line-height:1.6; color:#475569; margin:0 0 12px 0;">Poniższe miary są obliczane osobno dla każdego lematu. Opisują jego relację z ramą odniesienia, całym analizowanym polem albo globalnym indeksem sąsiedztwa.</p>
               <div class="method-grid">
                 <div class="method-card">
                   <h4>Typowość ramowa</h4>
                   <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>typicality</code></div>
-                  <p>Określa stopień zgodności kierunku wektora lematu z kierunkiem centroidu ramy odniesienia. Dla członka klastra jest nią własna rama grafowa, a dla lematu spoza klastrów najbliższa rama centroidowa.</p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>T<sub>r</sub>(w) = [v(w) · c(r)] / [||v(w)|| · ||c(r)||]</b></p>
-                  <p>Wyższa wartość oznacza bardziej centralne położenie lematu w ramie.</p>
+                  <p>Pokazuje, jak podobny jest lemat do centrum jego ramy odniesienia. Dla członka klastra jest to centrum ramy, do której należy. Dla lematu oznaczonego jako „Związany z ramą” jest to centrum najbliższej ramy.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>T<sub>r</sub>(w) = cos[v(w), c(r)]</b></p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza większe podobieństwo do centroidu ramy, wartość bliska 0 brak wyraźnej zgodności kierunku, a wartość ujemna kierunek przeciwny do centroidu.</p>
                 </div>
                 <div class="method-card">
                   <h4>Swoistość ramowa</h4>
                   <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>distinctiveness</code></div>
-                  <p>Określa, o ile podobieństwo lematu do ramy odniesienia przewyższa jego największe podobieństwo do innej ramy.</p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>D<sub>r</sub>(w) = T<sub>r</sub>(w) − max<sub>s≠r</sub> {[v(w) · c(s)] / [||v(w)|| · ||c(s)||]}</b></p>
-                  <p>Wartość bliska zeru wskazuje położenie na pograniczu ram. Dla członka klastra wartość ujemna oznacza większe podobieństwo do centroidu innej ramy niż do centroidu własnej ramy. Dla lematu spoza klastrów rama odniesienia jest ramą najbliższą, dlatego swoistość jest nieujemna.</p>
+                  <p>Porównuje dopasowanie lematu do jego ramy odniesienia z dopasowaniem do najlepiej pasującej innej ramy. Od podobieństwa do centrum ramy odniesienia odejmowane jest najwyższe podobieństwo do centrum którejkolwiek z pozostałych ram.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>D<sub>r</sub>(w) = T<sub>r</sub>(w) − max<sub>s≠r</sub> cos[v(w), c(s)]</b></p>
+                  <p>Miara może przyjmować wartości od −2 do 2. Wartość dodatnia oznacza silniejszy związek z ramą odniesienia, wartość bliska 0 położenie na pograniczu ram, a wartość ujemna większe podobieństwo do innej ramy. Przy jednej ramie miara jest nieobliczalna.</p>
                 </div>
-              </div>
-
-              <h3 style="margin:18px 0 10px 0;">Miary całego pola</h3>
-              <div class="method-grid" id="method-grid">
                 <div class="method-card">
-                  <h4>Centralność pola</h4>
+                  <h4>Typowość w polu</h4>
                   <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_typicality</code></div>
-                  <p>Określa stopień zgodności kierunku wektora lematu z kierunkiem centroidu całego pola.</p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>C<sub>F</sub>(w) = [v(w) · c(F)] / [||v(w)|| · ||c(F)||]</b></p>
-                  <p>Wyższa wartość oznacza bardziej centralne położenie lematu w analizowanym polu.</p>
+                  <p>Pokazuje, jak blisko centrum całego analizowanego pola znajduje się dany lemat. Jest równa podobieństwu kosinusowemu lematu do centroidu pola.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>T<sub>F</sub>(w) = cos[v(w), c(F)]</b></p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza bardziej centralne położenie lematu w polu, wartość bliska 0 brak wyraźnej zgodności z jego centrum, a wartość ujemna kierunek przeciwny do centroidu pola.</p>
                 </div>
                 <div class="method-card">
                   <h4>Ogólność</h4>
                   <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>globality</code></div>
-                  <p>Określa rozpowszechnienie lematu na listach sąsiedztwa innych lematów.</p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>G(w) = 0</b>, gdy <b>d<sub>in</sub>(w) ≤ p<sub>50</sub></b></p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>G(w) = log[d<sub>in</sub>(w) − p<sub>50</sub> + 1] / log[d<sub>max</sub> − p<sub>50</sub> + 1]</b>, gdy <b>d<sub>in</sub>(w) &gt; p<sub>50</sub></b></p>
-                  <p><code>d<sub>in</sub>(w)</code> to liczba list sąsiedztwa zawierających lemat <code>w</code>; <code>p<sub>50</sub></code> to mediana tej liczby, a <code>d<sub>max</sub></code> jej wartość maksymalna. Wyższa wartość oznacza lemat występujący w sąsiedztwie większej liczby różnych jednostek.</p>
+                  <p>Pokazuje, na listach sąsiedztwa ilu innych lematów występuje badany lemat. Lematy pojawiające się na wielu różnych listach otrzymują wyższą ogólność. Wyniki nieprzekraczające mediany otrzymują wartość 0, a pozostałe są skalowane logarytmicznie względem najwyższego wyniku.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>G(w) = 0</b>, gdy <b>d<sub>in</sub>(w) ≤ p<sub>50</sub></b>; w przeciwnym razie stosowane jest skalowanie logarytmiczne.</p>
+                  <p>Miara przyjmuje wartości od 0 do 1. Wyższa wartość oznacza obecność lematu na listach sąsiedztwa większej liczby różnych jednostek. Wartość 0 oznacza wynik nieprzekraczający mediany, a nie brak wystąpień.</p>
                 </div>
                 <div class="method-card">
-                  <h4>Specyficzność pola</h4>
+                  <h4>Swoistość dla pola</h4>
                   <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_distinctiveness</code></div>
-                  <p>Określa centralność lematu w analizowanym polu po pomniejszeniu jej odpowiednio do ogólności lematu.</p>
-                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>S<sub>F</sub>(w) = C<sub>F</sub>(w) · [1 − G(w)]</b></p>
-                  <p>Wyższa wartość oznacza lemat centralny dla badanego pola, który nie występuje często na listach sąsiedztwa wielu innych jednostek.</p>
+                  <p>Wskazuje lematy, które znajdują się blisko centrum analizowanego pola, ale stosunkowo rzadko pojawiają się na listach sąsiedztwa innych lematów. Jest obliczana przez pomnożenie typowości w polu przez 1 minus ogólność. Jest to wskaźnik zdefiniowany w aplikacji, a nie standardowa miara semantyki dystrybucyjnej.</p>
+                  <p style="font-family:Consolas,monospace; font-size:1.04em;"><b>S<sub>F</sub>(w) = T<sub>F</sub>(w) · [1 − G(w)]</b></p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość wskazuje lemat położony blisko centrum pola i jednocześnie mniej ogólny; wartość ujemna jest możliwa, gdy typowość w polu jest ujemna.</p>
+                </div>
+              </div>
+
+              <h3 style="margin:20px 0 8px 0;">Miary poszczególnych ram</h3>
+              <p style="line-height:1.6; color:#475569; margin:0 0 12px 0;">Poniższe miary opisują liczebność, udział w polu, wewnętrzną zwartość i oddzielenie każdej zachowanej ramy.</p>
+              <div class="method-grid">
+                <div class="method-card">
+                  <h4>Rozmiar ramy</h4>
+                  <p>Określa liczbę lematów należących do klastra grafowego zachowanego jako rama. Lematy tylko oznaczone jako „Związany z ramą” nie są wliczane do rozmiaru.</p>
+                  <p>Miara przyjmuje wartości całkowite od 3 wzwyż, ponieważ mniejsze klastry nie są przedstawiane jako ramy. Wyższa wartość oznacza liczniejszą ramę.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Udział ramy w polu</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>coverage_share</code></div>
+                  <p>Pokazuje, jaką część analizowanego pola stanowią członkowie danej ramy. Liczbę członków ramy dzieli się przez liczbę wszystkich lematów pola.</p>
+                  <p>Miara przyjmuje wartości od 0 do 1. Wyższa wartość oznacza, że rama obejmuje większą część pola.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Zwartość ramy</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>cohesion_centroid_mean</code></div>
+                  <p>Pokazuje, jak podobni są członkowie ramy do jej centrum. Jest średnią podobieństwa wszystkich członków ramy do jej centroidu.</p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza większą koncentrację członków wokół centroidu ramy.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Separacja ramy</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>separation_from_other_frames</code></div>
+                  <p>Pokazuje, jak bardzo dana rama różni się od najbardziej podobnej do niej innej ramy. Od 1 odejmowane jest podobieństwo kosinusowe centroidów obu ram.</p>
+                  <p>Miara może przyjmować wartości od 0 do 2. Wyższa wartość oznacza większe oddalenie ram, a niższa ich większe podobieństwo. Przy jednej ramie miara jest nieobliczalna.</p>
+                </div>
+              </div>
+
+              <h3 style="margin:20px 0 8px 0;">Miary całego pola</h3>
+              <p style="line-height:1.6; color:#475569; margin:0 0 12px 0;">Poniższe miary podsumowują właściwości całego analizowanego pola oraz utworzonych w nim ram.</p>
+              <div class="method-grid">
+                <div class="method-card">
+                  <h4>Średnie podobieństwo do lematu centralnego</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_similarity_mean</code></div>
+                  <p>Pokazuje, jak podobne są przeciętnie lematy pola do lematu centralnego. Program oblicza podobieństwo każdego lematu pola do lematu centralnego, a następnie uśrednia wyniki.</p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza większą przeciętną bliskość elementów pola do lematu centralnego.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Średnia ogólność pola</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_globality_mean</code></div>
+                  <p>Pokazuje, czy pole składa się głównie z lematów występujących na listach sąsiedztwa wielu innych jednostek. Jest średnią wartości ogólności wszystkich lematów pola.</p>
+                  <p>Miara przyjmuje wartości od 0 do 1. Wyższa wartość oznacza większy udział jednostek występujących na listach sąsiedztwa wielu różnych lematów.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Spójność pola</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>field_cohesion_pairwise</code></div>
+                  <p>Pokazuje, jak podobne są do siebie nawzajem lematy należące do analizowanego pola. Program oblicza podobieństwo kosinusowe dla każdej pary lematów pola, a następnie uśrednia wyniki. Lemat centralny nie jest uwzględniany w tych parach.</p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza większe wzajemne podobieństwo elementów pola.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Ważona zwartość ram</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>frame_cohesion_weighted</code></div>
+                  <p>Pokazuje przeciętną zwartość wszystkich zachowanych ram. Ramy mają przy obliczaniu średniej wagę odpowiadającą liczbie swoich członków, dlatego większe ramy silniej wpływają na wynik.</p>
+                  <p>Miara może przyjmować wartości od −1 do 1. Wyższa wartość oznacza większą przeciętną jednorodność ram. Bez zachowanych ram miara jest nieobliczalna.</p>
+                </div>
+                <div class="method-card">
+                  <h4>Średnia separacja ram</h4>
+                  <div style="font-size:.88em; color:#64748b; margin-bottom:8px;"><code>frame_separation_mean</code></div>
+                  <p>Pokazuje przeciętne oddalenie ram od najbardziej podobnych do nich innych ram. Dla każdej ramy program oblicza separację od najbardziej podobnej innej ramy, a następnie uśrednia wyniki.</p>
+                  <p>Miara może przyjmować wartości od 0 do 2. Wyższa wartość oznacza większe przeciętne oddalenie ram. Przy mniej niż dwóch ramach miara jest nieobliczalna.</p>
                 </div>
               </div>
 
@@ -1369,35 +1429,35 @@ class AnalyticalSemanticReportBuilderV7_1:
 
             function buildCards() {
               const o = DATA.overview;
-              
+
               // Główne karty podsumowujące
               const cards = [
-                { 
-                  label: 'Lema Centralna', value: o.lemma, 
-                  tip: 'Główny wyraz będący osią analizy i punktem odniesienia, wokół którego zbudowano całą przestrzeń semantyczną.' 
+                {
+                  label: 'Lemat centralny', value: o.lemma,
+                  tip: 'Lemat będący punktem wyjścia analizy. Pole tworzą jego najbliżsi sąsiedzi zapisani w modelu.'
                 },
-                { 
-                  label: 'Liczba wydzielonych ram', value: o.liczba_ram, 
-                  tip: 'Liczba zidentyfikowanych, odrębnych klastrów znaczeniowych. Wyższa liczba sugeruje silną wieloznaczność (polisemię) lemy lub jej występowanie w wielu bardzo różnych kontekstach.' 
+                {
+                  label: 'Liczba ram', value: o.liczba_ram,
+                  tip: 'Liczba klastrów liczących co najmniej trzy lematy, zachowanych jako ramy po grupowaniu metodą Chinese Whispers. Mniejsze klastry nie są przedstawiane jako ramy.'
                 },
-                { 
-                  label: 'Wyselekcjonowani sąsiedzi', value: o.selected_neighbors, 
-                  tip: 'Słowa włączone do ostatecznej analizy grafowej. Mniejsza liczba oznacza, że lema ma wysoce specyficzne otoczenie i niewiele słów zdołało przekroczyć wymagany próg podobieństwa.' 
+                {
+                  label: 'Sąsiedzi uwzględnieni w analizie', value: o.selected_neighbors,
+                  tip: 'Liczba najbliższych sąsiadów lematu uwzględnionych przy tworzeniu pola. Może być mniejsza od liczby dostępnych sąsiadów.'
                 },
-                { 
-                  label: 'Średnie podobieństwo pola', value: fmt(o.field_similarity_mean), 
-                  tip: 'Średnie podobieństwo kosinusowe sąsiadów do lemy centralnej. Wynik powyżej 0.6 oznacza bardzo silnie powiązane pole, a niższy niż 0.4 sugeruje luźniejsze skojarzenia.' 
+                {
+                  label: 'Średnie podobieństwo do lematu centralnego', value: fmt(o.field_similarity_mean),
+                  tip: 'Średnie podobieństwo kosinusowe lematów pola do lematu centralnego. Miara może przyjmować wartości od −1 do 1.'
                 },
-                { 
-                  label: 'Średnia ogólność pola', value: fmt(o.field_globality_mean), 
-                  tip: 'Średni poziom ogólności (hubness) słów w polu. Wysoki wynik (>0.5) oznacza obecność słów potocznych i pospolitych, podczas gdy niski wskazuje na pole wysoce specyficzne i niszowe.' 
+                {
+                  label: 'Średnia ogólność pola', value: fmt(o.field_globality_mean),
+                  tip: 'Średnia ogólność lematów pola, wyznaczana na podstawie ich obecności na zapisanych listach sąsiedztwa innych lematów. Miara przyjmuje wartości od 0 do 1.'
                 },
-                { 
-                  label: 'Średnia separacja ram', value: fmt(o.frame_separation_mean), 
-                  tip: 'Średni dystans między centroidami wydzielonych ram. Wysoka separacja to wyraźne, nieprzenikające się znaczenia, a niska sygnalizuje płynne granice między kontekstami.' 
+                {
+                  label: 'Średnia separacja ram', value: fmt(o.frame_separation_mean),
+                  tip: 'Średnia odległość każdej ramy od najbardziej podobnej innej ramy, obliczana jako 1 minus podobieństwo kosinusowe centroidów. Miara może przyjmować wartości od 0 do 2; przy jednej ramie miara jest nieobliczalna.'
                 }
               ];
-              
+
               document.getElementById('summary-cards').innerHTML = cards.map(c => `
                 <div class="card">
                   <div class="label" style="display:flex; align-items:center;">
@@ -1405,24 +1465,24 @@ class AnalyticalSemanticReportBuilderV7_1:
                   </div>
                   <div class="value">${c.value}</div>
                 </div>`).join('');
-            
+
               // Karty techniczne
               const techCards = [
-                { 
-                  label: 'Frekwencja lemy', value: o.lemma_freq, 
-                  tip: 'Całkowita liczba wystąpień lemy w zbadanym korpusie. Rzadkie lemy mogą generować mniej stabilne modele wektorowe, co wymaga ostrożniejszej interpretacji ram.' 
+                {
+                  label: 'Frekwencja lematu', value: o.lemma_freq,
+                  tip: 'Liczba wystąpień lematu w korpusie wykorzystanym do trenowania modelu. Reprezentacja rzadszego lematu może być mniej stabilna.'
                 },
-                { 
-                  label: 'Spójność pola (pairwise)', value: fmt(o.field_cohesion_pairwise), 
-                  tip: 'Średnie podobieństwo kosinusowe między wszystkimi parami wektorów w przestrzeni. Wysoka spójność potwierdza, że zbiór jest silnie zogniskowany wokół wspólnego tematu.' 
+                {
+                  label: 'Spójność pola', value: fmt(o.field_cohesion_pairwise),
+                  tip: 'Średnie podobieństwo kosinusowe między wszystkimi parami lematów pola, bez lematu centralnego. Miara może przyjmować wartości od −1 do 1.'
                 },
-                { 
-                  label: 'Ważona zwartość ram', value: fmt(o.frame_cohesion_weighted), 
-                  tip: 'Średnia spójność wewnętrzna ram ważona ich rozmiarem. Wysoka wartość (>0.7) wskazuje na precyzyjne zgrupowanie i dużą jednorodność wyłonionych klastrów.' 
+                {
+                  label: 'Ważona zwartość ram', value: fmt(o.frame_cohesion_weighted),
+                  tip: 'Średnie podobieństwo lematów do centroidów ich ram, ważone liczebnością ram. Miara może przyjmować wartości od −1 do 1.'
                 },
-                { 
-                  label: 'Parametr Top-K', value: o.neighbors_top_k, 
-                  tip: 'Zdefiniowany w konfiguracji analizy górny limit liczby pobieranych najbliższych sąsiadów.' 
+                {
+                  label: 'Dostępni sąsiedzi lematu', value: o.available_neighbors_for_lemma,
+                  tip: 'Liczba sąsiadów dostępnych dla badanego lematu w zapisanym modelu. Nie jest to miara analityczna pola.'
                 },
               ];
 
@@ -1503,7 +1563,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                 x: framesCoords.map(f => f.x),
                 y: framesCoords.map(f => f.y),
                 customdata: framesCoords.map(f => f.frame_id),
-                text: framesCoords.map(f => `<b>${formatFrameDisplayName(f)}</b><br>Rank: ${f.frame_rank}<br>Liczba słów: ${f.size}<br>Zwartość: ${fmt(f.cohesion)}<br>Separacja: ${fmt(f.separation)}`),
+                text: framesCoords.map(f => `<b>${formatFrameDisplayName(f)}</b><br>Numer ramy: R${f.frame_rank}<br>Liczba lematów: ${f.size}<br>Zwartość: ${fmt(f.cohesion)}<br>Separacja ramy: ${fmt(f.separation)}`),
                 mode: 'markers', hoverinfo: 'text',
                 marker: {
                   size: framesCoords.map(f => Math.max(18, Math.min(56, 12 + f.size * 1.6))),
@@ -1545,10 +1605,10 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
               if (rootCoords) {
                 wordsTraces.push({
                   x: [rootCoords.x], y: [rootCoords.y],
-                  text: [`<b>${rootCoords.lemma}</b><br>Lema centralna`],
+                  text: [`<b>${rootCoords.lemma}</b><br>Lemat centralny`],
                   hoverinfo: 'text', mode: 'markers',
                   marker: { symbol: 'star', size: 18, color: '#0f172a', line: { color: 'white', width: 2 } },
-                  name: 'Lema'
+                  name: 'Lemat'
                 });
               }
               Plotly.newPlot('words-map', wordsTraces, mapLayout, {responsive:true, displaylogo:false});
@@ -1561,15 +1621,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
             }
             function formatFrameDisplayName(frame) {
               if (!frame) return '—';
-            
-              const label = String(frame.frame_label || '').trim();
-              const type = String(frame.frame_type || 'semantic').toLowerCase();
-            
-              if (type === 'contextual') {
-                return `Rama kontekstowa: ${label}`;
-              }
-            
-              return `Rama semantyczna: ${label}`;
+              return String(frame.frame_label || '').trim() || `Rama ${frame.frame_rank || frame.frame_id}`;
             }
 
 
@@ -1584,6 +1636,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                       <b>${formatFrameDisplayName(f)}</b>
                     </td>
                   <td>${f.size}</td>
+                  <td>${fmt(f.coverage_share)}</td>
                   <td>${fmt(f.cohesion_centroid_mean)}</td>
                   <td>${f.separation_from_other_frames == null ? '—' : fmt(f.separation_from_other_frames)}</td>
                   <td>${f.nearest_frame_id
@@ -1603,23 +1656,54 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                 if (target) target.innerHTML = '<div class="info-box">Macierz relacji nie jest dostępna, ponieważ biblioteka Plotly nie została załadowana.</div>';
                 return;
               }
-              const ids = [...new Set(DATA.frame_similarity_df.map(x => x.frame_label_a))];
-              if (ids.length === 0) return;
-              const matrix = ids.map(id_a => ids.map(id_b => {
-                const match = DATA.frame_similarity_df.find(x => x.frame_label_a === id_a && x.frame_label_b === id_b);
+              const frames = [...DATA.frame_df].sort((a,b) => a.frame_rank - b.frame_rank);
+              if (frames.length === 0) return;
+              const shortLabels = frames.map(f => `R${f.frame_rank}`);
+              const fullLabels = frames.map(f => formatFrameDisplayName(f));
+              const matrix = frames.map(frameA => frames.map(frameB => {
+                if (String(frameA.frame_id) === String(frameB.frame_id)) return 1;
+                const match = DATA.frame_similarity_df.find(x =>
+                  (String(x.frame_id_a) === String(frameA.frame_id) && String(x.frame_id_b) === String(frameB.frame_id)) ||
+                  (String(x.frame_id_b) === String(frameA.frame_id) && String(x.frame_id_a) === String(frameB.frame_id)) ||
+                  (x.frame_label_a === frameA.frame_label && x.frame_label_b === frameB.frame_label) ||
+                  (x.frame_label_b === frameA.frame_label && x.frame_label_a === frameB.frame_label)
+                );
                 return match ? match.centroid_similarity : 0;
               }));
+              const customdata = frames.map((frameA, i) => frames.map((frameB, j) => [fullLabels[i], fullLabels[j]]));
+              const heatHeight = Math.max(420, 240 + 28 * frames.length);
               Plotly.newPlot('relations-heatmap', [{
-                z: matrix, x: ids, y: ids, type: 'heatmap', colorscale: 'Blues', zmin: 0, zmax: 1,
-              }], { margin: { l:140, r:20, t:10, b:120 }, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)' }, {responsive:true, displaylogo:false});
+                z: matrix, x: shortLabels, y: shortLabels, customdata,
+                type: 'heatmap', colorscale: 'Blues', zmin: 0, zmax: 1,
+                text: matrix.map(row => row.map(v => fmt(v))), texttemplate: '%{text}',
+                hovertemplate: '%{customdata[0]} ↔ %{customdata[1]}<br>Podobieństwo: %{z:.3f}<extra></extra>'
+              }], {
+                height: heatHeight,
+                margin:{l:65,r:35,t:20,b:65},
+                xaxis:{automargin:true}, yaxis:{automargin:true},
+                paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)'
+              }, {responsive:true, displaylogo:false});
+
+              const target = document.getElementById('relations-heatmap');
+              let legend = document.getElementById('relations-frame-legend');
+              if (!legend) {
+                legend = document.createElement('div');
+                legend.id = 'relations-frame-legend';
+                legend.className = 'section-note';
+                legend.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px 14px;margin-top:12px;';
+                target.insertAdjacentElement('afterend', legend);
+              }
+              legend.innerHTML = frames.map((f, i) => `<div><b>${shortLabels[i]}</b> — ${fullLabels[i]}</div>`).join('');
             }
 
             function renderBarChart(targetId, words, metricKey, color, title) {
               const labels = words.map(x => x.lemma).slice().reverse();
               const values = words.map(x => x[metricKey]).slice().reverse();
-              Plotly.react(targetId, [{ x: values, y: labels, type: 'bar', orientation: 'h', marker: { color } }], {
-                margin: { l: 100, r: 20, t: 20, b: 40 }, xaxis: { title },
-                paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)'
+              const maxLabel = Math.max(8, ...labels.map(label => String(label).length));
+              const leftMargin = Math.min(260, Math.max(110, 8 * maxLabel));
+              const chartHeight = Math.max(340, 95 + 29 * Math.max(labels.length, 1));
+              Plotly.react(targetId, [{x:values,y:labels,type:'bar',orientation:'h',marker:{color},hovertemplate:'%{y}<br>'+title+': %{x:.3f}<extra></extra>'}], {
+                height:chartHeight, margin:{l:leftMargin,r:35,t:20,b:55}, xaxis:{title,automargin:true}, yaxis:{automargin:true}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)'
               }, {responsive:true, displaylogo:false});
             }
 
@@ -1634,16 +1718,18 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
               document.getElementById('detail-empty').style.display = 'none';
               document.getElementById('detail-content').style.display = 'block';
               document.getElementById('detail-title').textContent = formatFrameDisplayName(frame);
-              document.getElementById('detail-subtitle').textContent = `Rank: ${frame.frame_rank} · Anchory: ${(frame.anchors || []).join(', ')}`;
+              document.getElementById('detail-subtitle').textContent = `Rama R${frame.frame_rank}`;
 
               const mHtml = [
                 `<div class="metric"><div class="k">Rozmiar ramy</div><div class="v">${frame.size}</div><div class="i">Liczba lematów należących do skupienia grafowego</div></div>`,
-                `<div class="metric"><div class="k">Zwartość ramy</div><div class="v">${fmt(frame.cohesion_centroid_mean)}</div><div class="i">Średnie podobieństwo członków do centroidu</div></div>`,
+                `<div class="metric"><div class="k">Udział ramy w polu</div><div class="v">${fmt(frame.coverage_share)}</div><div class="i">Udział członków ramy wśród lematów pola; wartości od 0 do 1</div></div>`,
+                `<div class="metric"><div class="k">Zwartość ramy</div><div class="v">${fmt(frame.cohesion_centroid_mean)}</div><div class="i">Średnie podobieństwo członków do centroidu; wartości od −1 do 1</div></div>`,
+                `<div class="metric"><div class="k">Separacja ramy</div><div class="v">${fmt(frame.separation_from_other_frames)}</div><div class="i">1 minus podobieństwo do najbardziej podobnej innej ramy; wartości od 0 do 2</div></div>`,
               ].join('');
               document.getElementById('frame-metrics').innerHTML = mHtml;
 
               const coreWords = [...members].sort((a,b) => b.typicality - a.typicality).slice(0, 10);
-              const distWords = [...members].sort((a,b) => b.distinctiveness - a.distinctiveness).slice(0, 10);
+              const distWords = [...members].filter(w => w.distinctiveness !== null && w.distinctiveness !== undefined).sort((a,b) => b.distinctiveness - a.distinctiveness).slice(0, 10);
               const color = getFrameColor(frame.frame_rank);
               renderBarChart('core-chart', coreWords, 'typicality', color, 'Typowość');
               renderBarChart('distinctive-chart', distWords, 'distinctiveness', color, 'Swoistość');
@@ -1684,23 +1770,23 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
             function renderReverseField() {
               const container = document.getElementById('reverse-field-body');
               const data = DATA.reverse_field_df || [];
-            
-            
+
+
               if (data.length === 0) {
                 container.innerHTML = `
                   <div class="info-box">
-                    Lema nie została znaleziona jako istotny element w polach innych pojęć.
+                    Lemat nie został znaleziony jako istotny element w polach innych pojęć.
                   </div>`;
                 return;
               }
-            
+
               container.innerHTML = `
                 <div class="table-wrap">
                   <table>
                     <thead>
                       <tr>
                         <th>Pojęcie nadrzędne</th>
-                        <th title="Bliskość lemy względem centrum znaczeniowego danego pojęcia.">Typowość w polu</th>
+                        <th title="Bliskość lematu względem centrum znaczeniowego danego pojęcia.">Typowość w polu</th>
                         <th>Podobieństwo</th>
                         <th>Rola</th>
                       </tr>
@@ -1708,18 +1794,18 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                     <tbody id="reverse-tbody"></tbody>
                   </table>
                 </div>`;
-            
+
               const tbody = document.getElementById('reverse-tbody');
               tbody.innerHTML = data.map(row => {
                 const isCore = row.role_hint === 'core';
-                const badgeStyle = isCore 
-                  ? 'background:#d1fae5; color:#065f46; border: 1px solid #a7f3d0;' 
+                const badgeStyle = isCore
+                  ? 'background:#d1fae5; color:#065f46; border: 1px solid #a7f3d0;'
                   : 'background:#f1f5f9; color:#475569; border: 1px solid #e2e8f0;';
-                
+
                 return `
                   <tr>
                     <td>
-                      <b>${row.parent_lemma}</b> 
+                      <b>${row.parent_lemma}</b>
                       <span style="color:var(--muted); font-size:11px; margin-left:4px;">(freq: ${row.parent_freq})</span>
                     </td>
                     <td>
@@ -1728,7 +1814,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                     <td>${fmt(row.similarity_to_parent)}</td>
                     <td>
                       <span class="badge" style="${badgeStyle} border-radius:4px; text-transform:uppercase; font-size:10px;">
-                        ${row.role_hint}
+                        ${row.role_hint === 'core' ? 'rdzeń' : row.role_hint === 'context' ? 'kontekst' : row.role_hint}
                       </span>
                     </td>
                   </tr>`;
@@ -1736,23 +1822,21 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
             }
 
             function initTabsAndModals() {
-              // Nasłuch na body - zadziała zawsze, niweluje błędy renderowania
+              // Delegowana obsługa kliknięć zakładek.
               document.body.addEventListener('click', (e) => {
                 const btn = e.target.closest('.tab-btn');
-                if (!btn) return; // Jeśli kliknięto coś innego, ignoruj
-            
+                if (!btn) return;
+
                 const target = btn.getAttribute('data-target');
                 if (!target) return;
-            
-                // Pobieramy grupę zakładek, do której należy przycisk (np. "detail" albo "pca")
+
                 const group = btn.getAttribute('data-tab-group');
                 if (!group) return;
-            
-                // Kasujemy klasę active tylko dla elementów posiadających tę samą grupę!
+
+                // Zmień aktywny panel tylko w bieżącej grupie zakładek.
                 document.querySelectorAll(`.tab-btn[data-tab-group="${group}"]`).forEach(x => x.classList.remove('active'));
                 document.querySelectorAll(`.tab-panel[data-tab-group="${group}"]`).forEach(p => p.classList.remove('active'));
-            
-                // Odpalamy klikniętą zakładkę
+
                 btn.classList.add('active');
                 const targetPanel = document.getElementById(target);
                 if (targetPanel) {
@@ -1760,7 +1844,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
                 }
                 setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
               });
-            
+
               // Modale
               document.getElementById('method-btn').addEventListener('click', () => { document.getElementById('modal').style.display = 'flex'; });
               document.getElementById('close-modal').addEventListener('click', () => { document.getElementById('modal').style.display = 'none'; });
@@ -1860,7 +1944,7 @@ xaxis: { showticklabels:false, showgrid:false, zeroline:false },
               runSection('zakładki i modale', initTabsAndModals);
               runSection('nagłówek', () => {
                 const header = document.getElementById('header-meta');
-                if (header) header.textContent = `Lema: ${DATA.overview.lemma} · Ramy: ${DATA.overview.liczba_ram}`;
+                if (header) header.textContent = `Lemat: ${DATA.overview.lemma} · Ramy: ${DATA.overview.liczba_ram}`;
               });
               runSection('karty', buildCards);
               runSection('globalne rankingi', renderGlobalRankings);

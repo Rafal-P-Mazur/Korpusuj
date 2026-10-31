@@ -4,7 +4,7 @@
 
 `semantic_engine = SemanticEngine()` powstaje podczas importu `engine.py`. Graf eksploracyjny korzysta z metod `SemanticEngine` do pobierania i kontekstowego porządkowania kandydatów. Raport jest uruchamiany przez `SemanticEngine.build_semantic_report(...)` i generowany przez `reports_analytical_v7_1.py`.
 
-Generator raportu buduje graf mutual k-NN, a do jego podziału wykorzystuje `SenseInducer.chinese_whispers(...)`. Następnie oblicza centroidy, miary ramowe i polowe, relacje lematów spoza klastrów oraz podobieństwa między centroidami.
+Generator raportu buduje graf mutual k-NN, a do jego podziału wykorzystuje `SenseInducer.chinese_whispers(...)`. Następnie oblicza centroidy, miary poszczególnych lematów, ram i całego pola, relacje lematów spoza klastrów oraz podobieństwa między centroidami.
 
 ### Profil słowa
 

@@ -43,15 +43,36 @@ Domyślny przebieg używa seedu `42`, najwyżej `100` iteracji i zatrzymania po 
 
 ### Miary
 
+#### Miary poszczególnych lematów
+
 ```text
 typicality = cos(v(w), c(r))
 distinctiveness = typicality - max cos(v(w), c(s)), s != r
 field_typicality = cos(v(w), c(F))
+globality = znormalizowany in-degree w zapisanym indeksie sąsiedztwa
 field_distinctiveness = field_typicality * (1 - globality)
 ```
 
-Raport nie tworzy agregowanego indeksu nośności.
+#### Miary poszczególnych ram
 
+```text
+size = liczba członków graph_cluster
+coverage_share = size / liczba lematów pola
+cohesion_centroid_mean = średnia typicality członków ramy
+separation_from_other_frames = 1 - max cos(c(r), c(s)), s != r
+```
+
+#### Miary całego pola
+
+```text
+field_similarity_mean = średnia cos(v(w), v(lemat_centralny))
+field_globality_mean = średnia globality
+field_cohesion_pairwise = średnia cos(v(w_i), v(w_j)), i < j
+frame_cohesion_weighted = średnia cohesion_centroid_mean ważona size
+frame_separation_mean = średnia separation_from_other_frames
+```
+
+Raport oblicza osobne miary zagregowane dla ram i całego pola, ale nie łączy różnych miar w jeden złożony indeks nośności.
 ### Eksport
 
 Raport zapisuje `report.html`, kontrakt i diagnostykę JSON, `semantic_field.csv`, `frame_members.csv`, `frame_relations.csv`, `frames.csv`, `frame_similarity.csv` oraz współrzędne projekcji.

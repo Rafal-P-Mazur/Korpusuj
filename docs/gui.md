@@ -1,4 +1,4 @@
-Niniejszy przewodnik opisuje pracę z aplikacją Korpusuj. Obejmuje wszystkie etapy: od tworzenia i otwierania korpusów, przez wyszukiwanie i przeglądanie konkordancji, aż po generowanie statystyk, wykresów, analizę kolokacji i profili kolokacyjnych. Omówione zostało również badanie sieci semantycznych, filtrowanie wyników według ram znaczeniowych, modelowanie tematyczne oraz eksportowanie danych.
+Niniejszy przewodnik opisuje pracę z aplikacją Korpusuj. Obejmuje wszystkie etapy: od tworzenia i otwierania korpusów, przez wyszukiwanie i przeglądanie konkordancji, aż po generowanie statystyk, wykresów, analizę kolokacji i profili kolokacyjnych. Omówione zostało również badanie sieci semantycznych, filtrowanie wyników według wyodrębnionych ram, modelowanie tematyczne oraz eksportowanie danych.
 
 *Uwaga: Składnia zapytań CQL oraz instrukcje korzystania z interfejsu wiersza poleceń zostały opisane w osobnych częściach dokumentacji.*
 
@@ -253,13 +253,30 @@ Lematy `frame_relation` nie są automatycznie dołączane do ram, nie zmieniają
 
 ### Miary
 
-- **Typowość ramowa**: podobieństwo lematu do centroidu ramy odniesienia.
-- **Swoistość ramowa**: różnica między podobieństwem do ramy odniesienia i największym podobieństwem do innej ramy.
-- **Centralność pola**: podobieństwo lematu do centroidu całego analizowanego pola.
-- **Specyficzność pola**: centralność pola pomniejszona odpowiednio do ogólności lematu.
+#### Miary poszczególnych lematów
 
-Raport nie oblicza jednego agregowanego indeksu nośności. Poszczególne miary należy interpretować osobno.
+- **Typowość ramowa** pokazuje, jak podobny jest lemat do centroidu jego ramy odniesienia.
+- **Swoistość ramowa** porównuje podobieństwo lematu do ramy odniesienia z jego największym podobieństwem do innej ramy.
+- **Typowość w polu** pokazuje, jak blisko centroidu całego analizowanego pola znajduje się lemat.
+- **Ogólność** zależy od tego, na listach sąsiedztwa ilu innych lematów występuje dany lemat.
+- **Swoistość dla pola** łączy typowość w polu z ograniczeniem wpływu ogólności. Jest obliczana jako typowość w polu pomnożona przez `1 - ogólność` i stanowi wskaźnik zdefiniowany w aplikacji.
 
+#### Miary poszczególnych ram
+
+- **Rozmiar ramy** to liczba członków klastra grafowego zachowanego jako rama. Lematy jedynie związane z ramą nie są do niego wliczane.
+- **Udział ramy w polu** to liczba członków ramy podzielona przez liczbę wszystkich lematów analizowanego pola.
+- **Zwartość ramy** to średnie podobieństwo członków ramy do jej centroidu.
+- **Separacja ramy** jest równa `1 - podobieństwo` centroidu ramy do centroidu najbardziej podobnej innej ramy.
+
+#### Miary całego pola
+
+- **Średnie podobieństwo do lematu centralnego** to średnia podobieństw lematów pola do lematu centralnego.
+- **Średnia ogólność pola** to średnia wartości ogólności wszystkich lematów pola.
+- **Spójność pola** to średnie podobieństwo między wszystkimi parami lematów pola, bez lematu centralnego.
+- **Ważona zwartość ram** to średnia zwartości ram ważona liczbą ich członków.
+- **Średnia separacja ram** to średnia separacji każdej ramy od najbardziej podobnej do niej innej ramy.
+
+Raport oblicza osobne miary zagregowane dla ram i całego pola, ale nie łączy różnych miar w jeden złożony indeks nośności. Poszczególne miary należy interpretować osobno.
 ### Relacje między grupami
 
 Raport porównuje centroidy grup. Pozwala to rozpoznawać szersze obszary organizacji otoczenia dystrybucyjnego bez automatycznego scalania grup i bez budowania formalnej hierarchii ram.
