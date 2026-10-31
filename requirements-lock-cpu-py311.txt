@@ -1,4 +1,4 @@
-﻿# PyTorch CPU wheel channel
+# PyTorch CPU wheel channel
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 accelerate==1.14.0
